@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "prepared_at": "2026-06-15T19:28:23Z",
-  "duration_sec": 50.6,
+  "prepared_at": "2026-06-15T19:39:00Z",
+  "duration_sec": 54.5,
   "mode": "copy_from_cache_only",
   "repo_root": "/home/fazil/workspace/projects/fraud_detection_v3",
   "bundle_root": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf",
@@ -303,15 +303,116 @@
       "purpose": "Candidate item segmentation + mask propagation for tracker association.",
       "required": true,
       "runtime_blocking": true,
-      "status": "missing",
-      "snapshot": null,
-      "source": null,
-      "source_path": null,
-      "dest_path": null,
-      "file_count": 0,
-      "total_bytes": 0,
-      "files": [],
-      "note": "https://huggingface.co/facebook/sam2-hiera-large"
+      "status": "present",
+      "snapshot": "84e1da65d438d18182be0b8684ee7fdb4c7ef6d3",
+      "source": "bundle",
+      "source_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/facebook/sam2-hiera-large/84e1da65d438d18182be0b8684ee7fdb4c7ef6d3",
+      "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/facebook/sam2-hiera-large/84e1da65d438d18182be0b8684ee7fdb4c7ef6d3",
+      "file_count": 20,
+      "total_bytes": 1795816996,
+      "files": [
+        {
+          "rel_path": ".cache/huggingface/.gitignore",
+          "bytes": 1,
+          "sha256": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1"
+        },
+        {
+          "rel_path": ".cache/huggingface/CACHEDIR.TAG",
+          "bytes": 191,
+          "sha256": "f6572428f6d5e1575e73a1502895a8731f10757dfbb634909c6e154b849af91d"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/.gitattributes.metadata",
+          "bytes": 101,
+          "sha256": "5f93af895ef61ff210c848c584b3f92b99ed5e3afc80ad8934461d4f134faee2"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/README.md.metadata",
+          "bytes": 101,
+          "sha256": "d10a461d90b077d8b472bd55fe235a7b9c759f0682a72b07ed27955c31ade54f"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/config.json.metadata",
+          "bytes": 100,
+          "sha256": "66d2ed8f605eaa5e651eaeb4fd018a86a764c64b8ea2b4c3b83d5291d06455c0"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/model.safetensors.metadata",
+          "bytes": 124,
+          "sha256": "d46602ed9d1e3e8d031ca2cca95541b30099d4ae2cf7a13f94b75eb4b34142c3"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/preprocessor_config.json.metadata",
+          "bytes": 101,
+          "sha256": "c16e0790289e55f63a086b6d4d85c55e36ac61b548c969629739db97f84ffd3f"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/processor_config.json.metadata",
+          "bytes": 101,
+          "sha256": "04f61ad62b426ca456e7b9cb630886aef63af41e5337643206fa80cbec07a547"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/sam2_hiera_l.yaml.metadata",
+          "bytes": 100,
+          "sha256": "e53365d801d3a3fb8cf8d89febb9d9069ef2a47095f7162e66942bce29cb8a54"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/sam2_hiera_large.pt.metadata",
+          "bytes": 125,
+          "sha256": "3fe25b38bda99a5ff2d05a7d6d27aacd90bfc5f76a715b7675a496ca342714e7"
+        },
+        {
+          "rel_path": ".cache/huggingface/download/video_preprocessor_config.json.metadata",
+          "bytes": 101,
+          "sha256": "7e0c410144a77a371387186732a3e4cd3f37855433497038901a8f3a0ebfde63"
+        },
+        {
+          "rel_path": ".gitattributes",
+          "bytes": 1519,
+          "sha256": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361"
+        },
+        {
+          "rel_path": "README.md",
+          "bytes": 19956,
+          "sha256": "8d9c7dd387e7e4bc7680db1f6699952318b8f181e17860c9c5be09cd52eaafed"
+        },
+        {
+          "rel_path": "config.json",
+          "bytes": 5707,
+          "sha256": "d897aa95667f78495b3e9430c09510393ead7bc1c80df4122439d04c6bfc3146"
+        },
+        {
+          "rel_path": "model.safetensors",
+          "bytes": 897831024,
+          "sha256": "ca82d5aa03964f3ff14a215b6da8e6689958893cd43682bf631054afed34133c"
+        },
+        {
+          "rel_path": "preprocessor_config.json",
+          "bytes": 683,
+          "sha256": "6ebf229ee259368ce4a8d4f2fe893a72b053023710853e257253939e601f583d"
+        },
+        {
+          "rel_path": "processor_config.json",
+          "bytes": 95,
+          "sha256": "f8a68e865cfad115c1c2763f3d93eca7b1c622da06da2a9273eb437fb2389b6d"
+        },
+        {
+          "rel_path": "sam2_hiera_l.yaml",
+          "bytes": 3695,
+          "sha256": "904187da9c3b648d08229aa8ea13ef85e87b43ceff37695f6c0a46495a35b6cb"
+        },
+        {
+          "rel_path": "sam2_hiera_large.pt",
+          "bytes": 897952466,
+          "sha256": "7442e4e9b732a508f80e141e7c2913437a3610ee0c77381a66658c3a445df87b"
+        },
+        {
+          "rel_path": "video_preprocessor_config.json",
+          "bytes": 705,
+          "sha256": "9fccfe5f464ec38c2f236d0e6a68e95511c80c22132fc2fa4b9f7b65f24fad95"
+        }
+      ],
+      "note": "already in bundle; no action taken"
     },
     {
       "name": "sam3",

@@ -11,11 +11,21 @@ never from `~/.cache/huggingface` in production.
 models/
   hf/
     Qwen/Qwen3-VL-30B-A3B-Instruct/<snapshot>/      # primary verifier (when enabled)
-    google/gemma-4-26B-A4B-it/<snapshot>/           # fallback / baseline
-    tiiuae/Falcon-Perception/<snapshot>/            # object detector
+    google/gemma-4-26B-A4B-it/<snapshot>/           # fallback reasoner
+    tiiuae/Falcon-Perception/<snapshot>/            # object detection + OCR
+    facebook/sam2-hiera-large/<snapshot>/           # segmentation (SAM 2)
   manifest.json
   README.md
 ```
+
+The four directories above are the **required** production assets.
+SAM 3 (`facebook/sam3-*`) is the preferred-upgrade segmenter and lives
+under the same `models/hf/` tree once Meta publishes the checkpoint;
+the registry tags it `optional` so it cannot block the bundle.
+`tiiuae/Falcon-OCR` is also `optional` — the base `Falcon-Perception`
+checkpoint performs OCR via natural-language queries per its upstream
+README, so the dedicated OCR variant is a quality optimisation, not a
+runtime requirement.
 
 `manifest.json` records the snapshot hash, file count, total size, and
 sha256 of every file for each model. `scripts/verify_offline_bundle.py`

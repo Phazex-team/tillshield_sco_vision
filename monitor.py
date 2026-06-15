@@ -15,7 +15,11 @@ Pipeline shape (per camera, fanned out from N camera entries in config.yaml):
               | analyze(clip):
               |   - resolve per-camera classifier + token_budget + prompts
               |   - Falcon detect(start) + detect(middle) (ROI-cropped)
-              |   - Gemma reason(video) via vLLM HTTP
+              |   - reasoning.providers chain (Qwen3-VL primary, Gemma fallback)
+              |     via build_active_provider(cfg).analyze_evidence(manifest)
+              |   - reasoning.decision_policy.decide(...) wraps the result;
+              |     flag_for_review is derived from the deterministic outcome
+              |     enum, NEVER from the raw model output.
               |   - PNG snapshot (full-res) + MP4 evidence (downscaled)
               v
             CSV log + per-camera FrameBroker update

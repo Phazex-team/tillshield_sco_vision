@@ -5,8 +5,10 @@ and ``models/manifest.json`` for the current bundle state, then:
 
 1. Confirms every REQUIRED asset is present under ``./models/hf/``.
    Production verification fails if any of:
-        Qwen3-VL, Gemma BF16, Falcon Perception, SAM 3, Falcon OCR
-   is missing.
+        Qwen3-VL, Gemma BF16, Falcon Perception, SAM 2
+   is missing. (SAM 3 is the optional preferred-upgrade once Meta
+   publishes the checkpoint; Falcon-Perception already covers OCR via
+   natural-language queries — dedicated Falcon-OCR is optional only.)
 
 2. For each "runtime_assets" path declared in the registry (prompts,
    config, db migrations, static frontend, launcher scripts, python
@@ -42,6 +44,13 @@ BUNDLE_ROOT = REPO_ROOT / "models" / "hf"
 MANIFEST_PATH = REPO_ROOT / "models" / "manifest.json"
 REGISTRY_PATH = REPO_ROOT / "offline_assets.yaml"
 CACHE_PREFIX = str(Path.home() / ".cache")
+
+# The verifier is typically invoked as ``python scripts/verify_offline_bundle.py``
+# so the repo root is not on sys.path by default. Put it on the path so
+# ``from app.config import ...`` works without requiring the operator to
+# set PYTHONPATH.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 class VerificationError(RuntimeError):
