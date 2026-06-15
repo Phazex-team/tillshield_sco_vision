@@ -82,3 +82,24 @@ observability:
   phoenix_enabled: true
   phoenix_url: http://localhost:6006
   phoenix_project: fraud_detection_v3
+
+# ----------------------------------------------------------------------
+# Memory + reasoning policy (PRODUCTION_SPEC.md sections 7 + 11)
+# Memory limits are in GiB of total system RAM (DGX unified memory pool).
+# The guard polls system memory and refuses inference / unloads models
+# as the soft/hard/emergency thresholds are crossed.
+# ----------------------------------------------------------------------
+reasoning:
+  primary_provider: qwen3_vl
+  fallback_provider: gemma
+  warm_fallback: false
+  prompt_version: return_review_v1
+
+gpu:
+  max_loaded_big_vlms: 1
+  soft_memory_limit_gb: 90
+  hard_memory_limit_gb: 100
+  emergency_memory_limit_gb: 110
+  poll_interval_sec: 5
+  on_hard_limit: unload_models
+  on_emergency_limit: stop_inference_workers

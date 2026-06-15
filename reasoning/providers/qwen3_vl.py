@@ -183,6 +183,21 @@ class Qwen3VLProvider(VLMProvider):
     # Internals
     # ------------------------------------------------------------------
 
+    def unload(self) -> None:
+        """Drop GPU/CPU references so the next provider in the chain
+        can load. Safe to call repeatedly."""
+        with self._load_lock:
+            self._model = None
+            self._processor = None
+            try:
+                import gc
+                gc.collect()
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
     def _load(self) -> None:
         if self._model is not None and self._processor is not None:
             return

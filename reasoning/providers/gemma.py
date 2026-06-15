@@ -44,6 +44,11 @@ class GemmaProvider(VLMProvider):
         self.request_retry_backoff_sec = request_retry_backoff_sec
         self._client_cache: Optional[Any] = None
 
+    def unload(self) -> None:
+        """Drop the HTTP client reference. The Gemma server itself
+        keeps weights warm; the local provider object stays cheap."""
+        self._client_cache = None
+
     def _client(self):
         if self._client_cache is not None:
             return self._client_cache
