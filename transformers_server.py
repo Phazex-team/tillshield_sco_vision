@@ -58,13 +58,23 @@ def _load_model() -> None:
     with _LOAD_LOCK:
         if _LOAD_DONE.is_set():
             return
-        log.info("loading %s in bfloat16 on cuda...", MODEL_NAME)
-        _PROCESSOR = AutoProcessor.from_pretrained(MODEL_NAME)
+        log.info("loading %s in bfloat16 on cuda (local_files_only=True)...",
+                 MODEL_NAME)
+        # Hard local-only: this server must never reach out to the
+        # HuggingFace Hub at runtime. If the snapshot is missing the
+        # operator must fetch it explicitly (out of band) before
+        # restarting — see scripts/inspect_models.py.
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        _PROCESSOR = AutoProcessor.from_pretrained(
+            MODEL_NAME, local_files_only=True
+        )
         _MODEL = Gemma4ForConditionalGeneration.from_pretrained(
             MODEL_NAME,
             torch_dtype=torch.bfloat16,
             device_map="cuda",
             low_cpu_mem_usage=True,
+            local_files_only=True,
         )
         _MODEL.eval()
         log.info(

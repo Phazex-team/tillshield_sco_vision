@@ -103,36 +103,62 @@ def decide(summary: EvidenceSummary) -> PolicyDecision:
 
 
 def summary_from_vlm(parsed: dict, *, footage_valid: bool,
-                     obstructed: bool = False,
+                     obstructed: bool | None = None,
                      camera_gap: bool = False) -> EvidenceSummary:
-    """Adapt a legacy ``GemmaVideoReasoner.reason`` payload to an
-    ``EvidenceSummary`` so existing call sites can keep working while the
-    full perception graph is wired up."""
+    """Adapt a VLM ``reason`` payload to an ``EvidenceSummary``.
+
+    Reads the review-safe schema (``physical_item_presented``,
+    ``receipt_visible``, ``obstructed``, ``camera_view_clear``,
+    ``limitations``) when present and falls back to the legacy schema
+    fields so this adapter stays robust across model upgrades.
+
+    ``obstructed`` may be passed by the caller to override the VLM's
+    self-report (e.g. when an external occlusion detector decides).
+    """
     if not isinstance(parsed, dict):
         return EvidenceSummary(
             footage_valid=footage_valid,
-            obstructed=obstructed,
+            obstructed=bool(obstructed),
             camera_gap=camera_gap,
             contradictions=["vlm output not a dict"],
         )
 
     confidence = str(parsed.get("confidence", "low")).lower()
-    items = parsed.get("items_handed_over") or []
+
+    # Items: review-safe key wins; legacy key kept as fallback.
+    items = (parsed.get("items_observed")
+             or parsed.get("items_handed_over")
+             or [])
     receipt_visible = bool(parsed.get("receipt_visible", False))
     physical_item = bool(parsed.get("physical_item_presented",
                                     bool(items)))
+
+    # Obstruction: explicit caller override > model self-report >
+    # inverse of ``camera_view_clear`` > limitations heuristic.
+    if obstructed is None:
+        if "obstructed" in parsed:
+            obstructed = bool(parsed.get("obstructed"))
+        elif "camera_view_clear" in parsed:
+            obstructed = not bool(parsed.get("camera_view_clear"))
+        else:
+            obstructed = False
+
+    limitations = parsed.get("limitations") or []
+    notes = [str(s)[:240] for s in limitations] if isinstance(limitations,
+                                                              list) else []
+
     return EvidenceSummary(
         footage_valid=footage_valid,
         physical_item_track=physical_item,
         item_reaches_counter=physical_item and bool(
             parsed.get("handover_occurred", False)),
         receipt_visible=receipt_visible,
-        obstructed=obstructed,
+        obstructed=bool(obstructed),
         camera_gap=camera_gap,
         vlm_confidence=confidence,
         vlm_outcome_hint=(
             "VERIFIED" if (physical_item and receipt_visible) else "REVIEW"
         ),
         contradictions=[],
-        notes=[],
+        notes=notes,
     )

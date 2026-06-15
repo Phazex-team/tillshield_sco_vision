@@ -50,57 +50,91 @@ _BASE_JSON_SCHEMA = (
 )
 
 
+# Review-safe schema for the return-review classifier. NO ``flag_for_review``
+# field: the deterministic ``reasoning.decision_policy`` decides the
+# outcome from these structured signals; the VLM only describes what it
+# can/can't see.
+_REVIEW_SAFE_JSON_SCHEMA = (
+    "{\n"
+    '  "handover_occurred": true|false,\n'
+    '  "physical_item_presented": true|false,\n'
+    '  "receipt_visible": true|false,\n'
+    '  "items_observed": ["brief", "item", "descriptions"],\n'
+    '  "customer_description": "one sentence describing the subject",\n'
+    '  "narrative": "one sentence: what the camera shows",\n'
+    '  "confidence": "high"|"medium"|"low",\n'
+    '  "obstructed": true|false,\n'
+    '  "camera_view_clear": true|false,\n'
+    '  "limitations": ["list any blind spots, occlusions, or ambiguities"]\n'
+    "}"
+)
+
+
 CLASSIFIERS: dict[str, dict] = {
     # ------------------------------------------------------------------
-    "fraud": {
-        "display_label": "Return Fraud Detection",
-        "color": "#ff5566",  # red
+    # Review-safe replacement for the old "fraud" classifier. The VLM
+    # describes what the camera shows; it does not classify fraud. The
+    # final outcome (VERIFIED / REVIEW / HIGH_RISK_REVIEW / INVALID_VIDEO)
+    # is decided by ``reasoning.decision_policy.decide``. The "fraud" key
+    # below is kept as an alias so any cached config that still says
+    # ``classifier: fraud`` resolves to this review-safe entry, not to a
+    # stale accusatory prompt.
+    "return_review": {
+        "display_label": "Return / Refund Visual Review",
+        "color": "#5b8def",  # neutral blue
         "token_budget": 1120,
-        "enable_thinking": True,   # ambiguous handover scenes need reasoning
-        "max_frames": 20,          # full temporal detail for hand movements
+        "enable_thinking": True,
+        "max_frames": 20,
         "falcon_prompt": (
             "bag, shopping bag, clothing, shirt, box, package, paper, "
             "document, receipt, phone, card, wallet, item, product"
         ),
         "gemma_system": (
-            "You are a retail loss-prevention analyst reviewing a short "
-            "video clip of a return/refund counter, cropped to the "
-            "customer side.\n\n"
+            "You are an evidence describer reviewing a short video clip "
+            "of a return / refund counter. You do NOT decide anything. "
+            "A separate deterministic policy decides the case outcome "
+            "from the structured signals you report.\n\n"
             "Falcon Perception pre-analysed THREE frames of this clip:\n"
             "- start_objects: {start_objects}   <- objects present at clip start\n"
-            "- action_objects: {action_objects} <- objects detected at handover moment\n\n"
-            "FIXTURE RULE (apply first, before all other rules):\n"
+            "- action_objects: {action_objects} <- objects detected during the action\n\n"
+            "FIXTURE RULE (apply first):\n"
             "Any object label present in start_objects is a PRE-EXISTING "
-            "FIXTURE - counter items, display boards, stands, or "
-            "leftovers. Exclude these entirely from handover judgement "
-            "regardless of position or confidence score. Do not mention "
-            "them in your output.\n\n"
-            "Only evaluate objects that appear in action_objects but NOT "
-            "in start_objects.\n\n"
-            "Your job is to judge the ACTION of handover, not the "
-            "presence of objects. Follow these rules strictly:\n"
-            " * Only count items the customer ACTIVELY BROUGHT and "
-            "PLACED on the counter or HANDED to the staff during this "
+            "FIXTURE — counter items, display boards, stands, or "
+            "leftovers. Exclude these from the handover judgement and do "
+            "not mention them in your output.\n\n"
+            "Reporting rules:\n"
+            " * Describe only what you actually see; never infer intent.\n"
+            " * Never use the words 'fraud', 'fraudulent', 'theft', or "
+            "'suspect'.\n"
+            " * Set ``handover_occurred`` only if the customer actively "
+            "BROUGHT and PLACED or HANDED an object to staff in this "
             "clip.\n"
-            " * DO NOT count items already on the counter when the clip "
-            "starts.\n"
-            " * DO NOT count items the staff is holding or handling on "
-            "their own, nor items the staff hands BACK to the customer.\n"
-            " * Browsing, gesturing, asking questions, or signing "
-            "paperwork alone are NOT handovers.\n"
-            " * If unsure, set handover_occurred=false and "
-            "flag_for_review=true.\n\n"
+            " * Set ``physical_item_presented`` if a tangible product "
+            "(not just paper/documents) is visible being presented.\n"
+            " * Set ``receipt_visible`` if a receipt, document, or paper "
+            "slip is visible.\n"
+            " * Set ``obstructed`` if any part of the handover area is "
+            "occluded by people, fixtures, or angle.\n"
+            " * Set ``camera_view_clear`` only if the relevant area is "
+            "unobstructed for the full clip.\n"
+            " * Use ``limitations`` to list blind spots, glare, motion "
+            "blur, or anything that limits your description.\n"
+            " * If you are unsure of any field, lower ``confidence`` to "
+            "'low'.\n\n"
             "Output ONLY the JSON object described in the user turn. No "
             "preamble, no markdown, no commentary."
         ),
         "gemma_user": (
-            "Analyse this clip and answer for THE customer who triggered "
-            "this session (ignore bystanders):\n"
+            "Describe what the camera shows of the return-counter "
+            "interaction for THE customer who triggered this session "
+            "(ignore bystanders):\n"
             "1) Did the customer hand any items to staff?\n"
-            "2) How many distinct items? What are they?\n"
-            "3) Describe the customer briefly (clothing, position).\n"
-            "4) One sentence: what the customer did.\n\n"
-            "Respond with this exact JSON schema only:\n" + _BASE_JSON_SCHEMA
+            "2) Was a physical product visible being presented?\n"
+            "3) Was a receipt or document visible?\n"
+            "4) Was your view obstructed at any point?\n"
+            "5) One sentence: what the camera shows.\n\n"
+            "Respond with this exact JSON schema only:\n"
+            + _REVIEW_SAFE_JSON_SCHEMA
         ),
     },
     # ------------------------------------------------------------------
@@ -293,7 +327,14 @@ def list_classifiers() -> list[dict]:
 
 
 def get_classifier(key: str) -> dict:
-    """Return the classifier dict for ``key`` or fall back to ``custom``."""
+    """Return the classifier dict for ``key`` or fall back to ``custom``.
+
+    The legacy key ``"fraud"`` is silently remapped to the review-safe
+    ``"return_review"`` so old configs cannot resurrect accusatory prompt
+    text by accident.
+    """
+    if key == "fraud":
+        return CLASSIFIERS["return_review"]
     return CLASSIFIERS.get(key) or CLASSIFIERS["custom"]
 
 
@@ -305,7 +346,9 @@ def resolve_prompts(camera_cfg: dict) -> dict:
         ``classifier``, ``display_label``, ``color``, ``token_budget``,
         ``falcon``, ``gemma_system``, ``gemma_user``.
     """
-    classifier_key = (camera_cfg.get("classifier") or "fraud").strip().lower()
+    classifier_key = (camera_cfg.get("classifier") or "return_review").strip().lower()
+    if classifier_key == "fraud":
+        classifier_key = "return_review"
     base = get_classifier(classifier_key)
     overrides = camera_cfg.get("prompts") or {}
 

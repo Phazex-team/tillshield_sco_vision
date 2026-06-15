@@ -470,6 +470,34 @@ def build_analyzer(cfg: dict, slogger: SessionLogger,
             session_id=sid,
         )
 
+        # --- Deterministic review-safe wrapper ----------------------
+        # The VLM is an evidence describer. The case outcome is decided
+        # by ``reasoning.decision_policy.decide``. ``flag_for_review``
+        # and all downstream UI/CSV fields are populated from THIS
+        # decision, not from the model's self-report.
+        try:
+            from reasoning.decision_policy import (
+                OUTCOME_VERIFIED, decide, summary_from_vlm,
+            )
+            evidence_summary = summary_from_vlm(result, footage_valid=True)
+            decision = decide(evidence_summary)
+            result["policy_outcome"] = decision.outcome
+            result["policy_reasons"] = list(decision.reasons)
+            result["policy_version"] = decision.policy_version
+            result["risk_score"] = decision.risk_score
+            # Reviewer-flag is binary: anything that isn't VERIFIED goes
+            # to a human. The policy enum carries the nuance.
+            result["flag_for_review"] = decision.outcome != OUTCOME_VERIFIED
+        except Exception:
+            # Conservative fallback: a wrapping failure must NOT let the
+            # model's raw flag_for_review escape — force review.
+            log.exception("decision policy wrapper failed; forcing REVIEW")
+            result["policy_outcome"] = "REVIEW"
+            result["policy_reasons"] = ["decision policy wrapper raised"]
+            result["policy_version"] = "v1"
+            result["risk_score"] = 0.5
+            result["flag_for_review"] = True
+
         if roi is not None:
             ox, oy = roi[0], roi[1]
             for d in dets:
