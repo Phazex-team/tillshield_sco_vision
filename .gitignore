@@ -36,3 +36,13 @@ storage/
 
 # Backups produced by this refactor
 fraud_detection_v3.backup.*.tar.gz
+
+# Offline model bundle: hardlinks into ~/.cache. Each operator prepares
+# their own via scripts/prepare_offline_model_bundle.py. The README,
+# offline_assets.yaml registry, and models/manifest.json ARE tracked so
+# the destination machine can verify after rsync/tar from a prepared
+# repo. The 100+GB of weights themselves are not.
+models/hf/
+wheelhouse/
+!models/README.md
+!models/manifest.json

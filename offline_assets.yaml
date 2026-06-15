@@ -1,0 +1,135 @@
+# Offline asset registry for fraud_detection_v3.
+#
+# This file is the SINGLE declaration of every model / data asset the
+# production runtime is allowed to depend on. The prepare and verify
+# scripts read this; the runtime fails fast if any "required" entry is
+# missing from ./models/hf/<repo>/<name>/<snapshot>/ when
+# FRAUD_OFFLINE_MODE=1.
+#
+# Optional entries are documented but never block the bundle. They are
+# used by the MLOps benchmark harness only.
+#
+# All paths are relative to the repo root. Do NOT add entries pointing
+# into ~/.cache/huggingface — those are dev-mode fallbacks resolved by
+# app.config.resolve_model_path, not bundle members.
+
+schema_version: 1
+
+required:
+  # ----------------------------------------------------------------
+  # Reasoning providers
+  # ----------------------------------------------------------------
+  - name: qwen3_vl
+    purpose: "Primary visual evidence verifier (when enabled). Reads structured evidence + frames, emits review-safe JSON."
+    repo: Qwen/Qwen3-VL-30B-A3B-Instruct
+    cache_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct
+    runtime_blocking: true
+    notes: |
+      Architecture: Qwen3VLMoeForConditionalGeneration (transformers >= 5.6).
+      Activate by setting models.qwen3_vl.enabled=true in config.yaml.
+
+  - name: gemma_bf16
+    purpose: "Baseline / fallback reasoner. Currently the active default until Qwen is promoted by benchmark."
+    repo: google/gemma-4-26B-A4B-it
+    cache_path: /home/fazil/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it
+    runtime_blocking: true
+    notes: |
+      Served via transformers_server.py (BF16). NVFP4 is unsupported on
+      this DGX Spark (GB10/sm_121) — see memory/project_bf16_fallback.md.
+
+  # ----------------------------------------------------------------
+  # Perception
+  # ----------------------------------------------------------------
+  - name: falcon_perception
+    purpose: "Open-vocabulary object detection on sampled frames."
+    repo: tiiuae/Falcon-Perception
+    cache_path: /home/fazil/.cache/huggingface/hub/models--tiiuae--Falcon-Perception
+    runtime_blocking: true
+    notes: |
+      Same checkpoint also supports segmentation and OCR via natural
+      language queries, but we run OCR through Falcon-OCR by default for
+      crop-friendly outputs.
+
+  - name: sam3
+    purpose: "Candidate item segmentation + mask propagation for tracker association."
+    repo: facebook/sam3-large
+    cache_path: null
+    runtime_blocking: true
+    official_source: "https://huggingface.co/facebook (SAM 3 release pending; track facebook/sam3-* repos)"
+    fallback: sam2
+    notes: |
+      SAM 3 is not yet locally cached. Until it is downloaded into the
+      offline bundle, perception will refuse to start in production mode.
+      The SAM 2 entry below is the documented stop-gap.
+
+  - name: falcon_ocr
+    purpose: "OCR on receipt / document / label crops produced by perception."
+    repo: tiiuae/Falcon-OCR
+    cache_path: null
+    runtime_blocking: true
+    official_source: "https://huggingface.co/tiiuae/Falcon-OCR"
+    notes: |
+      Falcon-OCR is currently MISSING from local cache. Download once
+      with `python scripts/prepare_offline_model_bundle.py
+      --download-approved --model tiiuae/Falcon-OCR` on a connected
+      machine, then re-verify.
+
+optional:
+  # Stop-gap if SAM 3 is unavailable. The perception pipeline can fall
+  # back to SAM 2 with reduced mask propagation quality.
+  - name: sam2
+    purpose: "Fallback segmentation/tracking if SAM 3 is not deployable."
+    repo: facebook/sam2-hiera-large
+    cache_path: null
+    runtime_blocking: false
+    official_source: "https://huggingface.co/facebook/sam2-hiera-large"
+
+  - name: internvl
+    purpose: "Benchmark-only verifier candidate. Never used by production runtime."
+    repo: OpenGVLab/InternVL3-78B-MPO
+    cache_path: null
+    runtime_blocking: false
+    official_source: "https://huggingface.co/OpenGVLab"
+
+  - name: grounding_dino
+    purpose: "Benchmark-only object grounding model."
+    repo: IDEA-Research/grounding-dino-base
+    cache_path: null
+    runtime_blocking: false
+    official_source: "https://huggingface.co/IDEA-Research/grounding-dino-base"
+
+  - name: grounding_dino_1_5
+    purpose: "Benchmark-only object grounding model (larger)."
+    repo: IDEA-Research/grounding-dino-1.5-pro
+    cache_path: null
+    runtime_blocking: false
+    official_source: "https://huggingface.co/IDEA-Research"
+
+# Non-model artefacts that ALSO need to travel with the repo. The
+# verifier checks each path is present and non-empty. These are
+# repo-relative.
+runtime_assets:
+  prompts:
+    - reasoning/prompts/
+  configs:
+    - config.yaml
+    - offline_assets.yaml
+    - .env.example
+  db_migrations:
+    - db/migrations/0001_core.sql
+  static_frontend:
+    - static/
+  launcher_scripts:
+    - start.sh
+    - stop.sh
+    - status.sh
+    - vllm_start.sh
+    - install.sh
+    - scripts/inspect_models.py
+    - scripts/prepare_offline_model_bundle.py
+    - scripts/verify_offline_bundle.py
+    - scripts/prepare_offline_wheelhouse.py
+    - scripts/verify_offline_python_env.py
+  python_env:
+    - requirements.txt
+    - requirements.lock

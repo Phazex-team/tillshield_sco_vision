@@ -1,0 +1,397 @@
+{
+  "schema_version": 1,
+  "prepared_at": "2026-06-15T18:58:52Z",
+  "duration_sec": 53.1,
+  "mode": "copy_from_cache_only",
+  "repo_root": "/home/fazil/workspace/projects/fraud_detection_v3",
+  "bundle_root": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf",
+  "models": [
+    {
+      "name": "qwen3_vl",
+      "model_id": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+      "purpose": "Primary visual evidence verifier (when enabled). Reads structured evidence + frames, emits review-safe JSON.",
+      "required": true,
+      "runtime_blocking": true,
+      "status": "present",
+      "snapshot": "9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
+      "source": "bundle",
+      "source_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
+      "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
+      "file_count": 23,
+      "total_bytes": 62153198906,
+      "files": [
+        {
+          "rel_path": "chat_template.json",
+          "bytes": 5499,
+          "sha256": "5c72a170d2a4a1a3bc5adad2e689ae28138a9700e5b8c96c0266331e86c0acce"
+        },
+        {
+          "rel_path": "config.json",
+          "bytes": 1661,
+          "sha256": "6129b3f54d517a18553cf7525ff4886be6831c5806fc094d632b8ef38d859912"
+        },
+        {
+          "rel_path": "generation_config.json",
+          "bytes": 269,
+          "sha256": "1e241830b48b397cb0900101421df5450baddc7adf01e5fc86b5615865f3bae4"
+        },
+        {
+          "rel_path": "merges.txt",
+          "bytes": 1671839,
+          "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"
+        },
+        {
+          "rel_path": "model-00001-of-00013.safetensors",
+          "bytes": 4399341032,
+          "sha256": "6b205ea6332a532e5b97fd6281ac700f125a1a5f9a3457a22b797edfd35a5f67"
+        },
+        {
+          "rel_path": "model-00002-of-00013.safetensors",
+          "bytes": 4984970880,
+          "sha256": "a739a546e00643e0555bbb6bcd57fa5ba60fb2de24177c8819d2f899f02c2223"
+        },
+        {
+          "rel_path": "model-00003-of-00013.safetensors",
+          "bytes": 4984970888,
+          "sha256": "c57ec0f3fd06cae62980851f2661bd2b5e9dcdff37b8f9ece0cf44dea645efc3"
+        },
+        {
+          "rel_path": "model-00004-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "46b07bc82396976dc62f86bccb51c3c585a616b36b8ad8eef700bde75fedf88b"
+        },
+        {
+          "rel_path": "model-00005-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "3fa2fdf4b835d885efcaf0e4f6c7c00905cbaad7e293af988a0cf5408c3078c8"
+        },
+        {
+          "rel_path": "model-00006-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "89a762b82ff9db9351cd38794ecd1ee170bbe87d7fa56110ca837c088158ccfb"
+        },
+        {
+          "rel_path": "model-00007-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "634e437c0a038d8f447fceb44fb4f5230600af6a71d0fbe112711d9e84d6f07a"
+        },
+        {
+          "rel_path": "model-00008-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "4c6f316b27536bd914a6ea09c03ec1b80a9a8d55e3478b1bd5a307f8de8d7fbd"
+        },
+        {
+          "rel_path": "model-00009-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "e2e2a338c724ad75aea2b64211472c1037945fab398a879116cbbbc3112391da"
+        },
+        {
+          "rel_path": "model-00010-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "adca9184b757627840f7fce81e8e4e1203c7551fa2c1bdb469503dc7dfab0583"
+        },
+        {
+          "rel_path": "model-00011-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "71b3d1ff9ddc9358de332aa52b92fc001565edfcfd61f9e3679f96f85c7cbc22"
+        },
+        {
+          "rel_path": "model-00012-of-00013.safetensors",
+          "bytes": 4984970928,
+          "sha256": "f4b204bedb467a2cea642dc38d30c2cdd29e48fbd2d7d5ee5cc14ba4b786ef6f"
+        },
+        {
+          "rel_path": "model-00013-of-00013.safetensors",
+          "bytes": 2907596864,
+          "sha256": "e167e2806d63c404660b6d609a7eaef2e82bca478688ba6f83155128d8187539"
+        },
+        {
+          "rel_path": "model.safetensors.index.json",
+          "bytes": 80743,
+          "sha256": "4fa496bd4b4aace60623070379297c7c0c78b5aa4924b39e1174a0e9e1aeae5e"
+        },
+        {
+          "rel_path": "preprocessor_config.json",
+          "bytes": 390,
+          "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"
+        },
+        {
+          "rel_path": "tokenizer.json",
+          "bytes": 7032403,
+          "sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7"
+        },
+        {
+          "rel_path": "tokenizer_config.json",
+          "bytes": 10868,
+          "sha256": "c2da771801886ad9ae98181793ffd3dfb7f1af30f6f7c6a4e15d7dbba52e2399"
+        },
+        {
+          "rel_path": "video_preprocessor_config.json",
+          "bytes": 385,
+          "sha256": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13"
+        },
+        {
+          "rel_path": "vocab.json",
+          "bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        }
+      ],
+      "note": "already in bundle; no action taken"
+    },
+    {
+      "name": "gemma_bf16",
+      "model_id": "google/gemma-4-26B-A4B-it",
+      "purpose": "Baseline / fallback reasoner. Currently the active default until Qwen is promoted by benchmark.",
+      "required": true,
+      "runtime_blocking": true,
+      "status": "present",
+      "snapshot": "4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a",
+      "source": "bundle",
+      "source_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/google/gemma-4-26B-A4B-it/4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a",
+      "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/google/gemma-4-26B-A4B-it/4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a",
+      "file_count": 9,
+      "total_bytes": 51644307479,
+      "files": [
+        {
+          "rel_path": "chat_template.jinja",
+          "bytes": 16934,
+          "sha256": "94899c0f917d93f6fe81c95744d1e8ddab2d21d39228d2e4aec1fb2a25bff413"
+        },
+        {
+          "rel_path": "config.json",
+          "bytes": 3815,
+          "sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3"
+        },
+        {
+          "rel_path": "generation_config.json",
+          "bytes": 208,
+          "sha256": "d4226bbe3117d2d253ba4609720ba82c6c4ce4627a9a6ae05387c78983ac03de"
+        },
+        {
+          "rel_path": "model-00001-of-00002.safetensors",
+          "bytes": 49907246508,
+          "sha256": "1127684971bbca40465435a5cad69d67ad603bf5e61c6dfd5561fae4a3bcfdb3"
+        },
+        {
+          "rel_path": "model-00002-of-00002.safetensors",
+          "bytes": 1704763408,
+          "sha256": "aab47033e1e8a492ef8e581efae1cf36478d0433567e7729b3c1728bc8970db7"
+        },
+        {
+          "rel_path": "model.safetensors.index.json",
+          "bytes": 103196,
+          "sha256": "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7"
+        },
+        {
+          "rel_path": "processor_config.json",
+          "bytes": 1689,
+          "sha256": "32bdf45d2ad4cc29a0822ddd157a182de76644f0419a6228d151495256e9813c"
+        },
+        {
+          "rel_path": "tokenizer.json",
+          "bytes": 32169626,
+          "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+        },
+        {
+          "rel_path": "tokenizer_config.json",
+          "bytes": 2095,
+          "sha256": "90c3a3ba5bf53818383a58e1a776cbcacd2a038d4812eaa373e1522f2d06f3df"
+        }
+      ],
+      "note": "already in bundle; no action taken"
+    },
+    {
+      "name": "falcon_perception",
+      "model_id": "tiiuae/Falcon-Perception",
+      "purpose": "Open-vocabulary object detection on sampled frames.",
+      "required": true,
+      "runtime_blocking": true,
+      "status": "present",
+      "snapshot": "5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
+      "source": "cache",
+      "source_path": "/home/fazil/.cache/huggingface/hub/models--tiiuae--Falcon-Perception/snapshots/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
+      "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/tiiuae/Falcon-Perception/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
+      "file_count": 16,
+      "total_bytes": 2540057792,
+      "files": [
+        {
+          "rel_path": ".gitattributes",
+          "bytes": 1676,
+          "sha256": "b06414587db0dcf017755112185bdb650ab75fbbcbcaf43445e388c673e12c59"
+        },
+        {
+          "rel_path": "README.md",
+          "bytes": 5769,
+          "sha256": "f57bc4b5fac93fc4a758ee85956a733647e889570a1047d23e89da7df7c82eaa"
+        },
+        {
+          "rel_path": "Screenshot 2026-04-03 at 8.49.53\u202fPM.png",
+          "bytes": 3892310,
+          "sha256": "4c63d13f51ae3abe467eeeebd27aa31ab0356c773997028415bbe3531182931b"
+        },
+        {
+          "rel_path": "anyup.py",
+          "bytes": 15943,
+          "sha256": "1a150f37dbb8366954b7f62704f250ce92819a115e156b1fe53108ced44f214d"
+        },
+        {
+          "rel_path": "attention.py",
+          "bytes": 5271,
+          "sha256": "e7265e33ab3722bc7b001dd33ecfeb59758635eb225a4efa70707a0dcd659b42"
+        },
+        {
+          "rel_path": "config.json",
+          "bytes": 1089,
+          "sha256": "a3886840626b9feb1bdb8ba427055914f552f7a68ea0534066c18dc4a4b35e41"
+        },
+        {
+          "rel_path": "configuration_falcon_perception.py",
+          "bytes": 2701,
+          "sha256": "ad1a0bdc9a2dca98f9657b9ee1f06deca23d80343f61b03f93f93916a44427a3"
+        },
+        {
+          "rel_path": "main_fig.jpg",
+          "bytes": 1482544,
+          "sha256": "a25a745799ac3cf2967620af6936fa35cb3534b73ff93e42acd37adb67a03c34"
+        },
+        {
+          "rel_path": "model.safetensors",
+          "bytes": 2529514176,
+          "sha256": "c680d5b1a834a2df61baae9dd694b95856872609d0a769702faf5ad658297641"
+        },
+        {
+          "rel_path": "model_args.json",
+          "bytes": 823,
+          "sha256": "1fcfc5d176d6c0c061b9acf0819a399e2d74bcd6d2c3ca99c3655ec6fac862ca"
+        },
+        {
+          "rel_path": "modeling_falcon_perception.py",
+          "bytes": 38763,
+          "sha256": "987b371068e6120e5f08458b37dec638d88e1ecb330a6661eeaeba6dd4a27552"
+        },
+        {
+          "rel_path": "processing_falcon_perception.py",
+          "bytes": 15527,
+          "sha256": "80ba44e6aa6eaa5f11b335b10fbe62bfcb63bc2b73c7a8fdbe049304b75e5d8d"
+        },
+        {
+          "rel_path": "rope.py",
+          "bytes": 4689,
+          "sha256": "8446ee8047a7da4291a9b4b91bbee2e7ca988dc05ab94ce65d9dc12868c345c7"
+        },
+        {
+          "rel_path": "special_tokens_map.json",
+          "bytes": 9164,
+          "sha256": "864bc13759c42009e6a60f5ae8a0c533a5975debacad1cb49cf75460f0d6d8fd"
+        },
+        {
+          "rel_path": "tokenizer.json",
+          "bytes": 5063285,
+          "sha256": "430becbfb4692ab79d1a2b0ba485f3ad16e19012421293c357aac7ad82c522c5"
+        },
+        {
+          "rel_path": "tokenizer_config.json",
+          "bytes": 4062,
+          "sha256": "357072b958469e8b6b4cb86fed3399e3c7b56b91ccc4254e6f6627ac7ea70672"
+        }
+      ],
+      "note": ""
+    },
+    {
+      "name": "sam3",
+      "model_id": "facebook/sam3-large",
+      "purpose": "Candidate item segmentation + mask propagation for tracker association.",
+      "required": true,
+      "runtime_blocking": true,
+      "status": "missing",
+      "snapshot": null,
+      "source": null,
+      "source_path": null,
+      "dest_path": null,
+      "file_count": 0,
+      "total_bytes": 0,
+      "files": [],
+      "note": "https://huggingface.co/facebook (SAM 3 release pending; track facebook/sam3-* repos)"
+    },
+    {
+      "name": "falcon_ocr",
+      "model_id": "tiiuae/Falcon-OCR",
+      "purpose": "OCR on receipt / document / label crops produced by perception.",
+      "required": true,
+      "runtime_blocking": true,
+      "status": "missing",
+      "snapshot": null,
+      "source": null,
+      "source_path": null,
+      "dest_path": null,
+      "file_count": 0,
+      "total_bytes": 0,
+      "files": [],
+      "note": "https://huggingface.co/tiiuae/Falcon-OCR"
+    },
+    {
+      "name": "sam2",
+      "model_id": "facebook/sam2-hiera-large",
+      "purpose": "Fallback segmentation/tracking if SAM 3 is not deployable.",
+      "required": false,
+      "runtime_blocking": false,
+      "status": "optional_missing",
+      "snapshot": null,
+      "source": null,
+      "source_path": null,
+      "dest_path": null,
+      "file_count": 0,
+      "total_bytes": 0,
+      "files": [],
+      "note": "https://huggingface.co/facebook/sam2-hiera-large"
+    },
+    {
+      "name": "internvl",
+      "model_id": "OpenGVLab/InternVL3-78B-MPO",
+      "purpose": "Benchmark-only verifier candidate. Never used by production runtime.",
+      "required": false,
+      "runtime_blocking": false,
+      "status": "optional_missing",
+      "snapshot": null,
+      "source": null,
+      "source_path": null,
+      "dest_path": null,
+      "file_count": 0,
+      "total_bytes": 0,
+      "files": [],
+      "note": "https://huggingface.co/OpenGVLab"
+    },
+    {
+      "name": "grounding_dino",
+      "model_id": "IDEA-Research/grounding-dino-base",
+      "purpose": "Benchmark-only object grounding model.",
+      "required": false,
+      "runtime_blocking": false,
+      "status": "optional_missing",
+      "snapshot": null,
+      "source": null,
+      "source_path": null,
+      "dest_path": null,
+      "file_count": 0,
+      "total_bytes": 0,
+      "files": [],
+      "note": "https://huggingface.co/IDEA-Research/grounding-dino-base"
+    },
+    {
+      "name": "grounding_dino_1_5",
+      "model_id": "IDEA-Research/grounding-dino-1.5-pro",
+      "purpose": "Benchmark-only object grounding model (larger).",
+      "required": false,
+      "runtime_blocking": false,
+      "status": "optional_missing",
+      "snapshot": null,
+      "source": null,
+      "source_path": null,
+      "dest_path": null,
+      "file_count": 0,
+      "total_bytes": 0,
+      "files": [],
+      "note": "https://huggingface.co/IDEA-Research"
+    }
+  ]
+}
