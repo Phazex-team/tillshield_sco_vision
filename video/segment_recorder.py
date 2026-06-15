@@ -206,11 +206,61 @@ class SegmentRecorder:
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
-        if self.frame_source is None:
-            log.info("recorder %s: live RTSP loop not yet implemented; "
-                     "set frame_source for offline use",
-                     self.cfg.camera_id)
+        """Live RTSP loop.
+
+        Opens the configured RTSP URL via ``rtsp_reader.RTSPReader``,
+        reads BGR frames continuously, and slices them into immutable
+        fixed-duration chunks. Reconnects on failure and continues
+        recording past inference-degraded states because the recorder
+        consults nothing in the memory guard.
+
+        Tests inject ``frame_source`` to bypass the network and prove
+        the slicing + indexing path without an RTSP server.
+        """
+        if self.frame_source is not None:
+            self._run_from_source()
             return
+        if not self.cfg.rtsp_url:
+            log.error("recorder %s: no rtsp_url and no frame_source — "
+                      "nothing to record", self.cfg.camera_id)
+            return
+        self._run_from_rtsp()
+
+    def _run_from_rtsp(self) -> None:
+        from rtsp_reader import RTSPReader
+        reader = RTSPReader(self.cfg.rtsp_url, name=self.cfg.camera_id)
+        try:
+            target = self.cfg.segment_duration_sec
+            buf: list[tuple[datetime, "np.ndarray"]] = []
+            seg_start: Optional[datetime] = None
+            for frame in reader.frames(self._stop_event):
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                if seg_start is None:
+                    seg_start = now
+                buf.append((now, frame))
+                elapsed = (now - seg_start).total_seconds()
+                if elapsed >= target:
+                    try:
+                        self.record_one_segment(buf, start_at=seg_start)
+                    except Exception:
+                        log.exception("recorder %s: segment write failed",
+                                      self.cfg.camera_id)
+                    buf = []
+                    seg_start = None
+                if self._stop_event.is_set():
+                    break
+            # Flush a partial trailing segment so we never lose
+            # already-captured frames on shutdown.
+            if buf and seg_start is not None:
+                try:
+                    self.record_one_segment(buf, start_at=seg_start)
+                except Exception:
+                    log.exception("recorder %s: trailing segment failed",
+                                  self.cfg.camera_id)
+        finally:
+            reader.close()
+
+    def _run_from_source(self) -> None:
         while not self._stop_event.is_set():
             try:
                 start_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -219,6 +269,4 @@ class SegmentRecorder:
             except Exception:
                 log.exception("recorder %s: segment cycle failed",
                               self.cfg.camera_id)
-            # Sleep for the segment duration so we don't busy-spin if
-            # the source returns instantly.
             self._stop_event.wait(self.cfg.segment_duration_sec)

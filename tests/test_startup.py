@@ -42,9 +42,10 @@ def test_startup_production_fails_when_required_asset_missing(monkeypatch,
 
 
 def test_startup_production_passes_against_real_bundle(monkeypatch, tmp_path):
-    """If the actual bundle on this DGX is present (post-prep), startup
-    in production mode succeeds. Skip the test when the bundle is not
-    materialised on the host machine."""
+    """If the actual bundle on this DGX is present (post-prep) AND
+    the sam2 runtime is installed, startup in production mode
+    succeeds. Skip when either is missing."""
+    import importlib.util
     monkeypatch.setenv("FRAUD_OFFLINE_MODE", "1")
     monkeypatch.setenv("STORAGE_ROOT", str(tmp_path / "storage"))
     bundle = ROOT / "models" / "hf"
@@ -55,6 +56,8 @@ def test_startup_production_passes_against_real_bundle(monkeypatch, tmp_path):
     for rel in required:
         if not (bundle.joinpath(*rel.split("/")).is_dir()):
             pytest.skip(f"bundle asset missing: {rel}; run prepare first")
+    if importlib.util.find_spec("sam2") is None:
+        pytest.skip("sam2 runtime not installed; install via wheelhouse")
     from app.startup import run_startup_checks
     summary = run_startup_checks()
     assert summary["production"] is True

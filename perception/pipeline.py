@@ -28,7 +28,7 @@ from typing import Optional
 
 from .falcon_client import FalconClient
 from .keyframes import select_keyframes
-from .ocr import run_ocr
+from .ocr import OcrEngine, run_ocr
 from .sam2_client import Sam2Client
 from .sampling import SamplingPolicy, plan_indices
 from .schemas import Detection, Keyframe, Mask, OcrResult, Track
@@ -69,12 +69,23 @@ def run_perception(session, case, window) -> dict:
             production_mode=False,
         )
 
+    ocr_cfg = cfg.raw.get("models", {}).get("falcon_ocr") or {}
+    ocr_path = None
+    if ocr_cfg:
+        from app.config import ModelConfig
+        ocr_path = resolve_model_path(
+            ModelConfig(name=ocr_cfg.get("name", "tiiuae/Falcon-OCR"),
+                        enabled=True, extra=ocr_cfg),
+            production_mode=False,
+        )
+
     return run_perception_on_window(
         window_path=window.path,
         fps=int(cfg.settings.get("gemma_video_fps", 25)),
         zones=_load_zones(cfg, case.camera_id),
         falcon_client=FalconClient(model_path=falcon_path),
         sam2_client=Sam2Client(model_path=sam2_path),
+        ocr_engine=OcrEngine(model_path=ocr_path),
         sampling=SamplingPolicy(),
     )
 
@@ -86,6 +97,7 @@ def run_perception_on_window(*,
                              falcon_client: FalconClient,
                              sam2_client: Sam2Client,
                              sampling: SamplingPolicy,
+                             ocr_engine: Optional[OcrEngine] = None,
                              falcon_query: str = DEFAULT_FALCON_QUERY,
                              ) -> dict:
     """Decode + run perception on a single video window. ``window_path``
@@ -135,7 +147,8 @@ def run_perception_on_window(*,
     tracks = tracker.export()
     tracks = annotate_tracks(tracks, detections, zones=zones)
 
-    ocr = run_ocr(falcon_client, detections, frames_for_ocr)
+    ocr, ocr_limitations = run_ocr(ocr_engine, detections, frames_for_ocr)
+    limitations.extend(ocr_limitations)
 
     keyframes = select_keyframes(tracks, detections)
     obstructed = any("obstruct" in l.lower() for l in limitations)

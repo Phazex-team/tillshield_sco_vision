@@ -60,14 +60,29 @@ class Sam2Client:
         if not self.has_capability():
             raise RuntimeError(self._load_err or "sam2 unavailable")
         try:
-            # The sam2 package exposes the predictor in different ways
-            # across versions; we use the high-level entry point.
             from sam2.sam2_image_predictor import SAM2ImagePredictor  # type: ignore
         except Exception as exc:
             self._load_err = f"sam2 import failed: {exc}"
             raise
-        self._predictor = SAM2ImagePredictor.from_pretrained(
-            self.model_path, device=self.device)
+        # Try a few well-known load paths so we work across the sam2
+        # package versions; from_pretrained is the official entry point
+        # on recent releases.
+        try:
+            self._predictor = SAM2ImagePredictor.from_pretrained(
+                self.model_path, device=self.device)
+        except TypeError:
+            self._predictor = SAM2ImagePredictor.from_pretrained(
+                self.model_path)
+        except AttributeError:
+            from sam2.build_sam import build_sam2  # type: ignore
+            ckpt = _find_ckpt(self.model_path)
+            cfg = _find_cfg(self.model_path)
+            if not ckpt or not cfg:
+                self._load_err = (
+                    "no .pt checkpoint or hydra cfg under " + self.model_path)
+                raise RuntimeError(self._load_err)
+            self._predictor = SAM2ImagePredictor(
+                build_sam2(cfg, ckpt, device=self.device))
 
     def segment(self,
                 image,
@@ -107,3 +122,19 @@ class Sam2Client:
 
     def unload(self) -> None:
         self._predictor = None
+
+
+def _find_ckpt(path: str) -> Optional[str]:
+    from pathlib import Path
+    for p in sorted(Path(path).iterdir()):
+        if p.suffix in (".pt", ".pth"):
+            return str(p)
+    return None
+
+
+def _find_cfg(path: str) -> Optional[str]:
+    from pathlib import Path
+    for p in sorted(Path(path).iterdir()):
+        if p.suffix in (".yaml", ".yml") and "config" in p.name.lower():
+            return str(p)
+    return None

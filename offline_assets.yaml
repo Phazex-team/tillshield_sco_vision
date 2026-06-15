@@ -19,6 +19,14 @@
 
 schema_version: 2
 
+# Python runtime packages that the offline runtime needs but cannot
+# install at runtime. Operators bundle these into ./wheelhouse/ using
+# scripts/prepare_offline_wheelhouse.py on a connected machine, then
+# install with ``pip install --no-index --find-links wheelhouse <pkg>``
+# on the destination DGX.
+required_python_packages:
+  - sam2     # segmentation runtime for perception/sam2_client.py
+
 required:
   # ----------------------------------------------------------------
   # Reasoning providers

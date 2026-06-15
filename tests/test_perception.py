@@ -262,7 +262,7 @@ def test_pipeline_assembles_tracks_when_detections_provided_via_synthetic_frames
 
     monkeypatch.setattr(pl, "_sample_frames",
                         lambda *a, **k: fake_frames)
-    monkeypatch.setattr(pl, "run_ocr", lambda *a, **k: [])
+    monkeypatch.setattr(pl, "run_ocr", lambda *a, **k: ([], []))
 
     result = pl.run_perception_on_window(
         window_path="/tmp/fake.mp4", fps=25,

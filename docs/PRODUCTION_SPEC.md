@@ -4,6 +4,10 @@ Status: target production specification for `fraud_detection_v3`.
 
 This document defines what the application must do when the refactor is complete. It is intentionally product, architecture, and reliability focused. Advanced MLOps/evaluation work is the only explicitly deferred category; all runtime functionality described here is core product scope.
 
+Process-flow diagram asset:
+
+![PhazeX Retail Return / Refund Visual Evidence Investigation Platform process flow](assets/phazex_return_refund_platform.png)
+
 ## 1. Product Mission
 
 The system is a local/offline Retail Return / Refund Visual Evidence Investigation Platform.
@@ -38,6 +42,8 @@ Business and camera constraints:
 Runtime constraints:
 
 - All production model weights must be repo-local under `./models/hf/...`.
+- Required runtime assets currently expected locally are Qwen3-VL, Gemma BF16, Falcon Perception, and SAM2.
+- Optional/non-blocking assets are SAM3, dedicated Falcon-OCR, InternVL, Grounding DINO, and Grounding DINO 1.5.
 - Runtime code must not call `snapshot_download`, `hf_hub_download`, `pip install`, or any network fetch.
 - Development mode may use `~/.cache/huggingface`; production/offline mode must not.
 - The app must run from a USB-copied repo on another equivalent DGX after verification.
@@ -95,6 +101,18 @@ The system has three truth layers:
 3. Human review: reviewer labels and final operational action.
 
 VLM narrative is advisory. It is never the sole source of truth.
+
+The diagram above is the visual contract for the local product architecture. It captures:
+
+- offline local runtime verification and model bundle requirements
+- one return-counter CCTV input and delayed POS input
+- continuous segment recording, immutable segment storage, and segment indexing
+- POS-led case creation and video-window reconstruction
+- Falcon, SAM2, tracking, temporal memory, OCR, and keyframe perception flow
+- Qwen3-VL primary reasoning with Gemma fallback
+- deterministic decision policy with only the four review-safe outcomes
+- immutable evidence package, reviewer dashboard, and append-only audit trail
+- memory guard, retry/error handling, no runtime network dependency, and no automatic accusation
 
 ## 5. Repository Ownership
 
@@ -206,6 +224,8 @@ python scripts/verify_offline_python_env.py
 ```
 
 The app must not start production inference if required assets are missing.
+
+For USB/offline portability, `models/hf/` and the Python runtime dependency source must be copied or rebuilt explicitly. Git commits alone do not carry ignored model weights or wheelhouse contents.
 
 ## 7. Memory Policy
 
@@ -328,6 +348,65 @@ Failure handling:
 - Corrupt segments: `INVALID_VIDEO`.
 - Partial coverage: `INVALID_VIDEO` or `REVIEW` only if enough evidence exists and missing interval is irrelevant; default must be conservative.
 - Clock mismatch: `INVALID_VIDEO` or `REVIEW`, never `HIGH_RISK_REVIEW`.
+
+## 9A. Storage Retention and Disk Safety
+
+Storage retention and disk safety are core reliability requirements, not advanced MLOps.
+
+Configuration:
+
+```yaml
+storage:
+  raw_segment_retention_hours: 10
+  min_free_disk_gb: 100
+```
+
+`min_free_disk_gb` may be adjusted for a smaller target disk, but production must have a configured free-space floor. The default should protect the recorder, database, evidence packages, and model bundle from disk exhaustion.
+
+Retention policy:
+
+- Raw continuous CCTV segments that are not linked to a case or evidence package are retained for 10 hours, then become eligible for cleanup.
+- Segments linked to any case, video window, evidence package, review action, or audit trail must never be auto-deleted.
+- Evidence packages, case clips, keyframes, masks, OCR crops/results, review actions, and audit logs are retained unless explicitly archived or deleted by an admin action.
+- Cleanup must never remove artifacts needed to reproduce a reviewer-visible decision.
+- Cleanup must be append/audit friendly: deletion actions must be logged with segment/artifact IDs, path, reason, and actor/process.
+
+Required cleanup tooling:
+
+```text
+python scripts/cleanup_storage.py --dry-run
+python scripts/cleanup_storage.py --execute
+```
+
+Requirements:
+
+- `--dry-run` is the default and deletes nothing.
+- `--execute` is required for deletion.
+- Cleanup only deletes expired, unlinked raw segments.
+- Cleanup reports candidate count, bytes reclaimable, oldest candidate, and preserved linked evidence count.
+- Cleanup must verify database linkage before deleting any segment file.
+- Cleanup must tolerate missing files and already-deleted unlinked segments without crashing.
+
+Required disk status:
+
+- total disk
+- used disk
+- free disk
+- storage root size
+- oldest raw segment
+- number of expired deletable raw segments
+- number of protected linked segments/artifacts
+- low-disk/degraded reason if active
+
+Disk status must be available through an endpoint or script. A low-disk guard must pause or stop raw segment recording when free disk falls below `storage.min_free_disk_gb`. It must keep the API and reviewer UI alive if possible and must not delete linked evidence automatically.
+
+Required tests:
+
+- expired unlinked raw segment is deleted only with `--execute`
+- `--dry-run` deletes nothing
+- linked segment is preserved even if expired
+- evidence package artifacts are preserved
+- low-disk state blocks recorder but keeps API/reviewer paths available
 
 ## 10. Perception Pipeline
 
@@ -633,6 +712,8 @@ Required:
 - idempotent POS ingest
 - retry count for analysis jobs
 - error/dead states
+- raw CCTV retention and disk cleanup
+- low-disk recorder pause/stop behavior
 - missing footage handling
 - corrupt footage handling
 - model outage handling
@@ -657,6 +738,9 @@ Failure rules:
 | GPU soft limit | defer/refuse new inference |
 | GPU hard limit | unload models/clear cache |
 | GPU emergency limit | stop inference workers, keep recorder/API if possible |
+| disk below free-space floor | pause/stop recorder, keep API/reviewer alive |
+| expired unlinked raw segment | cleanup eligible after 10 hours |
+| linked evidence segment/artifact | never auto-delete |
 
 ## 18. Security Baseline
 
@@ -692,6 +776,9 @@ Not deferred:
 - storing decision policy version
 - basic smoke tests
 - basic benchmark script hooks if cheap
+- raw segment retention and disk safety
+- prompt/config visibility and traceability when editable
+- evidence package/graph persistence for actual runtime evidence
 
 Evidence reproducibility fields must exist now even if advanced MLOps dashboards come later.
 
@@ -717,5 +804,8 @@ The app is functionally production-ready for local/offline testing only when all
 16. User-facing UI contains no accusation/fraud language.
 17. Memory guard blocks/degrades inference under configured limits.
 18. Runtime works without internet.
+19. Raw unlinked CCTV segments older than 10 hours are cleanup-eligible.
+20. Linked case/evidence/audit artifacts are never auto-deleted.
+21. Low disk space pauses/stops recording before disk exhaustion without taking down the API/reviewer UI.
 
 Until all of the above are true, the app may be testable as a partial checkpoint, but it is not complete.

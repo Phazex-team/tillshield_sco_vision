@@ -42,30 +42,26 @@ def main() -> int:
     # Lazy-import sam2 client. The perception/sam2_client wrapper does
     # not require the full sam2 python package to be installed; the
     # smoke only confirms the weights file actually opens.
-    weights = list(snap.glob("*.pt")) + list(snap.glob("*.safetensors"))
-    if not weights:
-        print("no weight shards (.pt/.safetensors) in snapshot",
+    # Instantiate the SAM2ImagePredictor from the bundled snapshot —
+    # this is the real runtime path, not just torch.load on a shard.
+    try:
+        from perception.sam2_client import Sam2Client
+    except Exception as exc:
+        print(f"perception.sam2_client import failed: {exc}",
               file=sys.stderr)
         return 2
-    print(f"weight shards: {[w.name for w in weights]}")
-
+    client = Sam2Client(model_path=str(snap))
+    if not client.has_capability():
+        print(f"sam2 unavailable: {client._load_err}", file=sys.stderr)
+        return 2
     try:
-        import torch
-        for w in weights:
-            if w.suffix == ".pt":
-                blob = torch.load(str(w), map_location="cpu",
-                                  weights_only=False)
-                if isinstance(blob, dict):
-                    print(f"  loaded {w.name}: top-level keys = "
-                          f"{list(blob)[:5]}")
-                else:
-                    print(f"  loaded {w.name}: type={type(blob).__name__}")
-                break
+        client._load()
     except Exception as exc:
-        print(f"torch.load failed: {exc}", file=sys.stderr)
+        print(f"SAM2ImagePredictor failed to load: {exc}",
+              file=sys.stderr)
         return 2
 
-    print("SMOKE OK (sam2 weights load from repo-local bundle)")
+    print("SMOKE OK (sam2 predictor loaded from repo-local bundle)")
     return 0
 
 

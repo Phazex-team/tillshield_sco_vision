@@ -39,26 +39,36 @@ def run_startup_checks(*, strict: Optional[bool] = None) -> dict:
     issues: list[str] = []
     warnings: list[str] = []
 
-    # 1. Required runtime assets
+    # 1. Required model bundles under ./models/hf/
     issues.extend(_check_required_assets(production))
 
-    # 2. Provider chain construction (lazy — no model load)
+    # 2. Required Python runtime packages (sam2 etc.) declared in
+    # offline_assets.yaml.
+    issues.extend(_check_required_python_packages(production))
+
+    # 3. Provider chain construction (lazy — no model load)
     chain_summary = _check_provider_chain(cfg, production)
     if chain_summary.get("error"):
         issues.append(chain_summary["error"])
 
-    # 3. Storage roots
+    # 4. Storage roots
     storage = cfg.storage_root
     storage.mkdir(parents=True, exist_ok=True)
     if not os.access(storage, os.W_OK):
         issues.append(f"storage root not writable: {storage}")
 
-    # 4. Memory guard initialises
+    # 5. Memory guard initialises
     try:
         from app.memory_guard import get_policy
         get_policy().poll()
     except Exception as exc:
         issues.append(f"memory guard failed to initialise: {exc}")
+
+    # 6. SAM2 runtime capability (production-only)
+    if production:
+        sam2_issue = _check_sam2_runtime(cfg)
+        if sam2_issue:
+            issues.append(sam2_issue)
 
     if production and issues:
         joined = "\n  - ".join(issues)
@@ -103,6 +113,47 @@ def _check_required_assets(production: bool) -> list[str]:
     except FileNotFoundError as exc:
         issues.append(f"offline_assets.yaml unreadable: {exc}")
     return issues
+
+
+def _check_required_python_packages(production: bool) -> list[str]:
+    if not production:
+        return []
+    import importlib.util
+    issues: list[str] = []
+    try:
+        import yaml
+        registry = yaml.safe_load(
+            (REPO_ROOT / "offline_assets.yaml").read_text()) or {}
+    except FileNotFoundError:
+        return issues
+    for pkg in (registry.get("required_python_packages") or []):
+        if importlib.util.find_spec(str(pkg)) is None:
+            issues.append(
+                f"required python package {pkg!r} not importable. "
+                f"Install via wheelhouse: "
+                f"pip install --no-index --find-links wheelhouse {pkg}"
+            )
+    return issues
+
+
+def _check_sam2_runtime(cfg) -> Optional[str]:
+    """SAM2 runtime is required for production perception. We confirm
+    the package imports AND the configured local snapshot exists."""
+    import importlib.util
+    if importlib.util.find_spec("sam2") is None:
+        return ("sam2 python package not importable; perception cannot "
+                "produce masks. Install via wheelhouse on this machine.")
+    sam2_cfg = cfg.models.get("sam2")
+    if sam2_cfg is None:
+        return "config.yaml missing models.sam2 entry"
+    try:
+        from app.config import resolve_model_path
+        path = resolve_model_path(sam2_cfg)
+    except Exception as exc:
+        return f"sam2 weights path could not be resolved: {exc}"
+    if not path:
+        return "sam2 weights not bundled under ./models/hf/"
+    return None
 
 
 def _check_provider_chain(cfg, production: bool) -> dict:

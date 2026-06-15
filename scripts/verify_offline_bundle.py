@@ -255,6 +255,20 @@ def main() -> int:
     for issue in config_issues:
         print(f"CONFIG FAIL: {issue}", file=sys.stderr)
 
+    # Required python packages declared in the registry must also be
+    # importable on the destination DGX. In production mode this is
+    # blocking (treated identically to a missing model weight).
+    runtime_pkgs = registry.get("required_python_packages") or []
+    if args.production and runtime_pkgs:
+        import importlib.util
+        for pkg in runtime_pkgs:
+            if importlib.util.find_spec(str(pkg)) is None:
+                config_issues.append(
+                    f"required python package {pkg!r} not importable; "
+                    "install via wheelhouse"
+                )
+                print(f"PYTHON PKG MISSING: {pkg}", file=sys.stderr)
+
     for m in summary["optional_missing"]:
         print(f"warn  optional missing: {m['name']}  "
               f"-> {m['official_source']}")
