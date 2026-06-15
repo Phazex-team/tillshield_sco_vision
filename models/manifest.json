@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "prepared_at": "2026-06-15T18:58:52Z",
-  "duration_sec": 53.1,
+  "prepared_at": "2026-06-15T19:28:23Z",
+  "duration_sec": 50.6,
   "mode": "copy_from_cache_only",
   "repo_root": "/home/fazil/workspace/projects/fraud_detection_v3",
   "bundle_root": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf",
@@ -9,7 +9,7 @@
     {
       "name": "qwen3_vl",
       "model_id": "Qwen/Qwen3-VL-30B-A3B-Instruct",
-      "purpose": "Primary visual evidence verifier (when enabled). Reads structured evidence + frames, emits review-safe JSON.",
+      "purpose": "Primary visual evidence verifier. Reads structured evidence + frames and emits review-safe JSON.",
       "required": true,
       "runtime_blocking": true,
       "status": "present",
@@ -141,7 +141,7 @@
     {
       "name": "gemma_bf16",
       "model_id": "google/gemma-4-26B-A4B-it",
-      "purpose": "Baseline / fallback reasoner. Currently the active default until Qwen is promoted by benchmark.",
+      "purpose": "Fallback reasoner used when Qwen3-VL is unavailable or returns an error.",
       "required": true,
       "runtime_blocking": true,
       "status": "present",
@@ -203,13 +203,13 @@
     {
       "name": "falcon_perception",
       "model_id": "tiiuae/Falcon-Perception",
-      "purpose": "Open-vocabulary object detection on sampled frames.",
+      "purpose": "Open-vocabulary object detection AND OCR. The published\ntiiuae/Falcon-Perception checkpoint performs detection,\nsegmentation, AND OCR via natural-language queries (per the\nupstream README), so one checkpoint covers both perception tasks.\n",
       "required": true,
       "runtime_blocking": true,
       "status": "present",
       "snapshot": "5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
-      "source": "cache",
-      "source_path": "/home/fazil/.cache/huggingface/hub/models--tiiuae--Falcon-Perception/snapshots/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
+      "source": "bundle",
+      "source_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/tiiuae/Falcon-Perception/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
       "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/tiiuae/Falcon-Perception/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
       "file_count": 16,
       "total_bytes": 2540057792,
@@ -295,11 +295,11 @@
           "sha256": "357072b958469e8b6b4cb86fed3399e3c7b56b91ccc4254e6f6627ac7ea70672"
         }
       ],
-      "note": ""
+      "note": "already in bundle; no action taken"
     },
     {
-      "name": "sam3",
-      "model_id": "facebook/sam3-large",
+      "name": "sam2",
+      "model_id": "facebook/sam2-hiera-large",
       "purpose": "Candidate item segmentation + mask propagation for tracker association.",
       "required": true,
       "runtime_blocking": true,
@@ -311,28 +311,12 @@
       "file_count": 0,
       "total_bytes": 0,
       "files": [],
-      "note": "https://huggingface.co/facebook (SAM 3 release pending; track facebook/sam3-* repos)"
+      "note": "https://huggingface.co/facebook/sam2-hiera-large"
     },
     {
-      "name": "falcon_ocr",
-      "model_id": "tiiuae/Falcon-OCR",
-      "purpose": "OCR on receipt / document / label crops produced by perception.",
-      "required": true,
-      "runtime_blocking": true,
-      "status": "missing",
-      "snapshot": null,
-      "source": null,
-      "source_path": null,
-      "dest_path": null,
-      "file_count": 0,
-      "total_bytes": 0,
-      "files": [],
-      "note": "https://huggingface.co/tiiuae/Falcon-OCR"
-    },
-    {
-      "name": "sam2",
-      "model_id": "facebook/sam2-hiera-large",
-      "purpose": "Fallback segmentation/tracking if SAM 3 is not deployable.",
+      "name": "sam3",
+      "model_id": "facebook/sam3-large",
+      "purpose": "Preferred segmenter once Meta ships a public SAM 3 checkpoint.",
       "required": false,
       "runtime_blocking": false,
       "status": "optional_missing",
@@ -343,12 +327,28 @@
       "file_count": 0,
       "total_bytes": 0,
       "files": [],
-      "note": "https://huggingface.co/facebook/sam2-hiera-large"
+      "note": "https://huggingface.co/facebook (SAM 3 release pending; track facebook/sam3-* repos when announced)"
+    },
+    {
+      "name": "falcon_ocr_specialized",
+      "model_id": "tiiuae/Falcon-OCR",
+      "purpose": "Dedicated OCR variant for crop-friendly outputs. The base Falcon-Perception already covers OCR; this is a quality optimisation.",
+      "required": false,
+      "runtime_blocking": false,
+      "status": "optional_missing",
+      "snapshot": null,
+      "source": null,
+      "source_path": null,
+      "dest_path": null,
+      "file_count": 0,
+      "total_bytes": 0,
+      "files": [],
+      "note": "https://huggingface.co/tiiuae/Falcon-OCR"
     },
     {
       "name": "internvl",
       "model_id": "OpenGVLab/InternVL3-78B-MPO",
-      "purpose": "Benchmark-only verifier candidate. Never used by production runtime.",
+      "purpose": "Benchmark-only verifier candidate.",
       "required": false,
       "runtime_blocking": false,
       "status": "optional_missing",

@@ -26,21 +26,21 @@ if str(ROOT) not in sys.path:
 # ---------------------------------------------------------------------------
 
 def test_monitor_calls_decision_policy_on_vlm_result():
-    """The live MVP analyzer calls ``decision_policy.decide`` on every
-    VLM output. We verify by source-grepping ``monitor.py``: the call
-    site of ``gemma.reason`` must be immediately followed by a
-    ``decide(...)`` invocation."""
+    """The live runtime calls ``decision_policy.decide`` on every VLM
+    output. We verify by source-grepping ``monitor.py``: the chain
+    provider's ``analyze_evidence`` result must be wrapped, and the
+    deterministic outcome enum (not the raw model output) drives
+    ``flag_for_review``."""
     src = (ROOT / "monitor.py").read_text()
-    # gemma.reason(...) call must exist (otherwise this test is bogus).
-    assert "gemma.reason(" in src
-    # The wrapper must import decide + summary_from_vlm and call them.
+    # Provider chain owns inference now.
+    assert "provider.analyze_evidence(" in src
+    assert "_normalise_vlm_result(" in src
+    # Decision policy wrapper.
     assert "from reasoning.decision_policy import" in src
     assert "summary_from_vlm(" in src
     assert "decide(" in src
     assert 'result["policy_outcome"]' in src
     assert 'result["flag_for_review"]' in src
-    # The deterministic outcome enum must drive flag_for_review, not the
-    # raw model output.
     assert "decision.outcome != OUTCOME_VERIFIED" in src
 
 
@@ -188,13 +188,15 @@ def test_qwen3_vl_provider_does_not_call_hf_hub_download(monkeypatch):
 # 4. Qwen disabled => Gemma is the active reasoner.
 # ---------------------------------------------------------------------------
 
-def test_qwen_disabled_in_config_and_gemma_active():
+def test_qwen_enabled_in_active_config_with_gemma_fallback():
+    """The shipping config has Qwen primary AND Gemma still available
+    as fallback. The chain provider depends on both being enabled."""
     from app.config import load_config
     cfg = load_config()
     assert "gemma" in cfg.models
     assert cfg.models["gemma"].enabled is True
     assert "qwen3_vl" in cfg.models
-    assert cfg.models["qwen3_vl"].enabled is False
+    assert cfg.models["qwen3_vl"].enabled is True
 
 
 def _select_active_provider(cfg) -> str:
@@ -207,9 +209,19 @@ def _select_active_provider(cfg) -> str:
     raise RuntimeError("no provider enabled")
 
 
-def test_active_provider_selection_falls_back_to_gemma():
+def test_active_provider_selection_picks_qwen_when_enabled():
+    """With Qwen enabled in config, the selection rule picks Qwen
+    first. Gemma is still available as the chain fallback."""
     from app.config import load_config
     cfg = load_config()
+    assert _select_active_provider(cfg) == "qwen3_vl"
+
+
+def test_active_provider_selection_falls_back_to_gemma_when_qwen_disabled():
+    """Mutating the config to disable Qwen drops back to Gemma."""
+    from app.config import load_config
+    cfg = load_config()
+    cfg.models["qwen3_vl"].enabled = False
     assert _select_active_provider(cfg) == "gemma"
 
 

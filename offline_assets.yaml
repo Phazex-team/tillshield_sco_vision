@@ -6,92 +6,107 @@
 # missing from ./models/hf/<repo>/<name>/<snapshot>/ when
 # FRAUD_OFFLINE_MODE=1.
 #
-# Optional entries are documented but never block the bundle. They are
-# used by the MLOps benchmark harness only.
-#
 # All paths are relative to the repo root. Do NOT add entries pointing
 # into ~/.cache/huggingface — those are dev-mode fallbacks resolved by
 # app.config.resolve_model_path, not bundle members.
+#
+# Asset role tags (advisory; used by perception/reasoning glue):
+#   role: reasoner_primary   # Qwen3-VL when enabled, else Gemma
+#   role: reasoner_fallback  # Gemma BF16
+#   role: detector           # Falcon-Perception object detection
+#   role: ocr                # OCR — Falcon-Perception covers this
+#   role: segmenter          # SAM 2 (deployable today)
 
-schema_version: 1
+schema_version: 2
 
 required:
   # ----------------------------------------------------------------
   # Reasoning providers
   # ----------------------------------------------------------------
   - name: qwen3_vl
-    purpose: "Primary visual evidence verifier (when enabled). Reads structured evidence + frames, emits review-safe JSON."
+    role: reasoner_primary
+    purpose: "Primary visual evidence verifier. Reads structured evidence + frames and emits review-safe JSON."
     repo: Qwen/Qwen3-VL-30B-A3B-Instruct
     cache_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct
     runtime_blocking: true
     notes: |
       Architecture: Qwen3VLMoeForConditionalGeneration (transformers >= 5.6).
-      Activate by setting models.qwen3_vl.enabled=true in config.yaml.
+      Activate via models.qwen3_vl.enabled=true in config.yaml. The
+      ChainProvider falls back to Gemma if Qwen load/inference fails.
 
   - name: gemma_bf16
-    purpose: "Baseline / fallback reasoner. Currently the active default until Qwen is promoted by benchmark."
+    role: reasoner_fallback
+    purpose: "Fallback reasoner used when Qwen3-VL is unavailable or returns an error."
     repo: google/gemma-4-26B-A4B-it
     cache_path: /home/fazil/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it
     runtime_blocking: true
     notes: |
-      Served via transformers_server.py (BF16). NVFP4 is unsupported on
-      this DGX Spark (GB10/sm_121) — see memory/project_bf16_fallback.md.
+      Served via transformers_server.py (BF16). NVFP4 unsupported on
+      this DGX Spark (sm_121) — see memory/project_bf16_fallback.md.
 
   # ----------------------------------------------------------------
-  # Perception
+  # Perception: detection + OCR + segmentation
   # ----------------------------------------------------------------
   - name: falcon_perception
-    purpose: "Open-vocabulary object detection on sampled frames."
+    role: detector_and_ocr
+    purpose: |
+      Open-vocabulary object detection AND OCR. The published
+      tiiuae/Falcon-Perception checkpoint performs detection,
+      segmentation, AND OCR via natural-language queries (per the
+      upstream README), so one checkpoint covers both perception tasks.
     repo: tiiuae/Falcon-Perception
     cache_path: /home/fazil/.cache/huggingface/hub/models--tiiuae--Falcon-Perception
     runtime_blocking: true
     notes: |
-      Same checkpoint also supports segmentation and OCR via natural
-      language queries, but we run OCR through Falcon-OCR by default for
-      crop-friendly outputs.
+      Detection queries: e.g. "receipt, document, bag, item".
+      OCR queries: e.g. "extract all text", "what does this receipt say".
+      A dedicated tiiuae/Falcon-OCR variant exists as a benchmark
+      optimisation (see optional list) but is NOT required.
 
-  - name: sam3
-    purpose: "Candidate item segmentation + mask propagation for tracker association."
-    repo: facebook/sam3-large
-    cache_path: null
-    runtime_blocking: true
-    official_source: "https://huggingface.co/facebook (SAM 3 release pending; track facebook/sam3-* repos)"
-    fallback: sam2
-    notes: |
-      SAM 3 is not yet locally cached. Until it is downloaded into the
-      offline bundle, perception will refuse to start in production mode.
-      The SAM 2 entry below is the documented stop-gap.
-
-  - name: falcon_ocr
-    purpose: "OCR on receipt / document / label crops produced by perception."
-    repo: tiiuae/Falcon-OCR
-    cache_path: null
-    runtime_blocking: true
-    official_source: "https://huggingface.co/tiiuae/Falcon-OCR"
-    notes: |
-      Falcon-OCR is currently MISSING from local cache. Download once
-      with `python scripts/prepare_offline_model_bundle.py
-      --download-approved --model tiiuae/Falcon-OCR` on a connected
-      machine, then re-verify.
-
-optional:
-  # Stop-gap if SAM 3 is unavailable. The perception pipeline can fall
-  # back to SAM 2 with reduced mask propagation quality.
   - name: sam2
-    purpose: "Fallback segmentation/tracking if SAM 3 is not deployable."
+    role: segmenter
+    purpose: "Candidate item segmentation + mask propagation for tracker association."
     repo: facebook/sam2-hiera-large
     cache_path: null
-    runtime_blocking: false
+    runtime_blocking: true
     official_source: "https://huggingface.co/facebook/sam2-hiera-large"
+    notes: |
+      SAM 2 is the actually-deployable segmenter today. SAM 3 was
+      announced by Meta but the public checkpoint is not yet available
+      on the Hub (see the optional `sam3` entry for the preferred
+      upgrade path). Until SAM 3 ships, the perception pipeline uses
+      SAM 2 as the primary segmenter and DOES NOT block on SAM 3.
 
+optional:
+  # Preferred upgrades — replace the required equivalent above when the
+  # upstream release lands and the checkpoint can actually be bundled.
+  - name: sam3
+    role: segmenter_preferred_upgrade
+    purpose: "Preferred segmenter once Meta ships a public SAM 3 checkpoint."
+    repo: facebook/sam3-large
+    cache_path: null
+    runtime_blocking: false
+    official_source: "https://huggingface.co/facebook (SAM 3 release pending; track facebook/sam3-* repos when announced)"
+
+  - name: falcon_ocr_specialized
+    role: ocr_preferred_upgrade
+    purpose: "Dedicated OCR variant for crop-friendly outputs. The base Falcon-Perception already covers OCR; this is a quality optimisation."
+    repo: tiiuae/Falcon-OCR
+    cache_path: null
+    runtime_blocking: false
+    official_source: "https://huggingface.co/tiiuae/Falcon-OCR"
+
+  # Benchmark-only assets — never used by the production runtime.
   - name: internvl
-    purpose: "Benchmark-only verifier candidate. Never used by production runtime."
+    role: benchmark_verifier
+    purpose: "Benchmark-only verifier candidate."
     repo: OpenGVLab/InternVL3-78B-MPO
     cache_path: null
     runtime_blocking: false
     official_source: "https://huggingface.co/OpenGVLab"
 
   - name: grounding_dino
+    role: benchmark_grounding
     purpose: "Benchmark-only object grounding model."
     repo: IDEA-Research/grounding-dino-base
     cache_path: null
@@ -99,15 +114,15 @@ optional:
     official_source: "https://huggingface.co/IDEA-Research/grounding-dino-base"
 
   - name: grounding_dino_1_5
+    role: benchmark_grounding
     purpose: "Benchmark-only object grounding model (larger)."
     repo: IDEA-Research/grounding-dino-1.5-pro
     cache_path: null
     runtime_blocking: false
     official_source: "https://huggingface.co/IDEA-Research"
 
-# Non-model artefacts that ALSO need to travel with the repo. The
-# verifier checks each path is present and non-empty. These are
-# repo-relative.
+# Non-model artefacts that ALSO travel with the repo. The verifier
+# confirms each path is present and non-empty. Repo-relative.
 runtime_assets:
   prompts:
     - reasoning/prompts/

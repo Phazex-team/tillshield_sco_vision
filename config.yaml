@@ -64,11 +64,19 @@ models:
     request_timeout_sec: 300
     request_retries: 3
     request_retry_backoff_sec: 5
-  # Cached locally; wired through reasoning/providers/qwen3_vl.py but
-  # disabled by default. Promote to active only after benchmark in MLOps.
+  # Primary visual evidence verifier when ENABLED + repo-local weights
+  # resolve. The ChainProvider (reasoning/providers/chain.py) tries
+  # Qwen first and falls back to Gemma on load/inference failure. The
+  # decision policy still wraps every result.
+  #
+  # ``local_path`` is a development fallback only; production mode
+  # (FRAUD_OFFLINE_MODE=1) ignores it and requires the repo-local
+  # ./models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/<snapshot>/ bundle.
   qwen3_vl:
-    enabled: false
+    enabled: true
     name: Qwen/Qwen3-VL-30B-A3B-Instruct
+    max_new_tokens: 512
+    temperature: 0.1
     local_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
 observability:
   phoenix_enabled: true

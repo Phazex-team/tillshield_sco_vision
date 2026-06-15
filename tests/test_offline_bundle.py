@@ -31,8 +31,10 @@ if str(ROOT) not in sys.path:
 # 1. Asset registry shape
 # ---------------------------------------------------------------------------
 
-REQUIRED_NAMES = {"qwen3_vl", "gemma_bf16", "falcon_perception",
-                  "sam3", "falcon_ocr"}
+# SAM 2 is the deployable segmenter today; SAM 3 is preferred-upgrade.
+# Falcon-Perception covers OCR (per upstream README), so a dedicated
+# Falcon-OCR is optional, not required.
+REQUIRED_NAMES = {"qwen3_vl", "gemma_bf16", "falcon_perception", "sam2"}
 
 
 def test_registry_lists_all_required_assets():
@@ -407,13 +409,14 @@ def test_chain_attempts_recorded_when_all_fail():
 
 
 def test_build_active_provider_qwen_disabled_returns_gemma_only(monkeypatch):
-    """With qwen3_vl.enabled=false the active provider is plain Gemma."""
+    """When ``qwen3_vl.enabled=false`` is set on the loaded config, the
+    active provider must be plain Gemma — the chain wrapper drops Qwen."""
     from app.config import load_config
     from reasoning.providers import build_active_provider
 
     cfg = load_config()
-    # Sanity: shipping defaults have Qwen disabled.
-    assert cfg.models["qwen3_vl"].enabled is False
+    # Override the shipping default for this test.
+    cfg.models["qwen3_vl"].enabled = False
     p = build_active_provider(cfg)
     assert p.name == "gemma"
 

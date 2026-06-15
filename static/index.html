@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Fraud Detection v3 — Multi-Camera</title>
+<title>Return / Refund Visual Review — Multi-Camera</title>
 <style>
   :root { --bg:#0f1115; --panel:#171a21; --muted:#8a93a6; --fg:#e6e9ef;
           --accent:#4ea1ff; --ok:#3ddc84; --warn:#ffb020; --err:#ff5566; }
@@ -121,7 +121,7 @@
 </head>
 <body>
 <header>
-  <h1>Fraud Detection
+  <h1>Return / Refund Visual Review
     <span style="font-size:12px;padding:3px 8px;border-radius:6px;background:#2a2f3a;color:var(--accent);margin-left:10px;vertical-align:middle">v3 · multi-camera</span>
   </h1>
   <a href="http://localhost:6006" target="_blank" rel="noopener"
@@ -144,7 +144,7 @@
       <div class="stat"><div class="n" id="s-total">–</div><div class="l">Sessions</div></div>
       <div class="stat ok"><div class="n" id="s-presented">–</div><div class="l">Events</div></div>
       <div class="stat warn"><div class="n" id="s-none">–</div><div class="l">No event</div></div>
-      <div class="stat flag"><div class="n" id="s-flagged">–</div><div class="l">Flagged</div></div>
+      <div class="stat flag"><div class="n" id="s-flagged">–</div><div class="l">Needs review</div></div>
       <div class="stat"><div class="n" id="s-low">–</div><div class="l">Low conf.</div></div>
     </div>
     <div id="by-classifier-row" class="row" style="margin-top:12px"></div>
@@ -315,7 +315,7 @@
           <th>Camera</th><th>Classifier</th>
           <th>Subject</th>
           <th>Event</th><th>#</th><th>Items</th>
-          <th>Conf.</th><th>Narrative</th><th>Flagged</th>
+          <th>Conf.</th><th>Narrative</th><th>Outcome</th>
         </tr></thead>
         <tbody></tbody>
       </table>
@@ -510,7 +510,7 @@ async function refreshStats() {
       const color = meta ? meta.color : '#2a2f3a';
       const lbl = meta ? meta.display_label : k;
       host.insertAdjacentHTML('beforeend',
-        `<span class="badge" style="background:${color};color:#000">${escapeHtml(lbl)} · total ${v.total} · events ${v.events} · flagged ${v.flagged}</span>`);
+        `<span class="badge" style="background:${color};color:#000">${escapeHtml(lbl)} · total ${v.total} · events ${v.events} · needs review ${v.flagged}</span>`);
     });
   } catch (e) { /* ignore */ }
 }
@@ -526,7 +526,7 @@ async function refreshLastDetection() {
     const last = j.rows[j.rows.length - 1];
     const pill = last.item_presented === true ? 'ok' : 'no';
     const flag = last.flag_for_review
-      ? ' <span class="pill flag">FLAGGED</span>' : '';
+      ? ' <span class="pill flag">NEEDS REVIEW</span>' : '';
     el.innerHTML = `
       <div style="font-size:13px; color:var(--muted)">${last.start_time||last.timestamp||''}</div>
       <div style="font-size:16px; margin:6px 0">${last.session_id}</div>
@@ -603,7 +603,7 @@ async function loadLogs() {
         <td>${escapeHtml(itemsShort || '—')}</td>
         <td>${escapeHtml((row.confidence||'').toUpperCase())}</td>
         <td>${escapeHtml(truncated)}</td>
-        <td>${row.flag_for_review ? '<span class="pill flag">FLAGGED</span>' : ''}</td>`;
+        <td>${row.flag_for_review ? '<span class="pill flag">NEEDS REVIEW</span>' : ''}</td>`;
       tr.onclick = () => openModal(row);
       tbody.appendChild(tr);
     });
@@ -623,7 +623,7 @@ async function onConfigTab() {
   document.getElementById('rtsp-url').value = cam.rtsp_url || '';
   document.getElementById('cam-name').value = cam.name || '';
   document.getElementById('cam-cooldown').value = cam.cooldown_sec ?? 0;
-  document.getElementById('cam-classifier').value = cam.classifier || 'fraud';
+  document.getElementById('cam-classifier').value = cam.classifier || 'return_review';
   const tb = cam.token_budget || (classifierByKey()[cam.classifier]?.token_budget) || 1120;
   document.getElementById('cam-token-budget').value = String(tb);
   // enable_thinking / max_frames: show the per-camera override, blank = use default
@@ -885,7 +885,7 @@ function openModal(row) {
     vid.style.display = 'none';
     novid.style.display = 'block';
   }
-  const flag = row.flag_for_review ? '<span class="pill flag">FLAGGED</span>' : '';
+  const flag = row.flag_for_review ? '<span class="pill flag">NEEDS REVIEW</span>' : '';
   const handover = (row.handover_occurred === true) || (row.item_presented === true);
   const handoverPill = handover
     ? '<span class="pill ok">Event</span>'
@@ -929,7 +929,7 @@ function openModal(row) {
         const list = stamps.map(s => `<div style="font-size:12px;color:var(--muted)">${escapeHtml(s.replace('T',' '))}</div>`).join('');
         return `<div><b>${mc + 1}</b> sub-session${mc===0?'':'s'} (${mc} merged in)</div>${list}`;
     })()}</div>
-    <div class="k">Flagged</div><div>${row.flag_for_review ? 'yes' : 'no'}</div>`;
+    <div class="k">Needs review</div><div>${row.flag_for_review ? 'yes' : 'no'}</div>`;
   document.getElementById('modal').classList.add('open');
 }
 function closeModal() { document.getElementById('modal').classList.remove('open'); }

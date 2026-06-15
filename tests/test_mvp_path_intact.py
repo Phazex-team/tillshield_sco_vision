@@ -20,9 +20,10 @@ def test_config_loads_with_new_section_present():
     cfg = load_config()
     assert "gemma" in cfg.models
     assert cfg.models["gemma"].name == "google/gemma-4-26B-A4B-it"
-    # Qwen3-VL must be registered and disabled.
+    # Qwen3-VL is now primary in the production config.
     assert "qwen3_vl" in cfg.models
-    assert cfg.models["qwen3_vl"].enabled is False
+    assert cfg.models["qwen3_vl"].enabled is True
+    assert cfg.models["qwen3_vl"].name == "Qwen/Qwen3-VL-30B-A3B-Instruct"
 
 
 def test_legacy_gemma_reasoner_import_still_works():

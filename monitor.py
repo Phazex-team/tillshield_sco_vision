@@ -50,6 +50,126 @@ from classifiers import resolve_prompts
 log = logging.getLogger("monitor")
 
 
+# ----------------------------------------------------------------------
+# Provider-chain helpers (Qwen primary + Gemma fallback via the
+# reasoning.providers abstraction). Kept module-level so build_analyzer
+# stays small.
+# ----------------------------------------------------------------------
+
+def _sample_frames(frames, cap):
+    """Match the previous Gemma reasoner's stride sampling so swapping
+    to the provider chain doesn't accidentally change the frame count."""
+    n = len(frames)
+    if n == 0:
+        return []
+    cap = max(1, min(int(cap), n))
+    stride = max(1, n // cap)
+    return list(frames)[::stride][:cap]
+
+
+def _build_manifest(*, case_id, camera_id, window_start_ts,
+                    window_end_ts, frames, system_prompt, user_prompt):
+    """Encode PIL frames as data URLs and wrap them in an
+    EvidenceManifest the provider chain can consume."""
+    import base64
+    import io
+    from reasoning.providers.base import EvidenceManifest
+
+    encoded = []
+    for idx, img in enumerate(frames):
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        encoded.append({
+            "frame_id": f"frame_{idx:03d}",
+            "ts": window_start_ts,
+            "image_url": f"data:image/jpeg;base64,{b64}",
+        })
+    return EvidenceManifest(
+        case_id=str(case_id),
+        camera_id=str(camera_id),
+        window_start_ts=str(window_start_ts),
+        window_end_ts=str(window_end_ts),
+        frames=encoded,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+
+
+def _normalise_vlm_result(vlm_result, *, num_frames, inference_started_at):
+    """Translate a ``VLMResult`` into the dict shape downstream code
+    (overlay, broker, CSV logger) already understands.
+
+    Every legacy key is filled with a conservative default; missing
+    information NEVER becomes a positive signal. The decision policy
+    wraps this dict immediately after, so the final ``flag_for_review``
+    will be derived from the deterministic outcome enum, not from any
+    raw model output.
+    """
+    parsed = dict(vlm_result.parsed or {})
+    items = (parsed.get("items_observed")
+             or parsed.get("items_handed_over")
+             or parsed.get("objects_detected")
+             or [])
+    if not isinstance(items, list):
+        items = []
+    handover = bool(parsed.get("handover_occurred", False))
+    if not handover:
+        item_count = 0
+        items_for_log = []
+    else:
+        try:
+            item_count = int(parsed.get("item_count") or len(items))
+        except (TypeError, ValueError):
+            item_count = len(items)
+        items_for_log = [str(x) for x in items if x]
+
+    customer_desc = str(parsed.get("customer_description", ""))[:400]
+    narrative = str(parsed.get("narrative", "") or vlm_result.error or "")[:2000]
+    confidence = str(parsed.get("confidence", "low")).lower()
+    latency_ms = int(vlm_result.latency_ms
+                     or (time.time() - inference_started_at) * 1000)
+
+    people = []
+    if customer_desc or items_for_log:
+        people = [{
+            "id": 1,
+            "description": customer_desc,
+            "items_presented": items_for_log,
+            "presented": handover,
+        }]
+
+    return {
+        "handover_occurred": handover,
+        "item_count": max(0, item_count),
+        "items_handed_over": items_for_log,
+        "customer_description": customer_desc,
+        "narrative": narrative,
+        "confidence": confidence,
+        # Provisional only — the deterministic decision policy overrides
+        # this immediately after we return.
+        "flag_for_review": False,
+        "people": people,
+        "item_presented": handover,
+        "objects_detected": items_for_log,
+        "_num_frames": num_frames,
+        "_latency_ms": latency_ms,
+        "_provider": vlm_result.provider,
+        "_provider_model": vlm_result.model_name,
+        "_provider_error": vlm_result.error,
+        "_chain_attempts": (parsed.get("_chain_attempts") or []),
+        # Echo through review-safe perception signals the policy reads.
+        "physical_item_presented": bool(
+            parsed.get("physical_item_presented", handover)),
+        "receipt_visible": bool(parsed.get("receipt_visible", False)),
+        "obstructed": bool(parsed.get("obstructed", False)),
+        "camera_view_clear": bool(parsed.get("camera_view_clear", True)),
+        "limitations": list(parsed.get("limitations") or []),
+    }
+
+
 def load_config(path: str) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
@@ -298,16 +418,25 @@ def build_analyzer(cfg: dict, slogger: SessionLogger,
                    broker_registry=None):
     """Return ``(analyze, probe_description)``.
 
-    Heavy models load here so ``--calibrate`` never touches them. Gemma is
-    a thin HTTP client to vLLM; Falcon is still in-process and serialised
-    by ``falcon_lock``.
+    Heavy models load here so ``--calibrate`` never touches them. Falcon
+    is still in-process and serialised by ``falcon_lock``. Reasoning is
+    routed through ``reasoning.providers.build_active_provider`` so the
+    live runtime uses the same chain (Qwen3-VL primary + Gemma fallback)
+    the test suite exercises. The decision policy stays the final
+    authority — no raw model output drives the case outcome.
     """
     from falcon_detector import FalconDetector, bbox_summary
     from gemma_reasoner import GemmaVideoReasoner
     from video_encoder import encode_evidence_mp4
 
+    from app.config import load_config
+    from reasoning.providers import build_active_provider
+
     falcon = FalconDetector(cfg["models"]["falcon"]["name"])
     gcfg = cfg["models"]["gemma"]
+    # The probe_description quick-describe path still uses the lean
+    # transformers HTTP client (Gemma BF16) — that endpoint is cheap and
+    # already running. It does NOT make case decisions.
     gemma = GemmaVideoReasoner(
         model_name=gcfg["name"],
         max_tokens=int(gcfg.get("max_tokens", 768)),
@@ -320,6 +449,12 @@ def build_analyzer(cfg: dict, slogger: SessionLogger,
         request_retries=int(gcfg.get("request_retries", 3)),
         request_retry_backoff_sec=float(gcfg.get("request_retry_backoff_sec", 5)),
     )
+
+    # The provider chain is the runtime reasoner. Build once.
+    app_cfg = load_config()
+    provider = build_active_provider(app_cfg)
+    log.info("active reasoning provider chain: %s",
+             getattr(provider, "name", "unknown"))
     gemma_video_fps = int(cfg["settings"].get("gemma_video_fps", 1))
     gemma_max_seconds = int(cfg["settings"].get("gemma_video_max_seconds", 60))
     global_max_frames = max(1, gemma_max_seconds * max(1, gemma_video_fps))
@@ -456,19 +591,57 @@ def build_analyzer(cfg: dict, slogger: SessionLogger,
         log.info("[%s] inference: classifier=%s thinking=%s max_frames=%d "
                  "token_budget=%d", clip.camera_id, classifier_key,
                  enable_thinking, max_frames, token_budget)
-        result = gemma.reason(
-            gemma_pil_for_model,
-            start_objects=start_objects,
-            action_objects=action_objects,
-            system_prompt=sys_prompt,
-            user_prompt=usr_prompt,
-            token_budget=token_budget,
-            classifier=classifier_key,
-            enable_thinking=enable_thinking,
-            max_frames=max_frames,
+        # Render templated prompts ONCE so the provider doesn't need to
+        # know the legacy template format — the chain provider sees only
+        # finished text.
+        fmt = {"start_objects": start_objects, "action_objects": action_objects}
+        try:
+            rendered_system = sys_prompt.format(**fmt)
+            rendered_user = usr_prompt.format(**fmt)
+        except (KeyError, IndexError):
+            rendered_system = (sys_prompt
+                               .replace("{start_objects}", start_objects)
+                               .replace("{action_objects}", action_objects))
+            rendered_user = (usr_prompt
+                             .replace("{start_objects}", start_objects)
+                             .replace("{action_objects}", action_objects))
+
+        # Sample frames the same way GemmaVideoReasoner used to (so the
+        # behaviour change is provider-routing only, not frame counts).
+        sampled = _sample_frames(gemma_pil_for_model, max_frames)
+        manifest = _build_manifest(
+            case_id=sid,
             camera_id=clip.camera_id,
-            session_id=sid,
+            window_start_ts=clip.start_time.isoformat(),
+            window_end_ts=clip.end_time.isoformat(),
+            frames=sampled,
+            system_prompt=rendered_system,
+            user_prompt=rendered_user,
         )
+        log.info("[%s] inference via %s: classifier=%s frames=%d "
+                 "token_budget=%d", clip.camera_id, getattr(provider,
+                 "name", "unknown"), classifier_key, len(sampled),
+                 token_budget)
+        t_inf = time.time()
+        vlm_result = provider.analyze_evidence(manifest)
+        # Normalise the provider result into the dict shape downstream
+        # code (overlay, broker, CSV logger) already understands.
+        result = _normalise_vlm_result(vlm_result, num_frames=len(sampled),
+                                       inference_started_at=t_inf)
+        try:
+            from tracer import trace_gemma
+            trace_gemma(camera_id=clip.camera_id, session_id=sid,
+                        classifier=classifier_key,
+                        thinking=bool(enable_thinking),
+                        prompt_tokens=None, completion_tokens=None,
+                        thinking_tokens=None,
+                        raw_response=vlm_result.raw_text,
+                        parsed_result=result,
+                        latency_ms=result.get("_latency_ms", 0),
+                        num_frames=len(sampled),
+                        token_budget=token_budget)
+        except Exception:
+            log.exception("trace_gemma hook failed (non-fatal)")
 
         # --- Deterministic review-safe wrapper ----------------------
         # The VLM is an evidence describer. The case outcome is decided
