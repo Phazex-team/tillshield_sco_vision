@@ -91,7 +91,12 @@ models:
   # OCRInferenceEngine. Otherwise OCR is honestly marked unavailable.
   falcon_ocr:
     name: tiiuae/Falcon-OCR
-    enabled: true
+    # Optional preferred upgrade. Off by default because the weights
+    # are not part of the required bundle. When the operator bundles
+    # tiiuae/Falcon-OCR via prepare_offline_model_bundle.py and flips
+    # this to true, perception.ocr will run real OCRInferenceEngine
+    # on receipt/document crops automatically.
+    enabled: false
 observability:
   phoenix_enabled: true
   phoenix_url: http://localhost:6006
@@ -117,3 +122,18 @@ gpu:
   poll_interval_sec: 5
   on_hard_limit: unload_models
   on_emergency_limit: stop_inference_workers
+
+# ----------------------------------------------------------------------
+# Storage retention (PRODUCTION_SPEC reliability rules)
+# Raw continuous CCTV segments that are NOT linked to a case / evidence
+# package may be deleted after `raw_segment_retention_hours`. Anything
+# linked to a case (window, artifact, review action, audit log) is
+# preserved indefinitely until an admin manually archives it.
+# `min_free_disk_gb` is the low-disk guard threshold: when the project
+# storage root drops below it, the recorder pauses but the API and
+# reviewer UI stay alive.
+# ----------------------------------------------------------------------
+storage:
+  raw_segment_retention_hours: 10
+  min_free_disk_gb: 25
+  cleanup_dry_run_default: true

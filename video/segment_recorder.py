@@ -34,6 +34,16 @@ from typing import Callable, Iterable, Optional
 log = logging.getLogger(__name__)
 
 
+def _disk_too_low() -> bool:
+    """Low-disk guard hook. Defined here (instead of imported at module
+    top) so callers can monkeypatch it in tests."""
+    try:
+        from app.storage_guard import low_disk_state
+        return low_disk_state()
+    except Exception:
+        return False
+
+
 @dataclass
 class RecorderConfig:
     camera_id: str
@@ -233,7 +243,25 @@ class SegmentRecorder:
             target = self.cfg.segment_duration_sec
             buf: list[tuple[datetime, "np.ndarray"]] = []
             seg_start: Optional[datetime] = None
+            low_disk_logged = False
             for frame in reader.frames(self._stop_event):
+                # Low-disk guard: when the storage root has dropped
+                # below the configured threshold, drop the in-progress
+                # buffer and wait. The API/reviewer UI stay alive.
+                if _disk_too_low():
+                    if not low_disk_logged:
+                        log.warning("recorder %s: low disk state — "
+                                    "pausing segment writes",
+                                    self.cfg.camera_id)
+                        low_disk_logged = True
+                    buf = []
+                    seg_start = None
+                    self._stop_event.wait(5)
+                    continue
+                if low_disk_logged:
+                    log.info("recorder %s: disk recovered — resuming",
+                             self.cfg.camera_id)
+                    low_disk_logged = False
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
                 if seg_start is None:
                     seg_start = now
@@ -249,8 +277,6 @@ class SegmentRecorder:
                     seg_start = None
                 if self._stop_event.is_set():
                     break
-            # Flush a partial trailing segment so we never lose
-            # already-captured frames on shutdown.
             if buf and seg_start is not None:
                 try:
                     self.record_one_segment(buf, start_at=seg_start)

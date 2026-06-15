@@ -72,3 +72,18 @@ def test_review_ui_calls_v1_api():
     assert "/memory" in src
     assert "/review-actions" in src
     assert "/reprocess" in src
+
+
+def test_review_ui_wires_video_stream():
+    src = (ROOT / "static" / "review.html").read_text()
+    assert "/video/windows/" in src and "/stream" in src
+    # The UI must actually set video.src to the stream endpoint.
+    assert "video.src" in src
+    assert "latest_window" in src
+
+
+def test_review_ui_renders_real_perception_payload():
+    src = (ROOT / "static" / "review.html").read_text()
+    assert "perception.keyframes" in src or "perception.tracks" in src
+    assert "tracker_id" in src
+    assert "frame_id" in src

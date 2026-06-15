@@ -87,44 +87,26 @@ if ! python gemma4_patched.py apply; then
   exit 1
 fi
 
-# ---- model dirs (step 6 prep) ----------------------------------------
+# ---- model dirs ------------------------------------------------------
 MODEL_DIR="${MODEL_DIR:-./models}"
-mkdir -p "$MODEL_DIR/falcon" "$MODEL_DIR/gemma" logs run videos
+mkdir -p "$MODEL_DIR/hf" logs run videos
 
-# ---- 6. Falcon weights (warmup HF cache) ------------------------------
-echo "[6/9] warming Falcon-Perception HF weights into ./models/falcon"
-HF_HOME="${HF_HOME:-$(pwd)/${MODEL_DIR}/hf-cache}"
-export HF_HOME
-mkdir -p "$HF_HOME"
-python - <<'PY' || echo "WARN: Falcon weight warmup failed; will lazy-load on first use"
-import os
-from huggingface_hub import snapshot_download
-falcon_id = os.environ.get("FALCON_MODEL", "tiiuae/Falcon-Perception")
-print(f"  falcon: snapshot_download {falcon_id}")
-snapshot_download(falcon_id)
-PY
+echo
+echo "[note] install.sh no longer fetches model weights at install time."
+echo "       Production runtime loads weights from repo-local"
+echo "       ./models/hf/<repo>/<name>/<snapshot>/ — populate that bundle"
+echo "       on a connected machine via:"
+echo "         python scripts/prepare_offline_model_bundle.py --download-approved"
+echo "       Then verify with:"
+echo "         python scripts/verify_offline_bundle.py --production"
+echo
 
-# ---- 7. Gemma NVFP4 weights -------------------------------------------
-GEMMA_ID="${GEMMA_MODEL_NAME:-bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4}"
-GEMMA_DIR="${GEMMA_LOCAL_DIR:-${MODEL_DIR}/gemma}"
-echo "[7/9] downloading Gemma NVFP4 weights -> $GEMMA_DIR  (this is large)"
-python - <<PY || echo "WARN: Gemma snapshot_download failed; vLLM will retry on first start"
-import os
-from huggingface_hub import snapshot_download
-out = snapshot_download(
-    "${GEMMA_ID}",
-    local_dir="${GEMMA_DIR}",
-    local_dir_use_symlinks=False,
-)
-print(f"  gemma  -> {out}")
-PY
-
-# ---- 8. perms ---------------------------------------------------------
-echo "[8/9] chmod +x *.sh"
+# ---- perms -----------------------------------------------------------
+echo "[6/7] chmod +x *.sh"
 chmod +x ./*.sh
 
 if [[ ! -f .env ]] && [[ -f .env.example ]]; then
-  echo "[9/9] copied .env.example -> .env"
+  echo "[7/7] copied .env.example -> .env"
   cp .env.example .env
 fi
 

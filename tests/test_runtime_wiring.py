@@ -96,24 +96,27 @@ _VISIBLE_LABEL_PHRASES_BANNED = (
 
 
 def test_static_dashboard_user_visible_text_is_review_safe():
-    src = (ROOT / "static" / "index.html").read_text().lower()
-    for phrase in _VISIBLE_LABEL_PHRASES_BANNED:
-        assert phrase not in src, (
-            f"static/index.html still contains banned user-visible "
-            f"phrase {phrase!r}"
-        )
-    # The pill that used to say "FLAGGED" must now say "NEEDS REVIEW".
-    assert "needs review" in src
-    # Title and h1 are the review-safe label.
-    assert "return / refund visual review" in src
+    """The new production reviewer UI is static/review.html. The legacy
+    static/index.html is now a thin redirect notice + can no longer
+    contain accusation language either."""
+    for fname in ("index.html", "review.html"):
+        src = (ROOT / "static" / fname).read_text().lower()
+        for phrase in _VISIBLE_LABEL_PHRASES_BANNED:
+            assert phrase not in src, (
+                f"static/{fname} still contains banned user-visible "
+                f"phrase {phrase!r}"
+            )
+    review_src = (ROOT / "static" / "review.html").read_text().lower()
+    assert "needs review" in review_src
+    assert "return / refund visual review" in review_src
 
 
-def test_static_dashboard_default_classifier_is_review_safe():
-    src = (ROOT / "static" / "index.html").read_text()
-    # The form fallback used to be `cam.classifier || 'fraud'`. Make
-    # sure that exact pattern no longer ships.
-    assert "classifier || 'fraud'" not in src
-    assert "classifier || 'return_review'" in src
+def test_no_legacy_classifier_default_in_static_ui():
+    """The legacy form fallback ``cam.classifier || 'fraud'`` must not
+    ship. We tolerate the legacy index.html being a redirect notice."""
+    for fname in ("index.html", "review.html"):
+        src = (ROOT / "static" / fname).read_text()
+        assert "classifier || 'fraud'" not in src
 
 
 # ---------------------------------------------------------------------------

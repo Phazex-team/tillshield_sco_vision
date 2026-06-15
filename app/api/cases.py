@@ -12,7 +12,7 @@ from app.case_runner import analyze_case  # module-level so tests can monkeypatc
 router = APIRouter(prefix="/cases", tags=["cases"])
 
 
-def _serialise_case(case, pos_event=None) -> dict:
+def _serialise_case(case, pos_event=None, latest_window=None) -> dict:
     return {
         "id": case.id,
         "pos_event_id": case.pos_event_id,
@@ -26,6 +26,21 @@ def _serialise_case(case, pos_event=None) -> dict:
         "closed_at": case.closed_at.isoformat() if case.closed_at else None,
         "invalid_reason": case.invalid_reason,
         "pos_event": _serialise_pos(pos_event) if pos_event else None,
+        "latest_window": _serialise_window(latest_window)
+            if latest_window else None,
+    }
+
+
+def _serialise_window(w) -> dict:
+    return {
+        "id": w.id,
+        "status": w.status,
+        "path": w.path,
+        "actual_start_at": w.actual_start_at.isoformat()
+            if w.actual_start_at else None,
+        "actual_end_at": w.actual_end_at.isoformat()
+            if w.actual_end_at else None,
+        "failure_reason": w.failure_reason,
     }
 
 
@@ -84,7 +99,7 @@ def list_cases(
 
 @router.get("/{case_id}")
 def get_case(case_id: str) -> dict:
-    from db.models import Case, PosEvent
+    from db.models import Case, PosEvent, VideoWindow
     from db.session import get_sessionmaker
 
     SM = get_sessionmaker()
@@ -93,7 +108,13 @@ def get_case(case_id: str) -> dict:
         if case is None:
             raise HTTPException(status_code=404, detail="case not found")
         pos = s.get(PosEvent, case.pos_event_id) if case.pos_event_id else None
-        return _serialise_case(case, pos)
+        # The most recent SUCCEEDED window is the one a reviewer should
+        # be able to scrub. If none succeeded, we still return the row
+        # so the UI can show the failure_reason inline.
+        latest = (s.query(VideoWindow)
+                  .filter(VideoWindow.case_id == case.id)
+                  .order_by(VideoWindow.id.desc()).first())
+        return _serialise_case(case, pos, latest)
 
 
 @router.post("/{case_id}/reprocess", status_code=202)

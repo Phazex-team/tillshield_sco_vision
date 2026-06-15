@@ -307,39 +307,104 @@ async function openCase(caseId) {
     package_sha256: pkg?.audit?.package_sha256,
   });
 
-  // Video element (placeholder until window stream id wired)
+  // Video playback — wire to the real /video/windows/{id}/stream
+  // endpoint when a SUCCEEDED window exists for this case.
   const video = document.getElementById("video");
   const noVideo = document.getElementById("no-video");
-  if (pkg && pkg.case && pkg.case.outcome !== "INVALID_VIDEO") {
-    video.hidden = false; noVideo.hidden = true;
+  const window_ = c.latest_window || null;
+  if (window_ && window_.status === "SUCCEEDED" && window_.path) {
+    video.src = `${API}/video/windows/${window_.id}/stream`;
+    video.hidden = false;
+    noVideo.hidden = true;
   } else {
-    video.hidden = true; noVideo.hidden = false;
+    video.removeAttribute("src");
+    video.hidden = true;
+    noVideo.hidden = false;
+    noVideo.textContent = window_?.failure_reason
+      ? `window unavailable: ${window_.failure_reason}`
+      : "no window available yet.";
   }
 
-  // Keyframes (uri rendered if available)
+  // Keyframes — show frame_id + role from real perception rows. The
+  // dedicated artifact crops are also rendered when their URI exists.
   const kfs = document.getElementById("keyframes");
   kfs.innerHTML = "";
-  for (const a of (pkg?.artifacts || [])) {
-    if (a.artifact_type !== "KEYFRAME") continue;
-    const img = document.createElement("img");
-    img.src = a.uri; img.alt = a.id;
-    img.style.width = "100%"; img.style.borderRadius = "4px";
-    kfs.appendChild(img);
+  const perception = pkg?.perception || {};
+  for (const k of (perception.keyframes || [])) {
+    const div = document.createElement("div");
+    div.style.padding = "8px";
+    div.style.background = "rgba(91,141,239,0.08)";
+    div.style.borderRadius = "4px";
+    div.style.fontFamily = "ui-monospace, monospace";
+    div.style.fontSize = "11px";
+    div.innerHTML = `<div style="color:var(--accent)">${escapeHtml(k.role)}</div>` +
+      `<div>${escapeHtml(k.frame_id)} (idx ${k.frame_idx})</div>` +
+      (k.track_id_ref ? `<div>track ${escapeHtml(k.track_id_ref)}</div>` : "");
+    if (k.uri) {
+      const img = document.createElement("img");
+      img.src = k.uri; img.style.width = "100%";
+      img.style.marginTop = "4px"; img.style.borderRadius = "3px";
+      div.appendChild(img);
+    }
+    kfs.appendChild(div);
+  }
+  if (!perception.keyframes || perception.keyframes.length === 0) {
+    kfs.innerHTML = '<div class="empty">no keyframes selected</div>';
   }
 
-  // Timeline (best-effort from package payload)
+  // Timeline — use real package perception + reasoning events
   const tl = document.getElementById("timeline");
   tl.innerHTML = "";
-  const events = (pkg?.timeline || []);
+  const events = [];
+  if (pkg?.pos_event?.pos_event_at) events.push(
+    { ts: pkg.pos_event.pos_event_at, kind: "POS_EVENT",
+      label: `${pkg.pos_event.event_type} txn=${pkg.pos_event.transaction_id}` });
+  for (const k of (perception.keyframes || [])) {
+    if (k.frame_ts) events.push(
+      { ts: k.frame_ts, kind: "KEYFRAME", label: k.role });
+  }
+  for (const r of (pkg?.reasoning || [])) {
+    if (r.started_at || r.output)
+      events.push({ ts: r.started_at || "", kind: "VLM_RUN",
+                    label: `${r.provider}: ${r.status || ""}` });
+  }
+  if (pkg?.case?.closed_at)
+    events.push({ ts: pkg.case.closed_at, kind: "CASE_CLOSED",
+                  label: pkg.case.outcome });
+  events.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
   for (const e of events) {
     const row = document.createElement("div");
-    row.innerHTML = `<span class="ts">${e.ts}</span>` +
-      `<span class="kind">${e.kind}</span>${escapeHtml(e.label)}`;
+    row.innerHTML = `<span class="ts">${escapeHtml(e.ts || "")}</span>` +
+      `<span class="kind">${escapeHtml(e.kind)}</span>${escapeHtml(e.label)}`;
     tl.appendChild(row);
+  }
+
+  // Tracks summary
+  const tracksUl = document.createElement("ul");
+  tracksUl.className = "kv";
+  for (const t of (perception.tracks || [])) {
+    const li = document.createElement("li");
+    li.style.fontFamily = "ui-monospace, monospace";
+    li.style.fontSize = "12px";
+    li.textContent =
+      `${t.tracker_id || ""} ${t.label} ` +
+      `physical=${t.physical_item_candidate} receipt=${t.receipt_candidate} ` +
+      `zones=[${(t.zones||[]).join(",")}] events=[${(t.events||[]).join(",")}]`;
+    tracksUl.appendChild(li);
+  }
+
+  // OCR
+  const ocrUl = document.createElement("ul");
+  ocrUl.className = "kv";
+  for (const o of (perception.ocr || [])) {
+    const li = document.createElement("li");
+    li.textContent = `[${o.engine}] "${o.text}" (${o.confidence})`;
+    ocrUl.appendChild(li);
   }
 
   // Model claims
   const claims = document.getElementById("claims");
+  claims.innerHTML = "";
   const reasoning = pkg?.reasoning || [];
   if (reasoning.length === 0) {
     claims.textContent = "(no model runs yet)";
@@ -351,16 +416,29 @@ async function openCase(caseId) {
       output: reasoning[0].output,
       error: reasoning[0].error,
     });
+    claims.appendChild(document.createElement("hr"));
+    const tracksTitle = document.createElement("div");
+    tracksTitle.className = "k"; tracksTitle.textContent = "tracks";
+    claims.appendChild(tracksTitle); claims.appendChild(tracksUl);
+    const ocrTitle = document.createElement("div");
+    ocrTitle.className = "k"; ocrTitle.textContent = "ocr";
+    claims.appendChild(ocrTitle); claims.appendChild(ocrUl);
   }
 
   // Limitations
   const lim = document.getElementById("limitations");
   lim.innerHTML = "";
-  const limitations = pkg?.case?.invalid_reason
-    ? [pkg.case.invalid_reason] : (pkg?.limitations || []);
+  const limitations = [];
+  if (pkg?.case?.invalid_reason) limitations.push(pkg.case.invalid_reason);
+  const inputManifest = reasoning[0]?.input_manifest || {};
+  const limPerception = inputManifest.perception?.limitations || [];
+  for (const l of limPerception) limitations.push(l);
   for (const l of limitations) {
     const li = document.createElement("li"); li.textContent = l;
     lim.appendChild(li);
+  }
+  if (limitations.length === 0) {
+    lim.innerHTML = '<li class="empty">none reported</li>';
   }
 
   // Audit
