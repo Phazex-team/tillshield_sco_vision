@@ -137,3 +137,21 @@ storage:
   raw_segment_retention_hours: 10
   min_free_disk_gb: 25
   cleanup_dry_run_default: true
+
+# ----------------------------------------------------------------------
+# Integrations (POS agents)
+# ----------------------------------------------------------------------
+integrations:
+  tillshield:
+    return_event_types:
+      - RETURN
+      - REFUND
+      - REFUND_RETURN
+      - RETURN_REFUND
+      - VOID_RETURN
+    line_level_cases: false
+    ignore_unknown_types: true
+    # When unset (default) the endpoint is unauthenticated (dev mode).
+    # Production should set TILLSHIELD_INGEST_TOKEN in .env so the agent
+    # must send X-PhazeX-Ingest-Token on every call.
+    ingest_token: ""

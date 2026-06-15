@@ -31,6 +31,7 @@ def create_app() -> FastAPI:
         cases as cases_router,
         evidence as evidence_router,
         health as health_router,
+        integrations_tillshield as tillshield_router,
         memory as memory_router,
         pos as pos_router,
         review as review_router,
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(video_router.router, prefix="/api/v1")
     app.include_router(admin_router.router, prefix="/api/v1")
     app.include_router(storage_router.router, prefix="/api/v1")
+    app.include_router(tillshield_router.router, prefix="/api/v1")
 
     # Legacy dashboard static files (review-safe; see static/index.html).
     static_dir = Path(__file__).resolve().parents[1] / "static"
