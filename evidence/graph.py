@@ -16,8 +16,12 @@ from sqlalchemy.orm import Session
 from db.models import (
     Artifact,
     Case,
+    Detection,
+    Keyframe,
+    OcrResult,
     PosEvent,
     ReviewAction,
+    Track,
     VideoSegment,
     VideoWindow,
     VlmRun,
@@ -96,6 +100,48 @@ def graph_for_case(session: Session, case_id: str) -> dict:
             "sha256": a.sha256,
         }, label=a.artifact_type)
         add_edge(case_node, f"ARTIFACT:{a.id}", "HAS_ARTIFACT")
+
+    detections = session.execute(
+        select(Detection).where(Detection.case_id == case.id)
+    ).scalars().all()
+    for d in detections:
+        add_node("DETECTION", d.id, payload={
+            "label": d.label, "score": d.score,
+            "frame_idx": d.frame_idx, "bbox_xyxy": d.bbox_xyxy,
+        }, label=d.label)
+        add_edge(case_node, f"DETECTION:{d.id}", "OBSERVED_IN")
+
+    tracks = session.execute(
+        select(Track).where(Track.case_id == case.id)
+    ).scalars().all()
+    for t in tracks:
+        add_node("TRACK", t.id, payload={
+            "tracker_id": t.tracker_id, "label": t.label,
+            "zones": t.zones, "events": t.events,
+            "physical_item_candidate": t.physical_item_candidate,
+            "receipt_candidate": t.receipt_candidate,
+        }, label=t.label)
+        add_edge(case_node, f"TRACK:{t.id}", "TRACKS_OBJECT")
+
+    keyframes = session.execute(
+        select(Keyframe).where(Keyframe.case_id == case.id)
+    ).scalars().all()
+    for k in keyframes:
+        add_node("KEYFRAME", k.id, payload={
+            "role": k.role, "frame_idx": k.frame_idx,
+            "track_id_ref": k.track_id_ref, "uri": k.uri,
+        }, label=k.role)
+        add_edge(case_node, f"KEYFRAME:{k.id}", "OBSERVED_IN")
+
+    ocr_rows = session.execute(
+        select(OcrResult).where(OcrResult.case_id == case.id)
+    ).scalars().all()
+    for o in ocr_rows:
+        add_node("OCR_RESULT", o.id, payload={
+            "text": o.text, "frame_id": o.frame_id,
+            "engine": o.engine, "confidence": o.confidence,
+        }, label="OCR")
+        add_edge(case_node, f"OCR_RESULT:{o.id}", "SUPPORTS_CLAIM")
 
     runs = session.execute(
         select(VlmRun).where(VlmRun.case_id == case.id)

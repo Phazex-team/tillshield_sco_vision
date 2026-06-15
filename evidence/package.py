@@ -24,7 +24,18 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Artifact, Case, PosEvent, ReviewAction, VlmRun
+from db.models import (
+    Artifact,
+    Case,
+    Detection,
+    Keyframe,
+    OcrResult,
+    PosEvent,
+    ReviewAction,
+    Track,
+    TrackObservation,
+    VlmRun,
+)
 
 
 log = logging.getLogger(__name__)
@@ -74,6 +85,26 @@ def build_package(session: Session, case_id: str) -> dict:
         select(ReviewAction).where(ReviewAction.case_id == case.id)
         .order_by(ReviewAction.created_at.asc())
     ).scalars().all()
+    detections = session.execute(
+        select(Detection).where(Detection.case_id == case.id)
+        .order_by(Detection.frame_idx.asc())
+    ).scalars().all()
+    tracks = session.execute(
+        select(Track).where(Track.case_id == case.id)
+        .order_by(Track.first_seen_ts.asc())
+    ).scalars().all()
+    keyframes = session.execute(
+        select(Keyframe).where(Keyframe.case_id == case.id)
+        .order_by(Keyframe.frame_idx.asc())
+    ).scalars().all()
+    ocr_rows = session.execute(
+        select(OcrResult).where(OcrResult.case_id == case.id)
+    ).scalars().all()
+    track_obs = session.execute(
+        select(TrackObservation).where(
+            TrackObservation.track_id.in_([t.id for t in tracks]) if tracks
+            else False)
+    ).scalars().all() if tracks else []
 
     return {
         "case_id": case.id,
@@ -90,6 +121,14 @@ def build_package(session: Session, case_id: str) -> dict:
             "invalid_reason": case.invalid_reason,
         },
         "artifacts": [_serialise_artifact(a) for a in artifacts],
+        "perception": {
+            "detections": [_serialise_detection(d) for d in detections],
+            "tracks": [_serialise_track(t) for t in tracks],
+            "track_observations": [_serialise_observation(o)
+                                    for o in track_obs],
+            "keyframes": [_serialise_keyframe(k) for k in keyframes],
+            "ocr": [_serialise_ocr(o) for o in ocr_rows],
+        },
         "reasoning": [
             {
                 "provider": r.provider,
@@ -195,6 +234,52 @@ def _serialise_pos(ev) -> dict:
         "item_description": ev.item_description,
         "amount": ev.amount,
         "currency": ev.currency,
+    }
+
+
+def _serialise_detection(d: Detection) -> dict:
+    return {
+        "id": d.id, "label": d.label, "score": d.score,
+        "bbox_xyxy": d.bbox_xyxy, "frame_id": d.frame_id,
+        "frame_idx": d.frame_idx, "frame_ts": _jsonable(d.frame_ts),
+        "query": d.query,
+    }
+
+
+def _serialise_track(t: Track) -> dict:
+    return {
+        "id": t.id, "tracker_id": t.tracker_id, "label": t.label,
+        "first_seen_ts": _jsonable(t.first_seen_ts),
+        "last_seen_ts": _jsonable(t.last_seen_ts),
+        "confidence": t.confidence,
+        "zones": t.zones or [], "events": t.events or [],
+        "physical_item_candidate": t.physical_item_candidate,
+        "receipt_candidate": t.receipt_candidate,
+    }
+
+
+def _serialise_observation(o: TrackObservation) -> dict:
+    return {
+        "id": o.id, "track_id": o.track_id, "detection_id": o.detection_id,
+        "frame_id": o.frame_id, "frame_idx": o.frame_idx,
+        "frame_ts": _jsonable(o.frame_ts),
+        "bbox_xyxy": o.bbox_xyxy,
+    }
+
+
+def _serialise_keyframe(k: Keyframe) -> dict:
+    return {
+        "id": k.id, "role": k.role, "frame_id": k.frame_id,
+        "frame_idx": k.frame_idx, "frame_ts": _jsonable(k.frame_ts),
+        "track_id_ref": k.track_id_ref, "uri": k.uri,
+    }
+
+
+def _serialise_ocr(o: OcrResult) -> dict:
+    return {
+        "id": o.id, "frame_id": o.frame_id, "bbox_xyxy": o.bbox_xyxy,
+        "text": o.text, "confidence": o.confidence,
+        "engine": o.engine, "crop_uri": o.crop_uri,
     }
 
 

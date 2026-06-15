@@ -198,6 +198,93 @@ class ReviewAction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class Detection(Base):
+    __tablename__ = "detections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id"), nullable=False)
+    video_window_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("video_windows.id"))
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    bbox_xyxy: Mapped[Optional[list]] = mapped_column(JSON)
+    frame_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    frame_idx: Mapped[int] = mapped_column(Integer, default=0)
+    frame_ts: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    query: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class Track(Base):
+    __tablename__ = "tracks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id"), nullable=False)
+    video_window_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("video_windows.id"))
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    tracker_id: Mapped[Optional[str]] = mapped_column(String(64))
+    first_seen_ts: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_seen_ts: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    zones: Mapped[Optional[list]] = mapped_column(JSON)
+    events: Mapped[Optional[list]] = mapped_column(JSON)
+    physical_item_candidate: Mapped[bool] = mapped_column(
+        Boolean, default=False)
+    receipt_candidate: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class TrackObservation(Base):
+    __tablename__ = "track_observations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    track_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tracks.id"), nullable=False)
+    detection_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("detections.id"))
+    frame_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    frame_idx: Mapped[int] = mapped_column(Integer, default=0)
+    frame_ts: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    bbox_xyxy: Mapped[Optional[list]] = mapped_column(JSON)
+
+
+class Keyframe(Base):
+    __tablename__ = "keyframes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id"), nullable=False)
+    video_window_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("video_windows.id"))
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    frame_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    frame_idx: Mapped[int] = mapped_column(Integer, default=0)
+    frame_ts: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    track_id_ref: Mapped[Optional[str]] = mapped_column(String(64))
+    uri: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class OcrResult(Base):
+    __tablename__ = "ocr_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id"), nullable=False)
+    video_window_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("video_windows.id"))
+    frame_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    bbox_xyxy: Mapped[Optional[list]] = mapped_column(JSON)
+    text: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    engine: Mapped[str] = mapped_column(String(64), default="falcon")
+    crop_uri: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

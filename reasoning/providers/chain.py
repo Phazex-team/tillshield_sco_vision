@@ -50,6 +50,18 @@ class ChainProvider(VLMProvider):
         super().__init__(model_name="chain", enabled=True)
         self.providers = providers
         self.warm_fallback = bool(warm_fallback)
+        # Register each provider's unload() with the memory guard so the
+        # hard limit can actually drop weights — the policy fires every
+        # registered callback when memory crosses the hard threshold.
+        try:
+            from app.memory_guard import get_policy
+            policy = get_policy()
+            for p in providers:
+                if hasattr(p, "unload"):
+                    policy.register_unload_callback(
+                        p.name, lambda pr=p: pr.unload())
+        except Exception:
+            log.exception("failed to register provider unload callbacks")
 
     def analyze_evidence(self, manifest: EvidenceManifest) -> VLMResult:
         from app.memory_guard import get_policy
@@ -115,6 +127,14 @@ class ChainProvider(VLMProvider):
         return last_result
 
 
+    def health(self) -> ProviderHealth:
+        healths = [p.health() for p in self.providers]
+        any_healthy = any(h.healthy for h in healths)
+        detail = "; ".join(f"{h.provider}={'ok' if h.healthy else h.detail}"
+                           for h in healths)
+        return ProviderHealth(self.name, any_healthy, detail)
+
+
 def _try_unload(provider: VLMProvider, policy) -> None:
     """Best-effort unload + CUDA cache clear.
 
@@ -127,7 +147,6 @@ def _try_unload(provider: VLMProvider, policy) -> None:
         if hasattr(provider, "unload"):
             provider.unload()
         else:
-            # Generic best-effort: drop heavy refs the provider holds.
             for attr in ("_model", "_model_cache", "_client_cache"):
                 if hasattr(provider, attr):
                     setattr(provider, attr, None)
@@ -141,13 +160,6 @@ def _try_unload(provider: VLMProvider, policy) -> None:
         pass
     if name:
         policy.mark_unloaded(name)
-
-    def health(self) -> ProviderHealth:
-        healths = [p.health() for p in self.providers]
-        any_healthy = any(h.healthy for h in healths)
-        detail = "; ".join(f"{h.provider}={'ok' if h.healthy else h.detail}"
-                           for h in healths)
-        return ProviderHealth(self.name, any_healthy, detail)
 
 
 def build_active_provider(cfg: Any) -> VLMProvider:
