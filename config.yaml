@@ -1,0 +1,97 @@
+cameras:
+- id: cam_01
+  name: "Return Counter \u2014 Qusais"
+  rtsp_url: rtsp://127.0.0.1:8554/CS_COUNTER_ch15
+  classifier: fraud
+  token_budget: 1120
+  enable_thinking: ''
+  max_frames: ''
+  cooldown_sec: 30
+  zones:
+    customer_zone:
+      x: 874
+      y: 29
+      w: 360
+      h: 607
+    staff_zone:
+      x: 570
+      y: 4
+      w: 303
+      h: 645
+  prompts:
+    falcon: receipt, document, paper, shopping bag, product box, item,  merchandise,
+      clothing, electronics, packaging
+    gemma_system: "You are a retail return fraud detection AI monitoring a return\
+      \ counter.\n\nCONTEXT:\n- This is a retail return counter where customers return\
+      \ purchased items\n- Legitimate returns: customer presents BOTH a receipt AND\
+      \ the matching physical item\n- Return fraud: customer presents a receipt but\
+      \ NO real matching item, or presents \n  an empty bag, or hands over only documents/paper\
+      \ without a real product\n\nFIXTURE RULE:\nObjects visible in {start_objects}\
+      \ were already on the counter before the customer \narrived. Do NOT count these\
+      \ as items the customer handed over.\n\nOnly evaluate objects that appear in\
+      \ {action_objects} but NOT in {start_objects}.\n\nFRAUD INDICATORS (flag_for_review\
+      \ = true):\n- Customer hands over only a receipt/document with no physical product\n\
+      - Customer hands over an empty bag\n- Customer hands over packaging without\
+      \ the actual product inside\n- No item is handed over at all despite customer\
+      \ interaction with staff\n- Item handed over does not appear to be a retail\
+      \ product\n\nLEGITIMATE INDICATORS (flag_for_review = false):\n- Customer hands\
+      \ over both a receipt AND a physical product/item\n- Customer hands over a clearly\
+      \ packaged retail product\n- Transaction appears to be a normal return with\
+      \ matching item\n\nIMPORTANT:\n- A white piece of paper or document alone =\
+      \ likely fraud (receipt only, no item)\n- A shopping bag = could be legitimate\
+      \ if it contains a product, suspicious if empty\n- Staff picking up or moving\
+      \ items = NOT a customer handover, ignore"
+    gemma_user: "Review this video clip of a return counter interaction.\n\nObjects\
+      \ present at clip start (already on counter, ignore these): {start_objects}\n\
+      Objects the customer interacted with: {action_objects}\n\nDetermine if this\
+      \ is return fraud.\n\nRespond ONLY with valid JSON, no markdown, no explanation:\n\
+      {\n  \"handover_occurred\": true/false,\n  \"item_count\": 0,\n  \"items_handed_over\"\
+      : [],\n  \"receipt_visible\": true/false,\n  \"physical_item_presented\": true/false,\n\
+      \  \"fraud_indicators\": [],\n  \"customer_description\": \"brief description\"\
+      ,\n  \"confidence\": \"high/medium/low\",\n  \"flag_for_review\": true/false,\n\
+      \  \"narrative\": \"one sentence explaining what happened and why it is or isn't\
+      \ fraud\"\n}\n\nflag_for_review = true ONLY if receipt was presented without\
+      \ a matching physical item.\nflag_for_review = false if both receipt and item\
+      \ were presented normally."
+settings:
+  rtsp_reconnect_sec: 10
+  motion_threshold: 25
+  motion_area_ratio: 0.02
+  pre_roll_sec: 5
+  session_end_empty_sec: 30
+  session_max_sec: 60
+  min_session_sec: 2
+  session_merge_window_sec: 45
+  session_merge_similarity_threshold: 0.6
+  roi_crop_enabled: true
+  roi_crop_margin_pct: 0.1
+  gemma_video_fps: 1
+  gemma_video_max_seconds: 20
+  gemma_video_fps_source: 5
+  mp4_evidence_width: 640
+  mp4_evidence_height: 360
+  mp4_evidence_fps: 5
+  mp4_evidence_crf: 28
+  log_dir: /home/fazil/workspace/projects/fraud_detection_v3/logs
+  video_dir: /home/fazil/workspace/projects/fraud_detection_v3/videos
+  snapshot_dir: /home/fazil/workspace/projects/fraud_detection_v3/logs/snapshots
+  retention_days: 7
+  retention_check_interval_hours: 6
+  http_host: 0.0.0.0
+  http_port: 3902
+  inference_queue_max: 10
+models:
+  falcon:
+    name: tiiuae/Falcon-Perception
+  gemma:
+    name: bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4
+    vllm_url: http://localhost:8001
+    max_tokens: 512
+    temperature: 0.1
+    request_timeout_sec: 300
+    request_retries: 3
+    request_retry_backoff_sec: 5
+observability:
+  phoenix_enabled: true
+  phoenix_url: http://localhost:6006
+  phoenix_project: fraud_detection_v3

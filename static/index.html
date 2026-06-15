@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fraud Detection v3 — Multi-Camera</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --muted:#8a93a6; --fg:#e6e9ef;
+          --accent:#4ea1ff; --ok:#3ddc84; --warn:#ffb020; --err:#ff5566; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system, Segoe UI, Roboto, sans-serif;
+         background: var(--bg); color: var(--fg); font-size:14px; }
+  header { display:flex; align-items:center; padding:12px 20px; background:#11131a;
+           border-bottom:1px solid #222; gap:20px; }
+  header h1 { margin:0; font-size:16px; font-weight:600; letter-spacing:0.3px; }
+  header .status { margin-left:auto; color: var(--muted); font-size:12px; }
+  .tabs { display:flex; background:#11131a; border-bottom:1px solid #222; }
+  .tabs button { background:none; border:none; color:var(--muted); padding:12px 22px;
+                 font-size:14px; cursor:pointer; border-bottom:2px solid transparent; }
+  .tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  .tabs button:hover { color: var(--fg); }
+  main { padding:20px; max-width:1400px; margin:0 auto; }
+  .panel { background:var(--panel); border:1px solid #222; border-radius:8px;
+           padding:16px; margin-bottom:16px; }
+  .panel h2 { margin:0 0 12px; font-size:14px; font-weight:600; color: var(--muted);
+              text-transform:uppercase; letter-spacing:0.5px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  input[type=text], input[type=number], select {
+       background:#0b0d12; border:1px solid #2a2f3a; color:var(--fg);
+       padding:8px 10px; border-radius:6px; font-size:14px; }
+  input[type=text] { width:360px; }
+  button.btn { background:var(--accent); color:#fff; border:none; padding:8px 14px;
+               border-radius:6px; cursor:pointer; font-size:13px; }
+  button.btn.secondary { background:#2a2f3a; color:var(--fg); }
+  button.btn:hover { opacity:0.9; }
+  .zones-editor { position:relative; display:inline-block; max-width:100%;
+                  border:1px solid #222; background:#000; }
+  .zones-editor img, .zones-editor canvas { display:block; max-width:100%; }
+  .zones-editor canvas { position:absolute; left:0; top:0; }
+  .mode-chip { display:inline-block; padding:4px 10px; border-radius:999px;
+               font-size:12px; margin-right:6px; cursor:pointer;
+               border:1px solid transparent; }
+  .mode-chip.active.staff { background:rgba(255,85,102,0.15); color:#ff5566; border-color:#ff5566; }
+  .mode-chip.active.cust  { background:rgba(61,220,132,0.15); color:#3ddc84; border-color:#3ddc84; }
+  .coords { font-family:ui-monospace,SFMono-Regular,monospace; color:var(--muted); font-size:12px; }
+  .stats { display:flex; gap:14px; flex-wrap:wrap; }
+  .stat { background:#0b0d12; padding:12px 18px; border-radius:8px; border:1px solid #222;
+          min-width:110px; }
+  .stat .n { font-size:22px; font-weight:700; }
+  .stat .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+  .stat.flag .n { color: var(--err); }
+  .stat.ok .n { color: var(--ok); }
+  .stat.warn .n { color: var(--warn); }
+  .live-wrap { background:#000; border-radius:8px; overflow:hidden; }
+  .live-wrap img { display:block; max-width:100%; height:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #222; vertical-align:top; }
+  th { color: var(--muted); font-weight:600; text-transform:uppercase; font-size:11px;
+       letter-spacing:0.5px; }
+  tr.flagged td { background: rgba(255,85,102,0.08); }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; }
+  .pill.ok { background: rgba(61,220,132,0.15); color: var(--ok); }
+  .pill.no { background: rgba(255,176,32,0.15); color: var(--warn); }
+  .pill.flag { background: rgba(255,85,102,0.15); color: var(--err); }
+  .badge { display:inline-block; padding:3px 9px; border-radius:6px; font-size:11px;
+           font-weight:600; letter-spacing:0.4px; text-transform:uppercase; }
+  .muted { color: var(--muted); }
+  .hide { display:none; }
+  .tab-panel { display:none; }
+  .tab-panel.active { display:block; }
+  .two-col { display:grid; grid-template-columns: 1fr 320px; gap:16px; }
+  @media (max-width: 980px) { .two-col { grid-template-columns: 1fr; } }
+  .note { color:var(--muted); font-size:12px; }
+  .test-result.ok { color: var(--ok); }
+  .test-result.err { color: var(--err); }
+  details summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  pre.json { background:#0b0d12; padding:10px; border-radius:6px; overflow:auto;
+             font-size:12px; color:#c8d0de; }
+  .thumb { position:relative; width:80px; height:60px; border-radius:4px;
+           overflow:hidden; background:#0b0d12; cursor:pointer;
+           display:inline-flex; align-items:center; justify-content:center;
+           color:var(--muted); font-size:10px; border:1px solid #222; }
+  .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .thumb .flag-badge { position:absolute; top:2px; right:2px;
+                       background:var(--err); color:#fff; font-size:10px;
+                       padding:1px 5px; border-radius:999px; line-height:1.2; }
+  tr.logrow { cursor:pointer; }
+  tr.logrow:hover td { background:#1b1e26; }
+  tr.logrow.flagged:hover td { background: rgba(255,85,102,0.16); }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,0.75);
+           display:none; align-items:center; justify-content:center; z-index:50; }
+  .modal.open { display:flex; }
+  .modal-body { background:var(--panel); border:1px solid #2a2f3a;
+                border-radius:10px; max-width:1100px; width:90%;
+                max-height:90vh; overflow:auto; }
+  .modal-body img { display:block; max-width:100%; max-height:60vh; margin:0 auto;
+                    background:#000; }
+  .modal-body .details { padding:16px 20px; }
+  .modal-close { position:absolute; top:18px; right:22px; background:#2a2f3a;
+                 border:none; color:var(--fg); font-size:20px; width:36px; height:36px;
+                 border-radius:50%; cursor:pointer; }
+  .kv { display:grid; grid-template-columns:140px 1fr; gap:6px 16px; font-size:13px; }
+  .kv .k { color:var(--muted); }
+  textarea { background:#0b0d12; border:1px solid #2a2f3a; color:var(--fg);
+             padding:8px 10px; border-radius:6px; font-size:13px; width:100%;
+             font-family:inherit; resize:vertical; line-height:1.5; }
+  .field { margin-bottom:14px; }
+  .field label { display:block; color:var(--fg); font-weight:600;
+                 margin-bottom:4px; font-size:13px; }
+  .field .help { color:var(--muted); font-size:12px; margin-bottom:6px; }
+  .banner { background:rgba(255,176,32,0.12); border:1px solid var(--warn);
+            color:var(--warn); padding:10px 14px; border-radius:6px;
+            margin-bottom:12px; font-size:13px; }
+  .cam-card { background:#0b0d12; padding:12px 14px; border-radius:6px;
+              border:1px solid #222; margin-bottom:10px;
+              display:flex; align-items:center; gap:10px; cursor:pointer; }
+  .cam-card.selected { outline:2px solid var(--accent); }
+  .cam-card .cam-name { flex:1; }
+  .cam-card .cam-sub { color:var(--muted); font-size:11px; }
+  .filter-row select { min-width:160px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fraud Detection
+    <span style="font-size:12px;padding:3px 8px;border-radius:6px;background:#2a2f3a;color:var(--accent);margin-left:10px;vertical-align:middle">v3 · multi-camera</span>
+  </h1>
+  <a href="http://localhost:6006" target="_blank" rel="noopener"
+     class="btn secondary" style="text-decoration:none;margin-left:10px"
+     title="Open Phoenix tracing UI">🔍 Traces</a>
+  <div class="status" id="status">initializing…</div>
+</header>
+<div class="tabs">
+  <button data-tab="config">Config</button>
+  <button data-tab="live" class="active">Live Monitor</button>
+  <button data-tab="logs">Logs</button>
+</div>
+<main>
+
+<!-- ==================== LIVE TAB ==================== -->
+<section id="tab-live" class="tab-panel active">
+  <div class="panel">
+    <h2>Today</h2>
+    <div class="stats" id="stats-bar">
+      <div class="stat"><div class="n" id="s-total">–</div><div class="l">Sessions</div></div>
+      <div class="stat ok"><div class="n" id="s-presented">–</div><div class="l">Events</div></div>
+      <div class="stat warn"><div class="n" id="s-none">–</div><div class="l">No event</div></div>
+      <div class="stat flag"><div class="n" id="s-flagged">–</div><div class="l">Flagged</div></div>
+      <div class="stat"><div class="n" id="s-low">–</div><div class="l">Low conf.</div></div>
+    </div>
+    <div id="by-classifier-row" class="row" style="margin-top:12px"></div>
+  </div>
+
+  <div class="two-col">
+    <div class="panel">
+      <h2>Live feed</h2>
+      <div class="row" style="margin-bottom:10px">
+        <label class="note">Camera:</label>
+        <select id="live-camera-select"></select>
+        <span id="live-classifier-badge" class="badge" style="background:#2a2f3a">–</span>
+      </div>
+      <div class="live-wrap">
+        <img id="video" alt="live feed"
+             onerror="this.classList.add('hide'); document.getElementById('video-err').classList.remove('hide');" />
+        <div id="video-err" class="hide note" style="padding:20px">
+          feed not available yet — check RTSP in Config tab
+        </div>
+      </div>
+      <div class="note" style="margin-top:8px">
+        Red box = staff zone (ignored). Green box = customer zone (watched).
+        Yellow boxes = Falcon detections (shown for ~8 s after each analysis).
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Cameras</h2>
+      <div id="camera-list"></div>
+      <h2 style="margin-top:18px">Last detection (selected camera)</h2>
+      <div id="last-detection" class="muted">none yet</div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== CONFIG TAB ==================== -->
+<section id="tab-config" class="tab-panel">
+  <div class="panel">
+    <h2>Cameras</h2>
+    <div class="row" style="margin-bottom:10px">
+      <label class="note">Editing:</label>
+      <select id="cfg-camera-select"></select>
+    </div>
+    <div class="row">
+      <label class="note">Display name</label>
+      <input type="text" id="cam-name" />
+      <label class="note">Cooldown (s)</label>
+      <input type="number" id="cam-cooldown" style="width:80px" min="0" />
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="note">RTSP URL</label>
+      <input type="text" id="rtsp-url" placeholder="rtsp://user:pass@host:554/stream" />
+      <button class="btn secondary" onclick="testConnection()">Test connection</button>
+      <span id="test-result" class="note"></span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="note">Classifier</label>
+      <select id="cam-classifier"></select>
+      <label class="note">Token budget</label>
+      <select id="cam-token-budget">
+        <option value="70">70 (fastest)</option>
+        <option value="140">140</option>
+        <option value="280">280</option>
+        <option value="560">560</option>
+        <option value="1120">1120 (max detail)</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="note">Thinking mode</label>
+      <select id="cam-thinking">
+        <option value="">Default (classifier)</option>
+        <option value="true">On</option>
+        <option value="false">Off</option>
+      </select>
+      <label class="note">Max frames</label>
+      <input type="number" id="cam-max-frames" style="width:90px" min="1"
+             placeholder="default" />
+      <span class="note">empty = classifier default</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Zones</h2>
+    <div class="row" style="margin-bottom:10px">
+      <span class="mode-chip staff" id="chip-staff" onclick="setMode('staff')">Draw staff zone</span>
+      <span class="mode-chip cust" id="chip-cust" onclick="setMode('customer')">Draw customer zone</span>
+      <button class="btn secondary" onclick="loadSnapshot(true)">Refresh snapshot</button>
+      <span class="note">click-and-drag on the image to draw; coords are in image pixels</span>
+    </div>
+    <div class="zones-editor" id="editor">
+      <img id="editor-img" alt="snapshot" />
+      <canvas id="editor-canvas"></canvas>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div>
+        <div class="note">staff zone (red, ignored)</div>
+        <div class="coords" id="coords-staff">–</div>
+      </div>
+      <div>
+        <div class="note">customer zone (green, watched)</div>
+        <div class="coords" id="coords-cust">–</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <button class="btn" onclick="saveCamera()">Save camera</button>
+      <span id="save-result" class="note"></span>
+    </div>
+    <details style="margin-top:10px">
+      <summary>current config (JSON)</summary>
+      <pre class="json" id="cfg-dump"></pre>
+    </details>
+  </div>
+
+  <div class="panel">
+    <h2>Prompts (selected camera)</h2>
+    <div id="prompts-banner" class="banner" style="display:none">
+      ⚠️ Custom prompts active — overriding the classifier defaults.
+    </div>
+
+    <div class="field">
+      <label>Falcon prompt (objects to look for)</label>
+      <div class="help">Empty = use the classifier default.</div>
+      <input type="text" id="p-falcon" style="width:100%" />
+    </div>
+
+    <div class="field">
+      <label>Gemma system prompt</label>
+      <div class="help">Use <code>{start_objects}</code> and <code>{action_objects}</code> for the Falcon detection summaries.</div>
+      <textarea id="p-system" rows="6"></textarea>
+    </div>
+
+    <div class="field">
+      <label>Gemma user prompt</label>
+      <div class="help">Question asked about the clip.</div>
+      <textarea id="p-user" rows="6"></textarea>
+    </div>
+
+    <div class="row">
+      <button class="btn" onclick="savePrompts()">Save Prompts</button>
+      <button class="btn secondary" onclick="resetPrompts()">Reset to Classifier Defaults</button>
+      <span id="prompts-result" class="note"></span>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== LOGS TAB ==================== -->
+<section id="tab-logs" class="tab-panel">
+  <div class="panel">
+    <div class="row filter-row">
+      <h2 style="margin:0">Today's sessions</h2>
+      <span class="note" id="logs-path"></span>
+      <span style="margin-left:auto"></span>
+      <label class="note">Camera:</label>
+      <select id="logs-camera-filter"><option value="">All</option></select>
+      <label class="note">Classifier:</label>
+      <select id="logs-classifier-filter"><option value="">All</option></select>
+      <button class="btn secondary" onclick="loadLogs()">Refresh</button>
+      <a class="btn" href="/logs.csv" download>Export CSV</a>
+    </div>
+    <div style="overflow-x:auto; margin-top:12px">
+      <table id="logs-table">
+        <thead><tr>
+          <th style="width:100px">Snapshot</th>
+          <th style="width:36px">Clip</th>
+          <th>Start</th><th>Dur</th><th>Session</th>
+          <th>Camera</th><th>Classifier</th>
+          <th>Subject</th>
+          <th>Event</th><th>#</th><th>Items</th>
+          <th>Conf.</th><th>Narrative</th><th>Flagged</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== MODAL ==================== -->
+<div class="modal" id="modal" onclick="if(event.target.id==='modal')closeModal()">
+  <button class="modal-close" onclick="closeModal()">×</button>
+  <div class="modal-body">
+    <img id="modal-img" alt="snapshot"
+         onerror="this.style.display='none'; document.getElementById('modal-noimg').style.display='block';" />
+    <div id="modal-noimg" style="display:none; padding:40px; text-align:center; color:var(--muted)">
+      No image available for this session.
+    </div>
+    <video id="modal-video" controls preload="metadata"
+           style="display:none; max-width:100%; max-height:60vh; margin:12px auto 0; background:#000"></video>
+    <div id="modal-novideo" style="display:none; padding:10px 20px; text-align:center; color:var(--muted)">
+      No video available for this session.
+    </div>
+    <div class="details">
+      <div id="modal-title" style="font-size:18px; font-weight:600; margin-bottom:10px"></div>
+      <div class="kv" id="modal-kv"></div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<script>
+// ---------- shared state ----------
+let cameras = [];
+let classifiers = [];
+let selectedLiveCamera = null;
+let selectedConfigCamera = null;
+let currentCfg = null;
+let zones = { staff: null, customer: null };
+let mode = 'customer';
+let drawing = null;
+let imgNatural = { w:0, h:0 };
+let promptDefaults = null;
+let promptOverrides = null;
+
+const classifierByKey = () => Object.fromEntries(classifiers.map(c => [c.key, c]));
+
+function classifierBadge(key) {
+  const c = classifierByKey()[key];
+  if (!c) return '<span class="badge" style="background:#2a2f3a">' + escapeHtml(key||'?') + '</span>';
+  return `<span class="badge" style="background:${c.color};color:#000">${escapeHtml(c.display_label)}</span>`;
+}
+
+// ---------- tabs ----------
+document.querySelectorAll('.tabs button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    document.getElementById('tab-' + b.dataset.tab).classList.add('active');
+    if (b.dataset.tab === 'config') onConfigTab();
+    if (b.dataset.tab === 'logs') loadLogs();
+  };
+});
+
+// ---------- bootstrap: load classifiers + cameras ----------
+async function bootstrap() {
+  const [cls, cams] = await Promise.all([
+    fetch('/classifiers').then(r => r.json()),
+    fetch('/cameras').then(r => r.json()),
+  ]);
+  classifiers = cls.classifiers || [];
+  cameras = cams.cameras || [];
+
+  // populate camera selectors
+  const liveSel = document.getElementById('live-camera-select');
+  const cfgSel  = document.getElementById('cfg-camera-select');
+  const logsCam = document.getElementById('logs-camera-filter');
+  liveSel.innerHTML = ''; cfgSel.innerHTML = '';
+  // keep "All" option already in logs-camera-filter
+  while (logsCam.options.length > 1) logsCam.remove(1);
+
+  cameras.forEach(c => {
+    const opt = (sel, val, txt) => { const o = document.createElement('option');
+                                     o.value = val; o.textContent = txt;
+                                     sel.appendChild(o); };
+    opt(liveSel, c.id, `${c.name} (${c.id})`);
+    opt(cfgSel,  c.id, `${c.name} (${c.id})`);
+    opt(logsCam, c.id, c.name || c.id);
+  });
+
+  // populate logs classifier filter
+  const logsCls = document.getElementById('logs-classifier-filter');
+  while (logsCls.options.length > 1) logsCls.remove(1);
+  classifiers.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.key; o.textContent = c.display_label;
+    logsCls.appendChild(o);
+  });
+
+  // populate config classifier dropdown
+  const camCls = document.getElementById('cam-classifier');
+  camCls.innerHTML = '';
+  classifiers.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.key; o.textContent = c.display_label;
+    camCls.appendChild(o);
+  });
+
+  // initial selection
+  selectedLiveCamera = cameras[0]?.id;
+  selectedConfigCamera = cameras[0]?.id;
+  if (selectedLiveCamera) {
+    liveSel.value = selectedLiveCamera;
+    cfgSel.value = selectedLiveCamera;
+    onLiveCameraChange();
+  }
+
+  liveSel.addEventListener('change', () => {
+    selectedLiveCamera = liveSel.value;
+    onLiveCameraChange();
+  });
+  cfgSel.addEventListener('change', () => {
+    selectedConfigCamera = cfgSel.value;
+    onConfigTab();
+  });
+  document.getElementById('logs-camera-filter').addEventListener('change', loadLogs);
+  document.getElementById('logs-classifier-filter').addEventListener('change', loadLogs);
+
+  renderCameraList();
+}
+
+function renderCameraList() {
+  const host = document.getElementById('camera-list');
+  host.innerHTML = '';
+  cameras.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'cam-card' + (c.id === selectedLiveCamera ? ' selected' : '');
+    el.innerHTML = `
+      <div class="cam-name">
+        <div>${escapeHtml(c.name)}</div>
+        <div class="cam-sub">${escapeHtml(c.id)} · token=${c.token_budget}</div>
+      </div>
+      ${classifierBadge(c.classifier)}
+    `;
+    el.onclick = () => {
+      selectedLiveCamera = c.id;
+      document.getElementById('live-camera-select').value = c.id;
+      onLiveCameraChange();
+      renderCameraList();
+    };
+    host.appendChild(el);
+  });
+}
+
+function onLiveCameraChange() {
+  const cam = cameras.find(c => c.id === selectedLiveCamera);
+  if (!cam) return;
+  const img = document.getElementById('video');
+  img.classList.remove('hide');
+  document.getElementById('video-err').classList.add('hide');
+  img.src = `/video_feed?camera=${encodeURIComponent(cam.id)}&ts=${Date.now()}`;
+  const badge = document.getElementById('live-classifier-badge');
+  const meta = classifierByKey()[cam.classifier];
+  if (meta) {
+    badge.textContent = meta.display_label;
+    badge.style.background = meta.color;
+    badge.style.color = '#000';
+  }
+  refreshLastDetection();
+  renderCameraList();
+}
+
+// ---------- stats (auto-refresh every 3s) ----------
+async function refreshStats() {
+  try {
+    const r = await fetch('/stats');
+    const s = await r.json();
+    document.getElementById('s-total').textContent = s.total ?? '–';
+    document.getElementById('s-presented').textContent = s.presented ?? '–';
+    document.getElementById('s-none').textContent = s.none ?? '–';
+    document.getElementById('s-flagged').textContent = s.flagged ?? '–';
+    document.getElementById('s-low').textContent = s.low_conf ?? '–';
+    const statusEl = document.getElementById('status');
+    if (s.pipeline_error) statusEl.textContent = 'pipeline error: ' + s.pipeline_error;
+    else if (!s.pipeline_ready) statusEl.textContent = 'loading models…';
+    else statusEl.textContent = 'pipeline running · ' + (s.date || '');
+    // by-classifier mini stats
+    const host = document.getElementById('by-classifier-row');
+    host.innerHTML = '';
+    Object.entries(s.by_classifier || {}).forEach(([k, v]) => {
+      const meta = classifierByKey()[k];
+      const color = meta ? meta.color : '#2a2f3a';
+      const lbl = meta ? meta.display_label : k;
+      host.insertAdjacentHTML('beforeend',
+        `<span class="badge" style="background:${color};color:#000">${escapeHtml(lbl)} · total ${v.total} · events ${v.events} · flagged ${v.flagged}</span>`);
+    });
+  } catch (e) { /* ignore */ }
+}
+setInterval(refreshStats, 3000);
+
+async function refreshLastDetection() {
+  if (!selectedLiveCamera) return;
+  try {
+    const r = await fetch('/logs?camera=' + encodeURIComponent(selectedLiveCamera) + '&limit=1');
+    const j = await r.json();
+    const el = document.getElementById('last-detection');
+    if (!j.rows.length) { el.textContent = 'none yet'; return; }
+    const last = j.rows[j.rows.length - 1];
+    const pill = last.item_presented === true ? 'ok' : 'no';
+    const flag = last.flag_for_review
+      ? ' <span class="pill flag">FLAGGED</span>' : '';
+    el.innerHTML = `
+      <div style="font-size:13px; color:var(--muted)">${last.start_time||last.timestamp||''}</div>
+      <div style="font-size:16px; margin:6px 0">${last.session_id}</div>
+      <div>${classifierBadge(last.classifier)}
+        <span class="pill ${pill}">${last.item_presented ? 'Event' : 'No event'}</span>
+        <span class="pill" style="background:#2a2f3a">${(last.confidence||'').toUpperCase()}</span>${flag}</div>
+      <div style="margin-top:8px; color:var(--fg)">${escapeHtml(last.narrative||last.notes||'')}</div>`;
+  } catch (e) { /* ignore */ }
+}
+setInterval(refreshLastDetection, 5000);
+
+// ---------- logs table ----------
+async function loadLogs() {
+  try {
+    const camFilter = document.getElementById('logs-camera-filter').value;
+    const clsFilter = document.getElementById('logs-classifier-filter').value;
+    const params = new URLSearchParams();
+    if (camFilter) params.set('camera', camFilter);
+    if (clsFilter) params.set('classifier', clsFilter);
+    const r = await fetch('/logs' + (params.toString() ? '?' + params.toString() : ''));
+    const j = await r.json();
+    document.getElementById('logs-path').textContent = j.path || '';
+    const tbody = document.querySelector('#logs-table tbody');
+    tbody.innerHTML = '';
+    j.rows.slice().reverse().forEach(row => {
+      const tr = document.createElement('tr');
+      tr.classList.add('logrow');
+      if (row.flag_for_review) tr.classList.add('flagged');
+      const handover = (row.handover_occurred === true) || (row.item_presented === true);
+      const handoverLabel = handover ? 'Yes'
+                          : (row.handover_occurred === false || row.item_presented === false) ? 'No'
+                          : '?';
+      const hasSnap = !!row.snapshot_path;
+      const flagBadge = row.flag_for_review ? '<span class="flag-badge">⚠</span>' : '';
+      const thumb = hasSnap
+        ? `<div class="thumb"><img src="/snapshot/${encodeURIComponent(row.session_id||'')}"
+              onerror="this.parentNode.innerHTML='no image';" />${flagBadge}</div>`
+        : `<div class="thumb">no image${flagBadge}</div>`;
+      const clipCell = row.mp4_path ? '🎞️' : '—';
+      const startDisp = (row.start_time || row.timestamp || '').replace('T',' ');
+      const mergedCount = Number(row.merged_count || 0);
+      const sessionCell = mergedCount > 0
+        ? `${escapeHtml(row.session_id || '')} <span class="pill" title="merged from ${mergedCount} follow-up visit${mergedCount===1?'':'s'}" style="background:#2a2f3a;font-size:10px;vertical-align:middle">merged ×${mergedCount + 1}</span>`
+        : escapeHtml(row.session_id || '');
+      const dur = row.duration_sec != null ? row.duration_sec + 's' : '—';
+      let customerDesc = row.customer_description || '';
+      if (!customerDesc) {
+        try {
+          const pp = JSON.parse(row.per_person_json || '[]');
+          if (pp.length) customerDesc = pp[0].description || '';
+        } catch (e) {}
+      }
+      const customerShort = customerDesc.length > 50 ? customerDesc.slice(0, 47) + '…' : customerDesc;
+      let items = [];
+      if (row.items_handed_over) {
+        items = row.items_handed_over.split('|').filter(Boolean);
+      } else {
+        items = (row.objects_detected || '').split('|').filter(Boolean);
+      }
+      const itemsShort = items.join(', ').slice(0, 50);
+      const narrative = (row.narrative || row.notes || '');
+      const truncated = narrative.length > 100 ? narrative.slice(0, 97) + '…' : narrative;
+      tr.innerHTML = `
+        <td>${thumb}</td>
+        <td style="text-align:center;font-size:18px">${clipCell}</td>
+        <td>${escapeHtml(startDisp)}</td>
+        <td>${escapeHtml(dur)}</td>
+        <td>${sessionCell}</td>
+        <td>${escapeHtml(row.camera_id || row.camera || '')}</td>
+        <td>${classifierBadge(row.classifier)}</td>
+        <td>${escapeHtml(customerShort || '—')}</td>
+        <td>${handoverLabel}</td>
+        <td>${escapeHtml(row.item_count != null && row.item_count !== '' ? String(row.item_count) : '—')}</td>
+        <td>${escapeHtml(itemsShort || '—')}</td>
+        <td>${escapeHtml((row.confidence||'').toUpperCase())}</td>
+        <td>${escapeHtml(truncated)}</td>
+        <td>${row.flag_for_review ? '<span class="pill flag">FLAGGED</span>' : ''}</td>`;
+      tr.onclick = () => openModal(row);
+      tbody.appendChild(tr);
+    });
+  } catch (e) { /* ignore */ }
+}
+setInterval(() => {
+  if (document.getElementById('tab-logs').classList.contains('active')) loadLogs();
+}, 5000);
+
+// ---------- config tab ----------
+async function onConfigTab() {
+  if (!selectedConfigCamera && cameras.length) selectedConfigCamera = cameras[0].id;
+  const r = await fetch('/config'); currentCfg = await r.json();
+  const cam = (currentCfg.cameras || []).find(c => (c.id || c.name) === selectedConfigCamera) || (currentCfg.cameras || [])[0];
+  if (!cam) return;
+
+  document.getElementById('rtsp-url').value = cam.rtsp_url || '';
+  document.getElementById('cam-name').value = cam.name || '';
+  document.getElementById('cam-cooldown').value = cam.cooldown_sec ?? 0;
+  document.getElementById('cam-classifier').value = cam.classifier || 'fraud';
+  const tb = cam.token_budget || (classifierByKey()[cam.classifier]?.token_budget) || 1120;
+  document.getElementById('cam-token-budget').value = String(tb);
+  // enable_thinking / max_frames: show the per-camera override, blank = use default
+  const camApi = cameras.find(c => c.id === selectedConfigCamera) || {};
+  const thinkOv = camApi.enable_thinking_override;
+  document.getElementById('cam-thinking').value =
+    (thinkOv === true) ? "true" : (thinkOv === false) ? "false" : "";
+  const mfOv = camApi.max_frames_override;
+  document.getElementById('cam-max-frames').value =
+    (typeof mfOv === "number" && mfOv > 0) ? String(mfOv) : "";
+
+  const z = cam.zones || {};
+  zones.staff = z.staff_zone ? {...z.staff_zone} : null;
+  zones.customer = z.customer_zone ? {...z.customer_zone} : null;
+
+  document.getElementById('cfg-dump').textContent = JSON.stringify(currentCfg, null, 2);
+  updateCoords();
+  loadSnapshot(false);
+  setMode('customer');
+  loadPrompts();
+}
+
+async function loadPrompts() {
+  if (!selectedConfigCamera) return;
+  try {
+    const r = await fetch('/prompts?camera=' + encodeURIComponent(selectedConfigCamera));
+    const j = await r.json();
+    promptDefaults = j.defaults;
+    promptOverrides = j.overrides || {};
+    // Show the EFFECTIVE prompts (override > classifier default) so the
+    // operator can read what is actually active and edit in place.
+    document.getElementById('p-falcon').value = j.prompts.falcon;
+    document.getElementById('p-system').value = j.prompts.gemma_system;
+    document.getElementById('p-user').value  = j.prompts.gemma_user;
+    updatePromptsBanner();
+  } catch (e) { /* ignore */ }
+}
+
+function updatePromptsBanner() {
+  if (!promptDefaults) return;
+  // Banner = "diverged from classifier defaults" (i.e. real override).
+  // Since textareas now display defaults when no override is set, we
+  // compare against promptDefaults instead of treating any non-empty
+  // textarea as modified.
+  const cur = {
+    falcon: document.getElementById('p-falcon').value,
+    gemma_system: document.getElementById('p-system').value,
+    gemma_user: document.getElementById('p-user').value,
+  };
+  const modified = (cur.falcon       !== promptDefaults.falcon       ||
+                    cur.gemma_system !== promptDefaults.gemma_system ||
+                    cur.gemma_user   !== promptDefaults.gemma_user);
+  document.getElementById('prompts-banner').style.display = modified ? 'block' : 'none';
+}
+
+['p-falcon','p-system','p-user'].forEach(id => {
+  document.addEventListener('input', e => { if (e.target.id === id) updatePromptsBanner(); });
+});
+
+async function savePrompts() {
+  const el = document.getElementById('prompts-result');
+  const falcon = document.getElementById('p-falcon').value;
+  const system = document.getElementById('p-system').value;
+  const user   = document.getElementById('p-user').value;
+  // If the textarea matches the classifier default verbatim, persist an
+  // empty string so the camera tracks future default changes. Only save
+  // a real override when the operator has actually diverged.
+  const body = {
+    falcon:       (falcon === (promptDefaults?.falcon       || '')) ? '' : falcon,
+    gemma_system: (system === (promptDefaults?.gemma_system || '')) ? '' : system,
+    gemma_user:   (user   === (promptDefaults?.gemma_user   || '')) ? '' : user,
+  };
+  try {
+    const r = await fetch('/prompts?camera=' + encodeURIComponent(selectedConfigCamera), {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    el.textContent = j.ok ? 'saved · ' + (j.note||'') : 'save failed';
+    el.className = 'note ' + (j.ok ? 'test-result ok' : 'test-result err');
+    updatePromptsBanner();
+  } catch (e) {
+    el.textContent = 'error: ' + e; el.className = 'note test-result err';
+  }
+}
+
+function resetPrompts() {
+  // Repopulate the textareas with the classifier defaults (visible to
+  // the operator). Clicking Save with the textarea content matching the
+  // defaults will send empty strings to the server, clearing overrides.
+  if (!promptDefaults) return;
+  document.getElementById('p-falcon').value = promptDefaults.falcon;
+  document.getElementById('p-system').value = promptDefaults.gemma_system;
+  document.getElementById('p-user').value   = promptDefaults.gemma_user;
+  updatePromptsBanner();
+  const el = document.getElementById('prompts-result');
+  el.textContent = 'reset to classifier defaults — click Save to clear overrides';
+  el.className = 'note';
+}
+
+function loadSnapshot(force) {
+  const img = document.getElementById('editor-img');
+  const canvas = document.getElementById('editor-canvas');
+  img.onload = () => {
+    imgNatural = { w: img.naturalWidth, h: img.naturalHeight };
+    canvas.width = img.clientWidth;
+    canvas.height = img.clientHeight;
+    drawZones();
+  };
+  img.src = '/snapshot?camera=' + encodeURIComponent(selectedConfigCamera) + '&ts=' + Date.now();
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('chip-staff').classList.toggle('active', m === 'staff');
+  document.getElementById('chip-cust').classList.toggle('active', m === 'customer');
+}
+
+const canvas = document.getElementById('editor-canvas');
+canvas.addEventListener('mousedown', e => {
+  const r = canvas.getBoundingClientRect();
+  drawing = { x: e.clientX - r.left, y: e.clientY - r.top, w: 0, h: 0 };
+});
+canvas.addEventListener('mousemove', e => {
+  if (!drawing) return;
+  const r = canvas.getBoundingClientRect();
+  drawing.w = (e.clientX - r.left) - drawing.x;
+  drawing.h = (e.clientY - r.top) - drawing.y;
+  drawZones();
+});
+canvas.addEventListener('mouseup', () => {
+  if (!drawing) return;
+  let { x, y, w, h } = drawing;
+  if (w < 0) { x += w; w = -w; }
+  if (h < 0) { y += h; h = -h; }
+  const sx = imgNatural.w / canvas.width;
+  const sy = imgNatural.h / canvas.height;
+  const z = { x: Math.round(x*sx), y: Math.round(y*sy),
+              w: Math.round(w*sx), h: Math.round(h*sy) };
+  zones[mode] = z;
+  drawing = null;
+  updateCoords();
+  drawZones();
+});
+
+function drawZones() {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const sx = canvas.width / imgNatural.w;
+  const sy = canvas.height / imgNatural.h;
+  const paint = (z, color) => {
+    if (!z) return;
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.strokeRect(z.x*sx, z.y*sy, z.w*sx, z.h*sy);
+  };
+  paint(zones.staff, '#ff5566');
+  paint(zones.customer, '#3ddc84');
+  if (drawing) {
+    ctx.strokeStyle = mode === 'staff' ? '#ff5566' : '#3ddc84';
+    ctx.setLineDash([5,3]); ctx.lineWidth = 2;
+    ctx.strokeRect(drawing.x, drawing.y, drawing.w, drawing.h);
+    ctx.setLineDash([]);
+  }
+}
+
+function updateCoords() {
+  const fmt = z => z ? `x:${z.x}  y:${z.y}  w:${z.w}  h:${z.h}` : '–';
+  document.getElementById('coords-staff').textContent = fmt(zones.staff);
+  document.getElementById('coords-cust').textContent = fmt(zones.customer);
+}
+
+window.addEventListener('resize', () => {
+  const img = document.getElementById('editor-img');
+  canvas.width = img.clientWidth; canvas.height = img.clientHeight; drawZones();
+});
+
+async function testConnection() {
+  const url = document.getElementById('rtsp-url').value;
+  const el = document.getElementById('test-result');
+  el.textContent = 'testing…'; el.className = 'note';
+  try {
+    const r = await fetch('/test_connection', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({rtsp_url: url, camera: selectedConfigCamera})
+    });
+    const j = await r.json();
+    if (j.ok) {
+      el.textContent = `OK · ${j.resolution} · ${j.ms} ms`;
+      el.className = 'note test-result ok';
+    } else {
+      el.textContent = `failed (${j.ms} ms)`;
+      el.className = 'note test-result err';
+    }
+  } catch (e) {
+    el.textContent = 'error: ' + e; el.className = 'note test-result err';
+  }
+}
+
+async function saveCamera() {
+  const el = document.getElementById('save-result');
+  const thinkVal = document.getElementById('cam-thinking').value;
+  const mfVal    = document.getElementById('cam-max-frames').value;
+  const body = {
+    rtsp_url: document.getElementById('rtsp-url').value,
+    name:     document.getElementById('cam-name').value,
+    cooldown_sec: parseInt(document.getElementById('cam-cooldown').value || '0', 10),
+    classifier: document.getElementById('cam-classifier').value,
+    token_budget: parseInt(document.getElementById('cam-token-budget').value, 10),
+    enable_thinking: thinkVal === "" ? null : (thinkVal === "true"),
+    max_frames: mfVal ? parseInt(mfVal, 10) : null,
+  };
+  if (zones.staff)    body.staff_zone = zones.staff;
+  if (zones.customer) body.customer_zone = zones.customer;
+  try {
+    const r = await fetch('/cameras/' + encodeURIComponent(selectedConfigCamera), {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    el.textContent = j.ok ? 'saved · ' + (j.note||'') : 'save failed';
+    el.className = 'note ' + (j.ok ? 'test-result ok' : 'test-result err');
+    if (j.ok) {
+      // Refresh /cameras so the badge / dropdown reflects classifier change.
+      const cams = await (await fetch('/cameras')).json();
+      cameras = cams.cameras || [];
+      renderCameraList();
+      const cfg = await (await fetch('/config')).json();
+      document.getElementById('cfg-dump').textContent = JSON.stringify(cfg, null, 2);
+      // If classifier changed, the prompt overrides were cleared on the
+      // server; reload so the UI reflects that.
+      loadPrompts();
+    }
+  } catch (e) {
+    el.textContent = 'error: ' + e; el.className = 'note test-result err';
+  }
+}
+
+// ---------- modal ----------
+function openModal(row) {
+  const img = document.getElementById('modal-img');
+  const noimg = document.getElementById('modal-noimg');
+  const vid = document.getElementById('modal-video');
+  const novid = document.getElementById('modal-novideo');
+  img.style.display = 'block';
+  noimg.style.display = 'none';
+  if (row.snapshot_path) {
+    img.src = '/snapshot/' + encodeURIComponent(row.session_id) + '?ts=' + Date.now();
+  } else {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+    noimg.style.display = 'block';
+  }
+  if (row.mp4_path) {
+    vid.src = '/videos/' + encodeURIComponent(row.session_id) + '?ts=' + Date.now();
+    vid.style.display = 'block';
+    novid.style.display = 'none';
+  } else {
+    vid.removeAttribute('src');
+    vid.style.display = 'none';
+    novid.style.display = 'block';
+  }
+  const flag = row.flag_for_review ? '<span class="pill flag">FLAGGED</span>' : '';
+  const handover = (row.handover_occurred === true) || (row.item_presented === true);
+  const handoverPill = handover
+    ? '<span class="pill ok">Event</span>'
+    : '<span class="pill no">No event</span>';
+  let customerDesc = row.customer_description || '';
+  if (!customerDesc) {
+    try {
+      const pp = JSON.parse(row.per_person_json || '[]');
+      if (pp.length) customerDesc = pp[0].description || '';
+    } catch (e) {}
+  }
+  let items = [];
+  if (row.items_handed_over) {
+    items = row.items_handed_over.split('|').filter(Boolean);
+  } else {
+    items = (row.objects_detected || '').split('|').filter(Boolean);
+  }
+  const itemsHtml = items.length
+    ? items.map(i => `<span class="pill" style="background:#2a2f3a;margin-right:4px">${escapeHtml(i)}</span>`).join(' ')
+    : '<span class="muted">—</span>';
+  document.getElementById('modal-title').innerHTML =
+    `${escapeHtml(row.session_id||'')} &nbsp; ${classifierBadge(row.classifier)} &nbsp; ${handoverPill} &nbsp; ${flag}`;
+  const startDisp = (row.start_time || row.timestamp || '').replace('T',' ');
+  const endDisp = (row.end_time || '').replace('T',' ');
+  document.getElementById('modal-kv').innerHTML = `
+    <div class="k">Start</div><div>${escapeHtml(startDisp)}</div>
+    <div class="k">End</div><div>${escapeHtml(endDisp)}</div>
+    <div class="k">Duration</div><div>${escapeHtml(row.duration_sec != null ? row.duration_sec + ' s' : '—')}</div>
+    <div class="k">Camera</div><div>${escapeHtml(row.camera_id||'')} · ${escapeHtml(row.camera||'')}</div>
+    <div class="k">Classifier</div><div>${escapeHtml(row.scenario_label||row.classifier||'')}</div>
+    <div class="k">Subject</div><div>${escapeHtml(customerDesc) || '<span class="muted">—</span>'}</div>
+    <div class="k">Event</div><div>${handover ? 'Yes' : 'No'}</div>
+    <div class="k">Item count</div><div>${escapeHtml(row.item_count != null && row.item_count !== '' ? String(row.item_count) : '—')}</div>
+    <div class="k">Items</div><div>${itemsHtml}</div>
+    <div class="k">Confidence</div><div>${escapeHtml((row.confidence||'').toUpperCase())}</div>
+    <div class="k">Narrative</div><div>${escapeHtml(row.narrative || row.notes || '')}</div>
+    <div class="k">Merged</div><div>${(() => {
+        const mc = Number(row.merged_count || 0);
+        if (!mc) return '<span class="muted">—</span>';
+        const stamps = (row.merged_from || '').split('|').filter(Boolean);
+        const list = stamps.map(s => `<div style="font-size:12px;color:var(--muted)">${escapeHtml(s.replace('T',' '))}</div>`).join('');
+        return `<div><b>${mc + 1}</b> sub-session${mc===0?'':'s'} (${mc} merged in)</div>${list}`;
+    })()}</div>
+    <div class="k">Flagged</div><div>${row.flag_for_review ? 'yes' : 'no'}</div>`;
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+bootstrap();
+refreshStats();
+</script>
+</body>
+</html>

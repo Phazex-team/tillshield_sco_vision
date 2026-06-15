@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# Local runtime / artifacts (not source of truth)
+logs/
+run/
+videos/
+storage/
+*.pid
+*.log
+*.sqlite
+*.db
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Backups produced by this refactor
+fraud_detection_v3.backup.*.tar.gz

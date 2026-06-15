@@ -1,0 +1,64 @@
+# fraud_detection v3 — pinned dependency set
+#
+# Verified end-to-end on: NVIDIA DGX Spark (GB10 Grace Blackwell, sm_121),
+# Ubuntu 24.04 aarch64, system CUDA 13.0, Python 3.12.
+#
+# IMPORTANT: GB10 is sm_121 (Grace-Blackwell server). The PyPI torch
+# wheel for aarch64 is CPU-only, and the CUDA 12.8 wheel for aarch64
+# only carries SM kernels up to sm_120 — both fail at runtime with
+# `cudaErrorNoKernelImageForDevice`. We pin the torch nightly + vLLM
+# nightly built for CUDA 13.0 (cu130), which carry sm_121 binaries.
+#
+# These two packages live on PyTorch's and vLLM's own indexes — they
+# are NOT on PyPI. install.sh handles the index plumbing. If you run
+# `pip install -r requirements.txt` directly without those indexes you
+# will get either the wrong wheel or a "no matching distribution"
+# error.
+#
+# The Falcon-Perception package is vendored under ./Falcon-Perception
+# and installed in editable mode by install.sh (no [torch] extra — that
+# would try to upgrade torch to >=2.11.x and could break the vLLM ABI
+# match).
+#
+# After pip install completes, install.sh runs
+#   python gemma4_patched.py apply
+# which makes two small in-place edits to vLLM's gemma4.py — see the
+# "Known vLLM Patches" section in README.md.
+#
+# ----------------------------------------------------------------
+# Indexes used by install.sh:
+#   --extra-index-url https://download.pytorch.org/whl/nightly/cu130
+#   --extra-index-url https://wheels.vllm.ai/nightly/cu130/
+# ----------------------------------------------------------------
+
+# ---- core inference servers (nightly wheels for sm_121) ----
+# torch 2.11 nightly carries kernels for sm_80..sm_121, including GB10.
+torch==2.11.0
+torchvision==0.26.0
+# vLLM nightly built against torch 2.11 + CUDA 13.0.
+vllm==0.19.2rc1.dev205+g07351e088
+
+# ---- vLLM-pulled but pinned for reproducibility ----
+transformers==5.6.2
+tokenizers==0.22.2
+safetensors==0.7.0
+huggingface-hub==1.12.0
+
+# ---- HTTP / API ----
+fastapi==0.136.1
+uvicorn==0.46.0
+pydantic==2.13.3
+httpx==0.28.1
+requests==2.33.1
+
+# ---- video / image / config ----
+opencv-python-headless==4.13.0.92
+pillow==12.2.0
+numpy==2.2.6
+PyYAML==6.0.3
+
+# ---- evidence MP4 encoding ----
+imageio-ffmpeg==0.6.0
+
+# ---- env loader (used by start.sh / .env) ----
+python-dotenv==1.2.2
