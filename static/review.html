@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Return / Refund Visual Review — Case Queue</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #2f3742;
+      --text: #e7e9ee;
+      --muted: #8a93a6;
+      --accent: #5b8def;
+      --ok: #3ddc84;
+      --warn: #ffb020;
+      --high: #ff5566;
+      --invalid: #8a93a6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0; background: var(--bg); color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 14px 22px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 18px;
+    }
+    header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+    header .badge {
+      font-size: 11px; padding: 3px 8px; border-radius: 5px;
+      background: #1f2733; color: var(--accent);
+    }
+    header .grow { flex: 1; }
+    header .memory {
+      font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace;
+    }
+    main { padding: 22px; max-width: 1280px; margin: 0 auto; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 18px; margin-bottom: 22px;
+    }
+    .panel h2 { margin: 0 0 14px 0; font-size: 14px;
+      letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    label.field { font-size: 12px; color: var(--muted);
+      display: inline-flex; align-items: center; gap: 6px; }
+    input, select, button, textarea {
+      background: #0e131a; color: var(--text); border: 1px solid var(--border);
+      padding: 7px 10px; border-radius: 5px; font: inherit;
+    }
+    button { cursor: pointer; }
+    button.primary {
+      background: var(--accent); border-color: var(--accent); color: #0d1117;
+      font-weight: 600;
+    }
+    button.danger {
+      background: transparent; border-color: var(--high); color: var(--high);
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      padding: 9px 10px; text-align: left; font-size: 13px;
+      border-bottom: 1px solid var(--border); vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 500;
+      text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }
+    tr.row-link:hover td { background: rgba(91, 141, 239, 0.07); cursor: pointer; }
+    .pill {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    }
+    .pill.VERIFIED { background: rgba(61, 220, 132, 0.15); color: var(--ok); }
+    .pill.REVIEW { background: rgba(91, 141, 239, 0.18); color: var(--accent); }
+    .pill.HIGH_RISK_REVIEW { background: rgba(255, 85, 102, 0.18); color: var(--high); }
+    .pill.INVALID_VIDEO { background: rgba(138, 147, 166, 0.18); color: var(--invalid); }
+    .pill.OPEN { background: rgba(255, 176, 32, 0.18); color: var(--warn); }
+    .pill.CLOSED { background: rgba(61, 220, 132, 0.15); color: var(--ok); }
+    .pill.IN_REVIEW { background: rgba(91, 141, 239, 0.18); color: var(--accent); }
+    .pill.REPROCESSING { background: rgba(255, 176, 32, 0.18); color: var(--warn); }
+    .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+    .detail-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 22px;
+    }
+    .kv { font-size: 13px; }
+    .kv .k { color: var(--muted); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.05em; margin-top: 8px; }
+    .kv .v { font-family: ui-monospace, monospace; word-break: break-all; }
+    .timeline { font-family: ui-monospace, monospace; font-size: 12px; }
+    .timeline .ts { color: var(--muted); display: inline-block; min-width: 22ch; }
+    .timeline .kind { color: var(--accent); display: inline-block; min-width: 18ch; }
+    .reviewer-actions { display: grid;
+      grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .reviewer-actions button { width: 100%; text-align: left; padding: 12px; }
+    .reviewer-actions button.selected { border-color: var(--accent); }
+    .notes textarea { width: 100%; min-height: 64px; }
+    .keyframes { display: grid; grid-template-columns:
+      repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+    video { width: 100%; background: black; border-radius: 5px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Return / Refund Visual Review</h1>
+  <span class="badge">case queue</span>
+  <span class="grow"></span>
+  <span class="memory" id="memory">memory: —</span>
+  <button id="refresh">Refresh</button>
+</header>
+
+<main>
+  <section class="panel" id="queue-panel">
+    <h2>Case Queue</h2>
+    <div class="row" style="margin-bottom: 12px">
+      <label class="field">
+        Outcome
+        <select id="filter-outcome">
+          <option value="">all</option>
+          <option>VERIFIED</option>
+          <option>REVIEW</option>
+          <option>HIGH_RISK_REVIEW</option>
+          <option>INVALID_VIDEO</option>
+        </select>
+      </label>
+      <label class="field">
+        Status
+        <select id="filter-status">
+          <option value="">all</option>
+          <option>OPEN</option>
+          <option>IN_REVIEW</option>
+          <option>CLOSED</option>
+          <option>REPROCESSING</option>
+        </select>
+      </label>
+    </div>
+    <table id="case-table">
+      <thead>
+        <tr>
+          <th>Case</th>
+          <th>POS Txn</th>
+          <th>Staff</th>
+          <th>SKU</th>
+          <th>Amount</th>
+          <th>POS time</th>
+          <th>Outcome</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="queue-empty" class="empty" hidden>No cases yet — POS events
+      create cases automatically.</div>
+  </section>
+
+  <section class="panel" id="detail-panel" hidden>
+    <h2>Case Detail
+      <button id="close-detail" style="float:right;font-size:12px">Close</button>
+    </h2>
+    <div class="detail-grid">
+      <div>
+        <h3 style="font-size:13px;margin:0 0 8px 0">POS Event</h3>
+        <div class="kv" id="pos-kv"></div>
+        <h3 style="font-size:13px;margin:16px 0 8px 0">Decision</h3>
+        <div class="kv" id="decision-kv"></div>
+      </div>
+      <div>
+        <h3 style="font-size:13px;margin:0 0 8px 0">Video Window</h3>
+        <video id="video" controls preload="metadata" hidden></video>
+        <div class="empty" id="no-video">No window available yet.</div>
+        <h3 style="font-size:13px;margin:16px 0 8px 0">Keyframes</h3>
+        <div class="keyframes" id="keyframes"></div>
+      </div>
+    </div>
+    <h3 style="font-size:13px;margin:18px 0 8px 0">Timeline</h3>
+    <div class="timeline" id="timeline"></div>
+    <h3 style="font-size:13px;margin:18px 0 8px 0">Model Claims</h3>
+    <div class="kv" id="claims"></div>
+    <h3 style="font-size:13px;margin:18px 0 8px 0">Limitations</h3>
+    <ul class="kv" id="limitations"></ul>
+    <h3 style="font-size:13px;margin:18px 0 8px 0">Audit Trail</h3>
+    <div class="timeline" id="audit"></div>
+
+    <h3 style="font-size:13px;margin:24px 0 10px 0">Reviewer Decision</h3>
+    <div class="reviewer-actions" id="reviewer-actions">
+      <button data-action="verified_physical_return" data-outcome="VERIFIED">
+        ✅ Verified physical return</button>
+      <button data-action="needs_review" data-outcome="REVIEW">
+        🔎 Needs review</button>
+      <button data-action="high_risk_review" data-outcome="HIGH_RISK_REVIEW">
+        ⚠️ High-risk review</button>
+      <button data-action="invalid_video" data-outcome="INVALID_VIDEO">
+        🚫 Invalid video</button>
+      <button data-action="camera_blind_spot" data-outcome="REVIEW">
+        📷 Camera blind spot</button>
+      <button data-action="pos_camera_mismatch" data-outcome="REVIEW">
+        🔀 POS / camera mismatch</button>
+    </div>
+    <div class="notes" style="margin-top:12px">
+      <label class="field" style="display:block">Notes
+        <textarea id="review-notes" placeholder="optional"></textarea>
+      </label>
+    </div>
+    <div class="row" style="margin-top:12px;justify-content:flex-end">
+      <button id="reprocess-btn" class="danger">Request reprocess</button>
+      <button id="submit-action" class="primary" disabled>
+        Submit reviewer decision</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const API = "/api/v1";
+let selectedAction = null;
+let currentCase = null;
+
+async function refreshMemory() {
+  try {
+    const r = await fetch(`${API}/memory`);
+    const m = await r.json();
+    document.getElementById("memory").textContent =
+      `memory: ${m.used_gb}G / ${m.total_gb}G  state=${m.state}` +
+      (m.loaded_providers.length ?
+        `  loaded=[${m.loaded_providers.join(",")}]` : "");
+  } catch (e) {
+    document.getElementById("memory").textContent = "memory: (unavailable)";
+  }
+}
+
+async function refreshCases() {
+  const outcome = document.getElementById("filter-outcome").value;
+  const status = document.getElementById("filter-status").value;
+  const params = new URLSearchParams();
+  if (outcome) params.set("outcome", outcome);
+  if (status) params.set("status", status);
+  const r = await fetch(`${API}/cases?${params}`);
+  const body = await r.json();
+  const tbody = document.querySelector("#case-table tbody");
+  tbody.innerHTML = "";
+  document.getElementById("queue-empty").hidden = body.count !== 0;
+  for (const row of body.items) {
+    const tr = document.createElement("tr");
+    tr.className = "row-link";
+    tr.dataset.id = row.id;
+    const p = row.pos_event || {};
+    tr.innerHTML = `
+      <td>${row.id.slice(0, 8)}…</td>
+      <td>${escapeHtml(p.transaction_id || "—")}</td>
+      <td>${escapeHtml(p.staff_id || "—")}</td>
+      <td>${escapeHtml(p.sku || "—")}</td>
+      <td>${p.amount ? `${p.currency || ""} ${p.amount}` : "—"}</td>
+      <td>${p.pos_event_at || "—"}</td>
+      <td>${pill(row.outcome || "—")}</td>
+      <td>${pill(row.status || "—")}</td>`;
+    tr.onclick = () => openCase(row.id);
+    tbody.appendChild(tr);
+  }
+}
+
+function pill(s) {
+  const cls = s.replace(/[^A-Z_]/g, "");
+  return `<span class="pill ${cls}">${escapeHtml(s)}</span>`;
+}
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;",
+    '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+function kvSet(el, obj) {
+  el.innerHTML = "";
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v === null || v === undefined || v === "") continue;
+    const lab = document.createElement("div");
+    lab.className = "k";
+    lab.textContent = k;
+    const val = document.createElement("div");
+    val.className = "v";
+    val.textContent = typeof v === "object" ? JSON.stringify(v) : String(v);
+    el.appendChild(lab);
+    el.appendChild(val);
+  }
+}
+
+async function openCase(caseId) {
+  currentCase = caseId;
+  const [caseR, pkgR] = await Promise.all([
+    fetch(`${API}/cases/${caseId}`),
+    fetch(`${API}/cases/${caseId}/evidence-package`),
+  ]);
+  if (!caseR.ok) {
+    alert("case fetch failed");
+    return;
+  }
+  const c = await caseR.json();
+  const pkg = pkgR.ok ? await pkgR.json() : null;
+  const detail = document.getElementById("detail-panel");
+  detail.hidden = false;
+  detail.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  kvSet(document.getElementById("pos-kv"), c.pos_event || {});
+  kvSet(document.getElementById("decision-kv"), {
+    outcome: c.outcome, status: c.status,
+    risk_score: c.risk_score,
+    reasons: (c.risk_reasons || []).join(" · "),
+    invalid_reason: c.invalid_reason,
+    package_sha256: pkg?.audit?.package_sha256,
+  });
+
+  // Video element (placeholder until window stream id wired)
+  const video = document.getElementById("video");
+  const noVideo = document.getElementById("no-video");
+  if (pkg && pkg.case && pkg.case.outcome !== "INVALID_VIDEO") {
+    video.hidden = false; noVideo.hidden = true;
+  } else {
+    video.hidden = true; noVideo.hidden = false;
+  }
+
+  // Keyframes (uri rendered if available)
+  const kfs = document.getElementById("keyframes");
+  kfs.innerHTML = "";
+  for (const a of (pkg?.artifacts || [])) {
+    if (a.artifact_type !== "KEYFRAME") continue;
+    const img = document.createElement("img");
+    img.src = a.uri; img.alt = a.id;
+    img.style.width = "100%"; img.style.borderRadius = "4px";
+    kfs.appendChild(img);
+  }
+
+  // Timeline (best-effort from package payload)
+  const tl = document.getElementById("timeline");
+  tl.innerHTML = "";
+  const events = (pkg?.timeline || []);
+  for (const e of events) {
+    const row = document.createElement("div");
+    row.innerHTML = `<span class="ts">${e.ts}</span>` +
+      `<span class="kind">${e.kind}</span>${escapeHtml(e.label)}`;
+    tl.appendChild(row);
+  }
+
+  // Model claims
+  const claims = document.getElementById("claims");
+  const reasoning = pkg?.reasoning || [];
+  if (reasoning.length === 0) {
+    claims.textContent = "(no model runs yet)";
+  } else {
+    kvSet(claims, {
+      provider: reasoning[0].provider,
+      model: reasoning[0].model_name,
+      prompt_version: reasoning[0].prompt_version,
+      output: reasoning[0].output,
+      error: reasoning[0].error,
+    });
+  }
+
+  // Limitations
+  const lim = document.getElementById("limitations");
+  lim.innerHTML = "";
+  const limitations = pkg?.case?.invalid_reason
+    ? [pkg.case.invalid_reason] : (pkg?.limitations || []);
+  for (const l of limitations) {
+    const li = document.createElement("li"); li.textContent = l;
+    lim.appendChild(li);
+  }
+
+  // Audit
+  const audit = document.getElementById("audit");
+  audit.innerHTML = "";
+  for (const a of (pkg?.audit_trail || [])) {
+    const row = document.createElement("div");
+    row.innerHTML = `<span class="ts">${a.ts || ""}</span>` +
+      `<span class="kind">${a.action}</span>${escapeHtml(JSON.stringify(a.after || {}))}`;
+    audit.appendChild(row);
+  }
+
+  selectedAction = null;
+  for (const b of document.querySelectorAll("#reviewer-actions button")) {
+    b.classList.remove("selected");
+  }
+  document.getElementById("submit-action").disabled = true;
+  document.getElementById("review-notes").value = "";
+}
+
+document.getElementById("close-detail").onclick = () => {
+  document.getElementById("detail-panel").hidden = true;
+  currentCase = null;
+};
+
+for (const b of document.querySelectorAll("#reviewer-actions button")) {
+  b.onclick = () => {
+    selectedAction = { action: b.dataset.action, outcome: b.dataset.outcome };
+    for (const x of document.querySelectorAll("#reviewer-actions button")) {
+      x.classList.remove("selected");
+    }
+    b.classList.add("selected");
+    document.getElementById("submit-action").disabled = false;
+  };
+}
+
+document.getElementById("submit-action").onclick = async () => {
+  if (!selectedAction || !currentCase) return;
+  const notes = document.getElementById("review-notes").value;
+  const r = await fetch(`${API}/cases/${currentCase}/review-actions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: selectedAction.action,
+      outcome: selectedAction.outcome,
+      notes: notes || null,
+    }),
+  });
+  if (r.ok) {
+    document.getElementById("detail-panel").hidden = true;
+    refreshCases();
+  } else {
+    alert(`submit failed: ${r.status} ${await r.text()}`);
+  }
+};
+
+document.getElementById("reprocess-btn").onclick = async () => {
+  if (!currentCase) return;
+  const r = await fetch(`${API}/cases/${currentCase}/reprocess`,
+                        { method: "POST" });
+  if (r.ok) {
+    refreshCases();
+    openCase(currentCase);
+  } else {
+    alert(`reprocess failed: ${r.status} ${await r.text()}`);
+  }
+};
+
+document.getElementById("refresh").onclick = () => {
+  refreshMemory(); refreshCases();
+};
+document.getElementById("filter-outcome").onchange = refreshCases;
+document.getElementById("filter-status").onchange = refreshCases;
+
+refreshMemory();
+refreshCases();
+setInterval(refreshMemory, 15000);
+</script>
+</body>
+</html>
