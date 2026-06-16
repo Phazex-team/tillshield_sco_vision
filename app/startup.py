@@ -46,6 +46,9 @@ def run_startup_checks(*, strict: Optional[bool] = None) -> dict:
     # offline_assets.yaml.
     issues.extend(_check_required_python_packages(production))
 
+    # 2b. TillShield poller config (only when polling is enabled).
+    issues.extend(_check_tillshield_poll_config(cfg))
+
     # 3. Provider chain construction (lazy — no model load)
     chain_summary = _check_provider_chain(cfg, production)
     if chain_summary.get("error"):
@@ -90,28 +93,66 @@ def run_startup_checks(*, strict: Optional[bool] = None) -> dict:
 
 
 def _check_required_assets(production: bool) -> list[str]:
-    """Mirror scripts/verify_offline_bundle.py for the required set."""
+    """Mirror the offline bundle verifier for the required set."""
     if not production:
         return []
+    import json
+
     issues: list[str] = []
-    # Read BUNDLE_ROOT dynamically from app.config so tests that
-    # monkeypatch the constant get the patched value.
     from app import config as ac
     bundle_root = ac.BUNDLE_ROOT
     try:
         import yaml
         registry = yaml.safe_load(
             (REPO_ROOT / "offline_assets.yaml").read_text()) or {}
+        manifest = json.loads(
+            (REPO_ROOT / "models" / "manifest.json").read_text()
+        )
+        by_name = {
+            m.get("name") or m.get("model_id"): m
+            for m in (manifest.get("models") or [])
+        }
         for entry in (registry.get("required") or []):
             repo = entry.get("repo") or ""
             base = bundle_root.joinpath(*repo.split("/"))
-            if not base.is_dir():
+            model = by_name.get(entry.get("name"))
+            if model is None or model.get("status") != "present":
+                issues.append(
+                    f"required asset {entry['name']!r} missing from "
+                    "models/manifest.json"
+                )
+                continue
+            snapshot = model.get("snapshot")
+            snap_dir = base / str(snapshot)
+            if not base.is_dir() or not snap_dir.is_dir():
                 issues.append(
                     f"required asset {entry['name']!r} missing under "
-                    f"{base} — bundle the model before starting"
+                    f"{snap_dir} — bundle the model before starting"
                 )
+                continue
+            for tracked in (model.get("files") or []):
+                rel_path = tracked.get("rel_path")
+                if not rel_path:
+                    continue
+                fp = snap_dir / rel_path
+                if not fp.is_file():
+                    issues.append(
+                        f"required asset {entry['name']!r} incomplete: "
+                        f"missing {fp}"
+                    )
+                    break
+                expected_bytes = tracked.get("bytes")
+                if isinstance(expected_bytes, int) and \
+                        fp.stat().st_size != expected_bytes:
+                    issues.append(
+                        f"required asset {entry['name']!r} incomplete: "
+                        f"size mismatch on {fp.name}"
+                    )
+                    break
     except FileNotFoundError as exc:
-        issues.append(f"offline_assets.yaml unreadable: {exc}")
+        issues.append(f"offline bundle metadata unreadable: {exc}")
+    except json.JSONDecodeError as exc:
+        issues.append(f"models/manifest.json invalid: {exc}")
     return issues
 
 
@@ -134,6 +175,19 @@ def _check_required_python_packages(production: bool) -> list[str]:
                 f"pip install --no-index --find-links wheelhouse {pkg}"
             )
     return issues
+
+
+def _check_tillshield_poll_config(cfg) -> list[str]:
+    """Validate the TillShield poller config. Returns issue strings when
+    polling is enabled but misconfigured (workstation without a camera
+    mapping, mapped camera absent from cameras, missing endpoint, bad
+    interval). No-op when polling is disabled."""
+    try:
+        from pos.tillshield_poll import validate_poll_config
+        return [f"tillshield poller: {m}" for m in validate_poll_config(cfg)]
+    except Exception as exc:  # never let validation import crash startup
+        log.warning("tillshield poll config validation skipped: %s", exc)
+        return []
 
 
 def _check_sam2_runtime(cfg) -> Optional[str]:

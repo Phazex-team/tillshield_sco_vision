@@ -60,6 +60,26 @@ def _check_auth(token_header: Optional[str]) -> None:
                             detail="invalid or missing ingest token")
 
 
+@router.get("/status", status_code=200)
+def poller_status() -> dict:
+    """Operator view of the POS-agent poller: last poll / last success /
+    last error, per-workstation cursor, and cumulative counts."""
+    from app.config import load_config
+    from db.session import get_sessionmaker
+    from pos.tillshield_poll import load_poll_config, read_status
+
+    cfg = load_config()
+    pc = load_poll_config(cfg)
+    SM = get_sessionmaker()
+    with SM() as s:
+        status = read_status(s)
+    status["poll_enabled"] = pc.enabled
+    status["poll_every_seconds"] = pc.poll_every_seconds
+    status["allowed_workstation_ids"] = pc.allowed_workstation_ids
+    status["workstation_camera_map"] = pc.workstation_camera_map
+    return status
+
+
 @router.post("/transactions/event", status_code=200)
 def ingest_event(request: Request,
                  x_phazex_ingest_token: Optional[str] = Header(default=None),

@@ -69,10 +69,43 @@ class AppConfig:
         )
 
 
+_DOTENV_LOADED = False
+
+
+def _load_dotenv_once() -> None:
+    """Load ``.env`` (gitignored) so secrets referenced as ``${VAR}`` in
+    config.yaml resolve on a direct ``run_app.py`` launch too. No-op if
+    python-dotenv is absent."""
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED:
+        return
+    _DOTENV_LOADED = True
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(PROJECT_ROOT / ".env")
+    except Exception:
+        pass
+
+
+def _expand_env(obj):
+    """Recursively expand ``${VAR}`` references in string values from the
+    environment. Unknown vars are left literal so a missing secret fails
+    visibly rather than silently."""
+    if isinstance(obj, str):
+        return os.path.expandvars(obj) if "${" in obj else obj
+    if isinstance(obj, dict):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env(v) for v in obj]
+    return obj
+
+
 def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> AppConfig:
+    _load_dotenv_once()
     p = Path(path)
     with p.open() as f:
         raw = yaml.safe_load(f) or {}
+    raw = _expand_env(raw)
 
     models_raw = raw.get("models") or {}
     models: dict[str, ModelConfig] = {}

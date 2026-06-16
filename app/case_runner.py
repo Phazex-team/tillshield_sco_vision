@@ -22,7 +22,7 @@ import base64
 import io
 import logging
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -74,6 +74,7 @@ def analyze_case(session: Session,
         raise ValueError("case has no POS event linked")
 
     # ----- 1. Resolve window from segment index ----------------------
+    storage_root = _storage_root()
     plan = plan_window(session, case.camera_id, pos.pos_event_at)
     window = VideoWindow(
         case_id=case.id,
@@ -88,41 +89,60 @@ def analyze_case(session: Session,
     session.add(window)
     session.flush()
 
+    # ----- 1b. NVR on-demand retrieval (preferred-but-NONBLOCKING) ----
+    # Try to pull the historical window from the NVR for this tx. This
+    # only annotates metadata + (if export is enabled and succeeds)
+    # provides the exact clip; otherwise the local recorder/segment path
+    # below is used. Never raises.
+    nvr_clip = _try_nvr_window(case, pos.pos_event_at, window, storage_root)
+
     audit.record(session, action="case.window_resolved",
                  entity_type="case", entity_id=case.id,
                  actor_type="analyzer",
                  after={"window_id": window.id,
                         "coverage_ratio": plan.coverage_ratio,
                         "valid": plan.is_valid,
-                        "invalid_reason": plan.invalid_reason})
+                        "invalid_reason": plan.invalid_reason,
+                        "acquisition_source": window.acquisition_source,
+                        "nvr": window.nvr_metadata})
 
-    if not plan.is_valid:
-        window.status = "FAILED"
-        window.failure_reason = plan.invalid_reason
-        return _close_invalid(session, case, plan.invalid_reason)
-
-    # ----- 2. Build the actual window MP4 ----------------------------
-    storage_root = _storage_root()
     out_path = (storage_root / "cases" / f"case_id={case.id}" / "window"
                 / f"window_{window.id}.mp4")
-    segments = (session.query(VideoSegment)
-                .filter(VideoSegment.id.in_(plan.matched_segment_ids))
-                .order_by(VideoSegment.start_at.asc()).all())
-    build = build_window(
-        segments=segments,
-        requested_start=plan.requested_start,
-        requested_end=plan.requested_end,
-        out_path=out_path,
-    )
-    if not build.ok:
-        window.status = "FAILED"
-        window.failure_reason = build.failure_reason
-        audit.record(session, action="case.window_build_failed",
-                     entity_type="case", entity_id=case.id,
-                     actor_type="analyzer",
-                     after={"window_id": window.id,
-                            "failure_reason": build.failure_reason})
-        return _close_invalid(session, case, build.failure_reason)
+
+    # ----- 2. Acquire the window MP4: NVR clip first, else local ------
+    if nvr_clip:
+        build = _adopt_clip(nvr_clip, plan)
+        window.acquisition_source = "nvr_clip_retrieved"
+    else:
+        # Fall back to the existing local recorded-segment path.
+        if not plan.is_valid:
+            window.status = "FAILED"
+            window.failure_reason = plan.invalid_reason
+            # Leave the NVR state (e.g. nvr_recording_found_no_export) so
+            # operators can see footage exists on the NVR even when local
+            # segments are missing; only default it when NVR was off.
+            if not window.acquisition_source:
+                window.acquisition_source = "local_no_segments"
+            return _close_invalid(session, case, plan.invalid_reason)
+        segments = (session.query(VideoSegment)
+                    .filter(VideoSegment.id.in_(plan.matched_segment_ids))
+                    .order_by(VideoSegment.start_at.asc()).all())
+        build = build_window(
+            segments=segments,
+            requested_start=plan.requested_start,
+            requested_end=plan.requested_end,
+            out_path=out_path,
+        )
+        if not build.ok:
+            window.status = "FAILED"
+            window.failure_reason = build.failure_reason
+            audit.record(session, action="case.window_build_failed",
+                         entity_type="case", entity_id=case.id,
+                         actor_type="analyzer",
+                         after={"window_id": window.id,
+                                "failure_reason": build.failure_reason})
+            return _close_invalid(session, case, build.failure_reason)
+        window.acquisition_source = "local_segments_used"
 
     window.path = build.out_path
     window.sha256 = build.sha256
@@ -299,6 +319,61 @@ def _close_invalid(session: Session, case: Case,
 def _storage_root() -> Path:
     from app.config import load_config
     return load_config().storage_root
+
+
+def _camera_cfg(camera_id: str) -> dict:
+    from app.config import load_config
+    for c in load_config().cameras:
+        if c.get("id") == camera_id:
+            return c
+    return {}
+
+
+def _try_nvr_window(case, pos_event_at, window, storage_root) -> Optional[str]:
+    """Run NVR on-demand acquisition for this case window.
+
+    Annotates ``window.acquisition_source`` + ``window.nvr_metadata`` and
+    returns a local clip path when the exact historical clip was actually
+    exported (Stage B); otherwise returns ``None`` so the caller uses the
+    local recorded segments. NEVER raises — NVR is non-blocking."""
+    try:
+        from video.nvr_dahua import (
+            acquire_window, load_nvr_config, STATE_CLIP_RETRIEVED)
+        nvr_cfg = load_nvr_config(_camera_cfg(case.camera_id))
+        out = (storage_root / "cases" / f"case_id={case.id}" / "window"
+               / f"nvr_{window.id}.mp4")
+        acq = acquire_window(nvr_cfg, pos_event_at,
+                             camera_id=case.camera_id, out_path=str(out))
+        window.nvr_metadata = acq.metadata
+        if acq.attempted:
+            window.acquisition_source = acq.state
+        if acq.state == STATE_CLIP_RETRIEVED and acq.clip_path:
+            return acq.clip_path
+    except Exception:
+        log.exception("nvr acquisition step failed (non-fatal)")
+    return None
+
+
+@dataclass
+class _ClipBuild:
+    """build_window-compatible result for an NVR-exported clip."""
+    out_path: str
+    sha256: Optional[str]
+    actual_start_at: Optional[datetime]
+    actual_end_at: Optional[datetime]
+    ok: bool = True
+    failure_reason: Optional[str] = None
+
+
+def _adopt_clip(clip_path: str, plan) -> _ClipBuild:
+    import hashlib
+    h = hashlib.sha256()
+    with open(clip_path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return _ClipBuild(out_path=clip_path, sha256=h.hexdigest(),
+                      actual_start_at=plan.requested_start,
+                      actual_end_at=plan.requested_end)
 
 
 def _extract_keyframe_data_urls(*, window_path: str,

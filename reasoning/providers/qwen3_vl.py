@@ -101,6 +101,7 @@ class Qwen3VLProvider(VLMProvider):
                  temperature: float = 0.1,
                  device: str = "cuda",
                  dtype: str = "bfloat16",
+                 load_in_4bit: bool = False,
                  **extra: Any):
         super().__init__(model_name=model_name, enabled=enabled, **extra)
         self.local_path = local_path
@@ -108,6 +109,9 @@ class Qwen3VLProvider(VLMProvider):
         self.temperature = float(temperature)
         self.device = device
         self.dtype = dtype
+        # 4-bit (nf4) quantization keeps the 30B under ~18G resident so it
+        # fits this box, where the bf16 load peaks past 121G and OOMs.
+        self.load_in_4bit = bool(load_in_4bit)
         self._load_lock = threading.Lock()
         self._gen_lock = threading.Lock()
         self._processor: Any = None
@@ -219,13 +223,30 @@ class Qwen3VLProvider(VLMProvider):
                 self.local_path,
                 local_files_only=True,
             )
-            self._model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
-                self.local_path,
+            # NOTE: this transformers build honors ``torch_dtype`` (proven by
+            # the Gemma server loading bf16 at ~50G). config.json has no
+            # torch_dtype, so WITHOUT this the 30B loads as fp32 (~116G) and
+            # OOMs. Keep ``torch_dtype`` — ``dtype`` is ignored here.
+            # device_map="auto" streams each shard onto the GPU and frees the
+            # CPU buffer as it goes (accelerate dispatch).
+            device_map = "auto" if self.device.startswith("cuda") else self.device
+            load_kwargs: dict = dict(
                 torch_dtype=dtype,
-                device_map=self.device,
+                device_map=device_map,
                 local_files_only=True,
                 low_cpu_mem_usage=True,
             )
+            if self.load_in_4bit:
+                from transformers import BitsAndBytesConfig
+                load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_compute_dtype=dtype,
+                )
+                log.info("qwen3_vl: loading in 4-bit (nf4)")
+            self._model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
+                self.local_path, **load_kwargs)
             self._model.eval()
             log.info("qwen3_vl loaded on %s dtype=%s",
                      next(self._model.parameters()).device,

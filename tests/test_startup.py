@@ -58,9 +58,15 @@ def test_startup_production_passes_against_real_bundle(monkeypatch, tmp_path):
             pytest.skip(f"bundle asset missing: {rel}; run prepare first")
     if importlib.util.find_spec("sam2") is None:
         pytest.skip("sam2 runtime not installed; install via wheelhouse")
+    from app.config import load_config
     from app.startup import run_startup_checks
     summary = run_startup_checks()
     assert summary["production"] is True
     assert summary["issues"] == []
-    assert "qwen3_vl" in summary["provider_chain"]["members"]
-    assert "gemma" in summary["provider_chain"]["members"]
+    members = summary["provider_chain"]["members"]
+    assert "qwen3_vl" in members
+    # The fallback provider is config-driven (``reasoning.fallback_provider``);
+    # it may be disabled (Qwen-only). Only require it when configured.
+    fallback = (load_config().raw.get("reasoning") or {}).get("fallback_provider")
+    if fallback:
+        assert fallback in members

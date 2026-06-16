@@ -217,3 +217,122 @@ Per batch (recommended for replay / catch-up):
   case opening requires each item to expose a stable `line_id` or
   equivalent; otherwise the normaliser opens a single transaction-level
   case.
+
+## POS-agent polling (return-counter cases)
+
+The push endpoints above remain available. In addition, the app can
+**poll** the local TillShield POS agent and open return-counter cases on
+its own. Polling is additive and configured under
+`integrations.tillshield` in `config.yaml`.
+
+### Why polling
+
+The POS agent receives new data roughly every 10 minutes. The app polls
+it every 5 minutes (`poll_every_seconds: 300`) and opens a case only for
+rows that match the return-counter policy. Correlation always uses the
+row's `transactionDate` (the real event time), never the poll time.
+
+### POS-agent contract
+
+Discovered from `GET /pos/data/info`. The feed is **per workstation**:
+
+| Verb | Path | Purpose |
+|------|------|---------|
+| GET | `/pos/data/info` | Service info + endpoint list |
+| GET | `/pos/data/workstations` | List workstation IDs |
+| GET | `/pos/data/transactions?workstationId=<id>&start=<ISO>&end=<ISO>` | Rows in a time range |
+
+Each row is shaped `{_meta, items, summary, transaction}`. The poller
+maps it onto the canonical `TillShieldTransaction`:
+
+- `transaction.transactionId` → `transaction_id`
+- `transaction.transactionDate` → `transaction_date` (used for the CCTV window)
+- `transaction.transactionType` → `transaction_type` (e.g. `RETURN`)
+- `transaction.workstationId` → `workstation_id`
+- `transaction.storeId` → `store_id`
+- `summary.totalAmount` → `total_amount` (negative for returns)
+
+The whole row is preserved in `raw_payload` for audit.
+
+### Policy — when a polled row opens a case
+
+All four must hold, else the row is persisted/counted but opens no case:
+
+1. normalised type is in `return_event_types` (e.g. `RETURN`)
+2. `total_amount` is negative (when `require_negative_amount: true`)
+3. workstation is in `allowed_workstation_ids`
+4. workstation maps to a camera in `workstation_camera_map`, and that
+   camera id exists under `cameras:` with an `rtsp_url`
+
+Non-matching rows never error; they are tallied by reason:
+`ignored_non_return_events`, `ignored_non_negative_events`,
+`ignored_unconfigured_workstation_events`,
+`ignored_unmapped_workstation_events`. An allow-listed workstation with
+no valid camera route is **never** routed to the first/default camera.
+
+### Configuration
+
+```yaml
+integrations:
+  tillshield:
+    poll_enabled: true
+    base_url: http://localhost:8081
+    info_path: /pos/data/info
+    transactions_path: /pos/data/transactions
+    poll_every_seconds: 300        # query the agent every 5 minutes
+    request_timeout_sec: 30
+    poll_lookback_seconds: 900     # first poll window when no checkpoint
+    require_negative_amount: true
+    allowed_workstation_ids:
+      - "52"
+      - "53"
+    workstation_camera_map:
+      "52": cam_return_01
+      "53": cam_return_02
+```
+
+Each mapped camera must be defined under `cameras:` with a real
+`rtsp_url`, e.g.:
+
+```yaml
+cameras:
+- id: cam_return_01
+  name: "Return Counter 01"
+  rtsp_url: rtsp://127.0.0.1:8554/RC01_ch01
+  classifier: return_review
+```
+
+### Checkpointing
+
+Per-workstation cursors are stored in the `integration_poll_state`
+table: `last_txn_at` + `last_txn_id`. A restart resumes from the cursor
+instead of replaying the whole feed. The next window starts inclusively
+at `last_txn_at`; the boundary row is dropped by the natural-key
+idempotency, so no case is ever opened twice.
+
+### Lifecycle
+
+When `poll_enabled: true`, a daemon poller thread starts with the app
+(FastAPI lifespan) and stops cleanly on shutdown. A slow or unavailable
+POS agent never blocks boot and never crashes the API/UI — fetch errors
+are recorded per workstation and the next cycle retries.
+
+### Operator observability
+
+```
+GET /api/v1/integrations/tillshield/status
+```
+
+Returns `poll_enabled`, `poll_every_seconds`, the allow-list and camera
+map, `last_poll_at` / `last_successful_poll_at` / `last_error`, the
+per-workstation cursor, and cumulative counts (rows seen, events
+inserted, cases created, ignored-by-reason).
+
+### Adding a new return counter
+
+1. Add the camera under `cameras:` with a real `rtsp_url`.
+2. Add the workstation id to `allowed_workstation_ids`.
+3. Map it in `workstation_camera_map` to that camera id.
+4. Restart the app. Startup validation rejects an allow-listed
+   workstation with no camera mapping, a mapping to a camera absent from
+   `cameras:`, a missing endpoint, or a non-positive poll interval.

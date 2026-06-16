@@ -168,6 +168,8 @@
         <h3 style="font-size:13px;margin:0 0 8px 0">Video Window</h3>
         <video id="video" controls preload="metadata" hidden></video>
         <div class="empty" id="no-video">No window available yet.</div>
+        <h3 style="font-size:13px;margin:14px 0 6px 0">Evidence source</h3>
+        <div id="evidence-source" style="font-size:12px"></div>
         <h3 style="font-size:13px;margin:16px 0 8px 0">Keyframes</h3>
         <div class="keyframes" id="keyframes"></div>
       </div>
@@ -267,6 +269,45 @@ function escapeHtml(s) {
     '"': "&quot;", "'": "&#39;",
   }[c]));
 }
+// Human-readable evidence-source line: where the window came from
+// (NVR on-demand clip vs local recorded segments) plus NVR query detail.
+const SOURCE_LABELS = {
+  nvr_clip_retrieved:            ["📼", "NVR historical clip (retrieved on-demand)", "#36c275"],
+  nvr_recording_found_no_export: ["🗄️", "NVR has footage — local segments used", "#e0b341"],
+  nvr_no_recording_found:        ["🗄️", "NVR reachable, no recording for window — local used", "#e0b341"],
+  nvr_query_failed:              ["⚠️", "NVR query failed — local used", "#e0843b"],
+  nvr_disabled:                  ["📷", "Local recorder (NVR not configured)", "#8aa0c6"],
+  local_segments_used:          ["💾", "Local recorded segments", "#5b8def"],
+  local_no_segments:            ["🚫", "No footage (no NVR, no local segments)", "#e0843b"],
+};
+function renderEvidenceSource(window_) {
+  const el = document.getElementById("evidence-source");
+  el.innerHTML = "";
+  if (!window_) { el.innerHTML = '<span style="color:#8aa0c6">—</span>'; return; }
+  const src = window_.acquisition_source || "local_segments_used";
+  const [icon, label, color] = SOURCE_LABELS[src] || ["•", src, "#8aa0c6"];
+  const head = document.createElement("div");
+  head.style.cssText = `font-weight:600;color:${color}`;
+  head.textContent = `${icon} ${label}`;
+  el.appendChild(head);
+  const n = window_.nvr;
+  if (n && n.attempted) {
+    const parts = [];
+    if (n.playback_channel != null) parts.push(`channel ${n.playback_channel}`);
+    parts.push(`${n.recordings_found || 0} recording(s) found`);
+    if (n.first_match) {
+      parts.push(`covering ${n.first_match.start_at}→${n.first_match.end_at}`);
+      if (n.first_match.result_channel != null)
+        parts.push(`(NVR ch ${n.first_match.result_channel})`);
+    }
+    if (n.export_attempted) parts.push(`export ${n.export_ok ? "OK" : "failed"}`);
+    if (n.error) parts.push(`error: ${n.error}`);
+    const sub = document.createElement("div");
+    sub.style.cssText = "color:#8aa0c6;margin-top:3px;font-family:ui-monospace,monospace;font-size:11px";
+    sub.textContent = parts.join(" · ");
+    el.appendChild(sub);
+  }
+}
 function kvSet(el, obj) {
   el.innerHTML = "";
   for (const [k, v] of Object.entries(obj || {})) {
@@ -324,6 +365,10 @@ async function openCase(caseId) {
       ? `window unavailable: ${window_.failure_reason}`
       : "no window available yet.";
   }
+
+  // Evidence source — which acquisition path produced the window
+  // (NVR on-demand clip vs local recorded segments) + NVR query detail.
+  renderEvidenceSource(window_);
 
   // Keyframes — show frame_id + role from real perception rows. The
   // dedicated artifact crops are also rendered when their URI exists.

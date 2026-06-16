@@ -41,7 +41,7 @@ def main() -> int:
 
     vllm_url = os.environ.get("VLLM_URL", "http://localhost:8001")
     model = os.environ.get(
-        "GEMMA_MODEL_NAME", "bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4"
+        "GEMMA_MODEL_NAME", "google/gemma-4-26B-A4B-it"
     )
 
     reasoner = GemmaVideoReasoner(

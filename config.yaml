@@ -23,6 +23,50 @@ cameras:
       w: 303
       h: 645
   prompts: {}
+# Return-counter cameras. Each return-counter workstation in the
+# TillShield poll allowlist must map to one of these IDs (see
+# integrations.tillshield.workstation_camera_map) and each must carry a
+# real rtsp_url so the recorder/window builder can resolve footage.
+- id: cam_return_01
+  name: "Return Counter 01"
+  # POS workstation 52 -> this camera (channel 15). The RTSP password must
+  # be URL-encoded in the URL (e.g. '%' -> %25).
+  # Secret: real URL lives in .env (gitignored) as CAM_RETURN_01_RTSP_URL;
+  # load_config expands ${VAR} from the environment.
+  rtsp_url: '${CAM_RETURN_01_RTSP_URL}'
+  classifier: return_review
+  token_budget: 1120
+  enable_thinking: ''
+  max_frames: ''
+  cooldown_sec: 30
+  zones: {}
+  prompts: {}
+  # On-demand NVR historical retrieval (additive; the live recorder
+  # remains the fallback until clip export is proven reliable).
+  nvr:
+    enabled: true
+    base_url: http://192.168.1.13
+    # Secrets: real values in .env (gitignored). The NVR client also
+    # reads NVR_USERNAME / NVR_PASSWORD from the environment directly.
+    username: ${NVR_USERNAME}
+    password: ${NVR_PASSWORD}
+    live_channel: 15              # 1-based RTSP channel (live + playback URL)
+    # mediaFileFind condition.Channel (1-based on this NVR). Searching 15
+    # returns results labelled Channel=14 under /mnt/dvr/.../14/dav/ — the
+    # SAME camera (0-based result). Set to whatever returns this camera's
+    # recordings; the resolved result channel + file path are logged.
+    playback_channel: 15
+    subtype: 0
+    timezone: Asia/Dubai          # NVR local wall-clock for search/playback
+    pre_roll_sec: 120
+    post_roll_sec: 180
+    max_window_sec: 900           # hard cap: only the tx window (<= 15 min)
+    prefer_on_demand_for_pos: true
+    # Stage B clip export via RTSP playback-by-time (PROVEN against this
+    # NVR: pulls the exact bounded tx window to MP4). Streams at ~realtime
+    # so a 5-min window takes ~5 min; bounded by max_window_sec. On any
+    # failure the app falls back to the local recorded segments.
+    export_enabled: true
 settings:
   rtsp_reconnect_sec: 10
   motion_threshold: 25
@@ -42,9 +86,9 @@ settings:
   mp4_evidence_height: 360
   mp4_evidence_fps: 5
   mp4_evidence_crf: 28
-  log_dir: /home/fazil/workspace/projects/fraud_detection_v3/logs
-  video_dir: /home/fazil/workspace/projects/fraud_detection_v3/videos
-  snapshot_dir: /home/fazil/workspace/projects/fraud_detection_v3/logs/snapshots
+  log_dir: ./logs
+  video_dir: ./videos
+  snapshot_dir: ./logs/snapshots
   retention_days: 7
   retention_check_interval_hours: 6
   http_host: 0.0.0.0
@@ -77,6 +121,9 @@ models:
     name: Qwen/Qwen3-VL-30B-A3B-Instruct
     max_new_tokens: 512
     temperature: 0.1
+    # 4-bit (nf4) load: the bf16 30B peaks >121G on this box and OOMs;
+    # 4-bit keeps it ~18G resident. bitsandbytes verified on GB10.
+    load_in_4bit: true
     local_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
   # Segmentation model used by the perception pipeline. The path is
   # resolved to ./models/hf/facebook/sam2-hiera-large/<snapshot>/ by
@@ -109,6 +156,11 @@ observability:
 # as the soft/hard/emergency thresholds are crossed.
 # ----------------------------------------------------------------------
 reasoning:
+  # Qwen3-VL (4-bit) is the active/primary reasoner. Gemma stays as a
+  # lazy HTTP fallback (transformers_server on :8001) — with
+  # warm_fallback:false it is NEVER loaded unless Qwen errors, so the two
+  # are never resident together. This preserves the chain architecture
+  # while analysis runs on Qwen alone in practice.
   primary_provider: qwen3_vl
   fallback_provider: gemma
   warm_fallback: false
@@ -160,3 +212,36 @@ integrations:
     # Production should set TILLSHIELD_INGEST_TOKEN in .env so the agent
     # must send X-PhazeX-Ingest-Token on every call.
     ingest_token: ""
+
+    # ----------------------------------------------------------------
+    # POS-agent polling (additive; the push endpoints above still work).
+    # The app pulls recent transactions from the local TillShield POS
+    # agent every poll_every_seconds and opens cases only for RETURN
+    # rows with a negative total at an allow-listed return-counter
+    # workstation that maps to a configured camera. Correlation always
+    # uses the row's transactionDate, never poll time.
+    # ----------------------------------------------------------------
+    poll_enabled: true
+    # The POS agent reports transactionDate in this timezone (its
+    # transactionEndDate is UTC, ~4h behind). pos_event_at is normalised
+    # to UTC on ingest so it correlates with the UTC CCTV segments.
+    # IANA name or fixed offset (e.g. "+04:00").
+    pos_timezone: "Asia/Dubai"
+    base_url: http://localhost:8081
+    info_path: /pos/data/info
+    # Per-workstation range feed: ?workstationId=<id>&start=<ISO>&end=<ISO>
+    transactions_path: /pos/data/transactions
+    poll_every_seconds: 300        # query the agent every 5 minutes
+    request_timeout_sec: 30
+    # First poll with no checkpoint looks back this far; subsequent polls
+    # resume from the per-workstation cursor.
+    poll_lookback_seconds: 900
+    require_negative_amount: true
+    # Return-counter workstations (canonical terminal_id after TillShield
+    # normalisation). Only these open cases via the poller.
+    allowed_workstation_ids:
+      - "52"
+    # Each allow-listed workstation MUST map to a camera id defined under
+    # cameras: above, and that camera MUST carry a real rtsp_url.
+    workstation_camera_map:
+      "52": cam_return_01

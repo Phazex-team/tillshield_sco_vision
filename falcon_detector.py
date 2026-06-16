@@ -80,8 +80,14 @@ class FalconDetector:
         log.info("loading Falcon Perception (torch/cuda): %s dtype=%s",
                  model_id, resolved_dtype)
 
+        # A repo-local bundle path must go through hf_local_dir, not
+        # hf_model_id (the HF downloader rejects a filesystem path as a
+        # repo id). Detect a local directory and route accordingly.
+        import os as _os
+        _is_local_dir = bool(model_id) and _os.path.isdir(model_id)
         model, tokenizer, model_args = load_and_prepare_model(
-            hf_model_id=model_id,
+            hf_model_id=None if _is_local_dir else model_id,
+            hf_local_dir=model_id if _is_local_dir else None,
             dtype=resolved_dtype,
             backend="torch",
             device=device,
@@ -184,10 +190,18 @@ def _extract_labels(decoded: str) -> list[str]:
     image itself, with bbox coords for grounding).
     """
     import re
-    tokens = re.findall(r"[A-Za-z][A-Za-z _\-]{1,40}", decoded or "")
-    stop = {"image", "detection", "segmentation", "object", "user", "assistant"}
+    # Detection output is a stream of SPECIAL tokens (``<|image_cls|>``,
+    # ``<|image_reg_N|>``, ``<|image|>``) with NO real per-box label, so
+    # strip special-token markers first; anything left that looks like a
+    # token name (contains digits/underscores or image/reg/cls) is noise.
+    text = re.sub(r"<\|[^|]*\|>", " ", decoded or "")
+    tokens = re.findall(r"[A-Za-z][A-Za-z _\-]{1,40}", text)
+    stop = {"image", "detection", "segmentation", "object", "user",
+            "assistant", "cls", "reg", "system"}
     cleaned = [t.strip().lower() for t in tokens
-               if 2 <= len(t.strip()) <= 30 and t.strip().lower() not in stop]
+               if 2 <= len(t.strip()) <= 30
+               and t.strip().lower() not in stop
+               and not re.search(r"(image|reg|cls)", t.lower())]
     return cleaned
 
 

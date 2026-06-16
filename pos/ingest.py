@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +27,9 @@ from .schemas import PosBatchIn, PosEventIn
 
 
 CASE_OPENING_TYPES = {"RETURN", "REFUND"}
+
+# A camera resolver maps (store_id, terminal_id) -> camera_id or None.
+CameraResolver = Callable[[str, str], Optional[str]]
 
 
 def _payload_hash(payload: dict) -> str:
@@ -58,8 +61,54 @@ def _default_camera_for_store(store_id: str) -> str:
     return "cam_01"
 
 
-def ingest_batch(session: Session, batch: PosBatchIn) -> dict:
+def _configured_camera_ids(cfg) -> set[str]:
+    return {c.get("id") for c in (cfg.cameras or []) if c.get("id")}
+
+
+def _workstation_camera_map(cfg) -> dict[str, str]:
+    integrations = (cfg.raw.get("integrations") if cfg else None) or {}
+    ts = integrations.get("tillshield") or {}
+    raw = ts.get("workstation_camera_map") or {}
+    return {str(k): str(v) for k, v in raw.items() if k is not None and v}
+
+
+def resolve_camera_for_pos_event(store_id: str,
+                                 terminal_id: str,
+                                 cfg=None) -> Optional[str]:
+    """Resolve the camera for a POS event by canonical ``terminal_id``.
+
+    Workstation-aware routing:
+      * If ``integrations.tillshield.workstation_camera_map`` is set, the
+        terminal MUST be mapped to a camera that exists under
+        ``cameras:`` — otherwise return ``None`` (the caller persists the
+        event but opens no case; it is never sent to a default camera).
+      * If no map is configured at all, fall back to the legacy
+        store-default camera so existing single-camera deploys keep
+        working.
+    """
+    if cfg is None:
+        from app.config import load_config
+        cfg = load_config()
+    wsmap = _workstation_camera_map(cfg)
+    if not wsmap:
+        return _default_camera_for_store(store_id)
+    camera_id = wsmap.get(str(terminal_id))
+    if not camera_id:
+        return None  # workstation not mapped to any camera
+    if camera_id not in _configured_camera_ids(cfg):
+        return None  # mapped camera id is not defined under cameras:
+    return camera_id
+
+
+def ingest_batch(session: Session, batch: PosBatchIn,
+                 *, resolve_camera: Optional[CameraResolver] = None) -> dict:
     """Persist a batch idempotently. Returns a small summary dict.
+
+    ``resolve_camera`` (optional) maps (store_id, terminal_id) -> camera
+    id for case routing. When supplied and it returns ``None`` for an
+    event, the event is still persisted but NO case is opened (counted in
+    ``ignored_unmapped_workstation_events``). When omitted, the legacy
+    store-default camera is used so existing callers are unchanged.
 
     Result shape:
       {
@@ -67,6 +116,7 @@ def ingest_batch(session: Session, batch: PosBatchIn) -> dict:
         "events_inserted": int,
         "events_already_present": int,
         "cases_created": int,
+        "ignored_unmapped_workstation_events": int,
       }
     """
     batch.validate()
@@ -88,6 +138,7 @@ def ingest_batch(session: Session, batch: PosBatchIn) -> dict:
             "events_inserted": 0,
             "events_already_present": len(batch.events),
             "cases_created": 0,
+            "ignored_unmapped_workstation_events": 0,
             "duplicate_batch": True,
         }
 
@@ -106,6 +157,7 @@ def ingest_batch(session: Session, batch: PosBatchIn) -> dict:
     inserted = 0
     already = 0
     cases_created = 0
+    unmapped = 0
     for ev in batch.events:
         pos_event_id = _upsert_event(session, pb.id, ev)
         if pos_event_id is None:
@@ -113,14 +165,20 @@ def ingest_batch(session: Session, batch: PosBatchIn) -> dict:
             continue
         inserted += 1
         if ev.event_type in CASE_OPENING_TYPES:
-            if _open_case_for_event(session, pos_event_id, ev.store_id):
+            opened, reason = _open_case_for_event(
+                session, pos_event_id, ev.store_id, ev.terminal_id,
+                resolve_camera)
+            if opened:
                 cases_created += 1
+            elif reason == "unmapped":
+                unmapped += 1
 
     return {
         "batch_id": pb.id,
         "events_inserted": inserted,
         "events_already_present": already,
         "cases_created": cases_created,
+        "ignored_unmapped_workstation_events": unmapped,
         "duplicate_batch": False,
     }
 
@@ -169,17 +227,32 @@ def _upsert_event(session: Session,
 
 def _open_case_for_event(session: Session,
                          pos_event_id: str,
-                         store_id: str) -> bool:
+                         store_id: str,
+                         terminal_id: str,
+                         resolve_camera: Optional[CameraResolver] = None,
+                         ) -> tuple[bool, Optional[str]]:
+    """Open one case for ``pos_event_id``. Returns ``(opened, reason)``.
+
+    ``reason`` is ``"exists"`` (case already opened), ``"unmapped"`` (no
+    valid camera route — event kept, case skipped), or ``None`` on open.
+    """
     existing = session.execute(
         select(Case).where(Case.pos_event_id == pos_event_id)
     ).scalar_one_or_none()
     if existing is not None:
-        return False
-    camera_id = _default_camera_for_store(store_id)
+        return (False, "exists")
+    if resolve_camera is not None:
+        camera_id = resolve_camera(store_id, terminal_id)
+    else:
+        camera_id = _default_camera_for_store(store_id)
+    if not camera_id:
+        # No valid workstation->camera route: never fall back to the
+        # first/default camera. Persist the event, open no case.
+        return (False, "unmapped")
     session.add(Case(
         pos_event_id=pos_event_id,
         camera_id=camera_id,
         status="OPEN",
     ))
     session.flush()
-    return True
+    return (True, None)

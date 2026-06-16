@@ -11,6 +11,7 @@ on the first read of ``/api/v1/storage/disk`` or ``/api/v1/cases``.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 
@@ -21,12 +22,42 @@ from fastapi.staticfiles import StaticFiles
 log = logging.getLogger(__name__)
 
 
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Start/stop the TillShield POS-agent poller alongside the app.
+
+    The poller only starts when ``integrations.tillshield.poll_enabled``
+    is true. It runs in a daemon thread so a slow/unavailable POS agent
+    never blocks boot, and is stopped cleanly on shutdown. Failure to
+    start the poller is isolated — the API/UI still serve.
+    """
+    worker = None
+    try:
+        from app.config import load_config
+        from pos.tillshield_poll import PollWorker, load_poll_config
+        pc = load_poll_config(load_config())
+        if pc.enabled:
+            worker = PollWorker(interval=pc.poll_every_seconds)
+            worker.start()
+        else:
+            log.info("tillshield poller disabled (poll_enabled=false)")
+    except Exception:
+        log.exception("tillshield poller failed to start; API still serving")
+    try:
+        yield
+    finally:
+        if worker is not None:
+            with contextlib.suppress(Exception):
+                worker.stop()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Return / Refund Visual Review",
         version="3.0.0",
         docs_url="/api/v1/docs",
         openapi_url="/api/v1/openapi.json",
+        lifespan=_lifespan,
     )
 
     # Idempotent schema init so a fresh repo serves correctly even

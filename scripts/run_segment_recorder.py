@@ -24,6 +24,9 @@ if str(REPO_ROOT) not in sys.path:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--segment-duration-sec", type=int, default=60)
+    ap.add_argument("--camera-id", action="append", default=None,
+                    help="Only record these camera id(s). Repeatable. "
+                         "Default: every configured camera.")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -41,12 +44,16 @@ def main() -> int:
     cfg = load_config()
     storage = cfg.storage_root
 
+    wanted = set(args.camera_id) if args.camera_id else None
+
     recorders: list[SegmentRecorder] = []
     for cam in cfg.cameras:
         cam_id = cam.get("id")
         rtsp = cam.get("rtsp_url")
         if not cam_id or not rtsp:
             log.warning("skipping camera %r: missing id/rtsp_url", cam)
+            continue
+        if wanted is not None and cam_id not in wanted:
             continue
         rec = SegmentRecorder(
             RecorderConfig(

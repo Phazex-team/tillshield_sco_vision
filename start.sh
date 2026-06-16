@@ -47,6 +47,7 @@ fi
 source ./venv/bin/activate
 
 export FRAUD_CONFIG="${FRAUD_CONFIG:-./config.yaml}"
+export FRAUD_OFFLINE_MODE="${FRAUD_OFFLINE_MODE:-1}"
 export APP_PORT
 export VLLM_PORT="${VLLM_PORT:-8001}"
 export VLLM_URL="${VLLM_URL:-http://localhost:${VLLM_PORT}}"

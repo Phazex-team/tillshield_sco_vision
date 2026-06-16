@@ -114,7 +114,9 @@ CREATE TABLE IF NOT EXISTS video_windows (
     path text,
     sha256 text,
     status run_status NOT NULL DEFAULT 'PENDING',
-    failure_reason text
+    failure_reason text,
+    acquisition_source text,
+    nvr_metadata jsonb
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -235,6 +237,24 @@ CREATE TABLE IF NOT EXISTS ocr_results (
     engine text NOT NULL DEFAULT 'falcon',
     crop_uri text,
     created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- TillShield POS-agent poller cursor + operational counters.
+CREATE TABLE IF NOT EXISTS integration_poll_state (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_system text NOT NULL DEFAULT 'tillshield_agent',
+    workstation_id text NOT NULL,
+    last_txn_at timestamptz,
+    last_txn_id text,
+    last_poll_at timestamptz,
+    last_success_at timestamptz,
+    last_error text,
+    rows_seen integer NOT NULL DEFAULT 0,
+    events_inserted integer NOT NULL DEFAULT 0,
+    cases_created integer NOT NULL DEFAULT 0,
+    ignored_counts jsonb,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (source_system, workstation_id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_pos_events_at ON pos_events (pos_event_at);

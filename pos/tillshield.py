@@ -22,7 +22,7 @@ Configuration knobs live under ``config.yaml.integrations.tillshield``:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -71,6 +71,55 @@ def _ignore_unknown(cfg) -> bool:
     return bool(ts.get("ignore_unknown_types", True))
 
 
+def _parse_timezone(value: Optional[str]) -> Optional[tzinfo]:
+    """Parse a POS timezone config value into a ``tzinfo``.
+
+    Accepts an IANA name (``Asia/Dubai``) or a fixed offset
+    (``+04:00`` / ``-05:30``). Returns ``None`` if unset or unparseable
+    (callers then treat naive timestamps as UTC — the legacy behavior)."""
+    if not value:
+        return None
+    v = str(value).strip()
+    if v[0] in "+-" and ":" in v:
+        try:
+            sign = 1 if v[0] == "+" else -1
+            hh, mm = v[1:].split(":")
+            return timezone(sign * timedelta(hours=int(hh), minutes=int(mm)))
+        except Exception:
+            log.warning("tillshield: bad pos_timezone offset %r; ignoring", v)
+            return None
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(v)
+    except Exception:
+        log.warning("tillshield: unknown pos_timezone %r; ignoring", v)
+        return None
+
+
+def _resolve_pos_timezone(cfg) -> Optional[tzinfo]:
+    integrations = (cfg.raw.get("integrations") if cfg else None) or {}
+    ts = integrations.get("tillshield") or {}
+    return _parse_timezone(ts.get("pos_timezone"))
+
+
+def _to_naive_utc(dt: datetime, pos_tz: Optional[tzinfo]) -> datetime:
+    """Normalise a POS ``transaction_date`` to naive UTC so it lines up
+    with the recorder's UTC segment timestamps during correlation.
+
+      * tz-aware input  -> converted to UTC, tzinfo stripped.
+      * naive + pos_tz  -> interpreted in ``pos_tz``, converted to UTC.
+      * naive, no pos_tz -> returned unchanged (assumed already UTC).
+    """
+    if not isinstance(dt, datetime):
+        return dt
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    if pos_tz is not None:
+        return dt.replace(tzinfo=pos_tz).astimezone(
+            timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def _line_id_for(txn: TillShieldTransaction, item: Optional[dict],
                  fallback_index: int) -> str:
     if item:
@@ -88,13 +137,19 @@ def normalise_to_pos_events(
         txn: TillShieldTransaction,
         *,
         line_level: bool = False,
-        source_ip: Optional[str] = None) -> list[PosEventIn]:
+        source_ip: Optional[str] = None,
+        pos_tz: Optional[tzinfo] = None) -> list[PosEventIn]:
     """Build one (or more) ``PosEventIn`` rows from a TillShield row.
 
     Returns ``[]`` if the row's transaction_type is not a return/refund
     family; callers should count these in ``ignored_non_return_events``.
+
+    ``pos_tz`` (when set) is the timezone the POS agent reports
+    ``transaction_date`` in; the stored ``pos_event_at`` is normalised to
+    naive UTC so it correlates with UTC CCTV segments.
     """
     event_type = _normalise_event_type(txn.transaction_type)
+    event_at = _to_naive_utc(txn.transaction_date, pos_tz)
 
     raw_payload = {
         "source_system": "tillshield_agent",
@@ -119,7 +174,7 @@ def normalise_to_pos_events(
             transaction_id=txn.transaction_id,
             line_id="transaction",
             event_type=event_type,
-            pos_event_at=txn.transaction_date,
+            pos_event_at=event_at,
             staff_id=txn.operator_id,
             sku=None,
             item_description=None,
@@ -143,7 +198,7 @@ def normalise_to_pos_events(
                 transaction_id=txn.transaction_id,
                 line_id="transaction",
                 event_type=event_type,
-                pos_event_at=txn.transaction_date,
+                pos_event_at=event_at,
                 staff_id=txn.operator_id,
                 amount=float(txn.total_amount)
                     if txn.total_amount is not None else None,
@@ -168,7 +223,7 @@ def normalise_to_pos_events(
             transaction_id=txn.transaction_id,
             line_id=line_id,
             event_type=event_type,
-            pos_event_at=txn.transaction_date,
+            pos_event_at=event_at,
             staff_id=txn.operator_id,
             sku=str(item.get("sku") or item.get("plu") or
                     item.get("product_code") or "") or None,
@@ -186,11 +241,18 @@ def ingest_tillshield_batch(session: Session,
                             *,
                             cfg,
                             batch: TillShieldBatch,
-                            source_ip: Optional[str] = None) -> dict:
-    """Translate + ingest. Returns an HTTP-friendly summary."""
+                            source_ip: Optional[str] = None,
+                            resolve_camera=None) -> dict:
+    """Translate + ingest. Returns an HTTP-friendly summary.
+
+    ``resolve_camera`` (optional) is forwarded to ``ingest_batch`` for
+    workstation-aware case routing. When omitted (the push endpoints'
+    default) the legacy store-default camera is used.
+    """
     accepted = _accepted_return_types(cfg)
     line_level = _line_level_enabled(cfg)
     ignore_unknown = _ignore_unknown(cfg)
+    pos_tz = _resolve_pos_timezone(cfg)
 
     summary = {
         "events_inserted": 0,
@@ -198,6 +260,7 @@ def ingest_tillshield_batch(session: Session,
         "cases_created": 0,
         "case_ids": [],
         "ignored_non_return_events": 0,
+        "ignored_unmapped_workstation_events": 0,
         "errors": [],
     }
 
@@ -217,7 +280,8 @@ def ingest_tillshield_batch(session: Session,
             continue
         try:
             events = normalise_to_pos_events(
-                txn, line_level=line_level, source_ip=source_ip)
+                txn, line_level=line_level, source_ip=source_ip,
+                pos_tz=pos_tz)
         except Exception as exc:
             summary["errors"].append({
                 "index": idx,
@@ -243,7 +307,8 @@ def ingest_tillshield_batch(session: Session,
         raw_payload={"tillshield_batch": raw_for_audit},
     )
     try:
-        result = ingest_batch(session, pos_batch)
+        result = ingest_batch(session, pos_batch,
+                              resolve_camera=resolve_camera)
     except ValueError as exc:
         summary["errors"].append({"error": str(exc)})
         return summary
@@ -252,6 +317,8 @@ def ingest_tillshield_batch(session: Session,
     summary["events_already_present"] = result.get(
         "events_already_present", 0)
     summary["cases_created"] = result.get("cases_created", 0)
+    summary["ignored_unmapped_workstation_events"] = result.get(
+        "ignored_unmapped_workstation_events", 0)
 
     # Surface the case IDs we just opened so the calling agent can wire
     # them into its own audit trail.

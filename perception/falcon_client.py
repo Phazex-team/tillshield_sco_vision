@@ -39,33 +39,56 @@ class FalconClient:
         target = self.model_path or self.model_name
         self._detector = FalconDetector(target)
 
+    # Falcon-Perception is a referring detector: it returns boxes that
+    # match a query phrase but emits NO per-box class label. To get
+    # labels the track-gating can use (``perception.temporal_memory``
+    # keys on "item"/"product"/"receipt"/...), we run one query per
+    # category and stamp the category name onto every box it returns.
+    DEFAULT_CATEGORIES: dict[str, str] = {
+        "item": ("item, product, merchandise, bag, shopping bag, box, "
+                 "package, clothing, bottle, electronics, phone"),
+        "receipt": "receipt, document, paper, invoice",
+        "person": "person, hand, arm, cashier, customer",
+    }
+
     def detect_on_frames(self,
                          frames: list[tuple[int, datetime, Image.Image]],
                          *,
-                         query: str) -> list[Detection]:
-        """Run detection on a list of ``(frame_idx, ts, pil_image)``.
+                         query: Optional[str] = None,
+                         categories: Optional[dict[str, str]] = None
+                         ) -> list[Detection]:
+        """Run category-aware detection on ``(frame_idx, ts, pil_image)``.
 
-        Returns a flat ``Detection`` list. Catches exceptions per-frame
-        so a single decoding failure doesn't lose the rest of the window.
+        For each frame and each ``{label: query}`` category, the matched
+        boxes are returned as ``Detection``s labelled with the category
+        name. ``query`` is accepted for backward compatibility (added to
+        the categories under a generic "item" bucket). Exceptions are
+        caught per (frame, category) so one decode failure never loses
+        the rest of the window.
         """
         self._ensure_loaded()
+        cats = dict(categories or self.DEFAULT_CATEGORIES)
+        if query:
+            cats.setdefault("item", query)
         results: list[Detection] = []
         for frame_idx, ts, img in frames:
-            try:
-                _, dets = self._detector.detect(img, query=query)
-            except Exception:
-                log.exception("falcon detect failed on frame %d", frame_idx)
-                continue
-            for d in dets:
-                results.append(Detection(
-                    label=getattr(d, "label", "object"),
-                    score=float(getattr(d, "score", 0.0)),
-                    bbox_xyxy=[float(x) for x in d.bbox_px],
-                    frame_id=f"frame_{frame_idx:06d}",
-                    frame_idx=frame_idx,
-                    ts=ts,
-                    query=query,
-                ))
+            for label, cat_query in cats.items():
+                try:
+                    _, dets = self._detector.detect(img, query=cat_query)
+                except Exception:
+                    log.exception("falcon detect failed on frame %d (%s)",
+                                  frame_idx, label)
+                    continue
+                for d in dets:
+                    results.append(Detection(
+                        label=label,
+                        score=float(getattr(d, "score", 0.0)) or 0.5,
+                        bbox_xyxy=[float(x) for x in d.bbox_px],
+                        frame_id=f"frame_{frame_idx:06d}",
+                        frame_idx=frame_idx,
+                        ts=ts,
+                        query=cat_query,
+                    ))
         return results
 
     def unload(self) -> None:

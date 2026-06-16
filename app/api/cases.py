@@ -41,6 +41,10 @@ def _serialise_window(w) -> dict:
         "actual_end_at": w.actual_end_at.isoformat()
             if w.actual_end_at else None,
         "failure_reason": w.failure_reason,
+        # Which path produced the window (local vs NVR on-demand) + the
+        # NVR query observability so operators see what was attempted.
+        "acquisition_source": getattr(w, "acquisition_source", None),
+        "nvr": getattr(w, "nvr_metadata", None),
     }
 
 

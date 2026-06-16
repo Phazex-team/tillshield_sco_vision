@@ -147,6 +147,11 @@ class VideoWindow(Base):
     sha256: Mapped[Optional[str]] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), default="PENDING")
     failure_reason: Mapped[Optional[str]] = mapped_column(Text)
+    # Which acquisition path produced this window (local_segments_used /
+    # nvr_clip_retrieved / nvr_recording_found_no_export / ...), plus the
+    # NVR query/observability metadata for operators.
+    acquisition_source: Mapped[Optional[str]] = mapped_column(String(48))
+    nvr_metadata: Mapped[Optional[dict]] = mapped_column(JSON)
 
 
 class Artifact(Base):
@@ -283,6 +288,39 @@ class OcrResult(Base):
     engine: Mapped[str] = mapped_column(String(64), default="falcon")
     crop_uri: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class IntegrationPollState(Base):
+    """Per-workstation polling cursor + operational counters for the
+    TillShield POS-agent poller. One row per (source_system,
+    workstation_id). The cursor (``last_txn_at`` + ``last_txn_id``) lets
+    a restarted poller resume without reprocessing the whole feed; the
+    counters/timestamps back the ``/integrations/tillshield/status``
+    endpoint."""
+    __tablename__ = "integration_poll_state"
+    __table_args__ = (
+        UniqueConstraint("source_system", "workstation_id",
+                         name="uq_poll_state_source_ws"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    source_system: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="tillshield_agent")
+    workstation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Cursor: the latest transaction timestamp/id we have consumed.
+    last_txn_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_txn_id: Mapped[Optional[str]] = mapped_column(String(64))
+    # Operational/observability fields.
+    last_poll_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    rows_seen: Mapped[int] = mapped_column(Integer, default=0)
+    events_inserted: Mapped[int] = mapped_column(Integer, default=0)
+    cases_created: Mapped[int] = mapped_column(Integer, default=0)
+    # Cumulative ignored-by-reason counters (JSON dict).
+    ignored_counts: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class AuditLog(Base):
