@@ -105,7 +105,8 @@ def decide(summary: EvidenceSummary) -> PolicyDecision:
 def summary_from_vlm(parsed: dict, *, footage_valid: bool,
                      obstructed: bool | None = None,
                      camera_gap: bool = False,
-                     perception_result: dict | None = None
+                     perception_result: dict | None = None,
+                     legacy_review_only: bool = False
                      ) -> EvidenceSummary:
     """Adapt a VLM ``reason`` payload to an ``EvidenceSummary``.
 
@@ -121,6 +122,14 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
     never set ``physical_item_track=True`` on its own. Without an
     independent track-level signal, the policy refuses to upgrade a
     case to ``VERIFIED`` even when the VLM claims a clean handover.
+
+    ``legacy_review_only=True`` is a tag for callers (eg. the
+    in-process ``monitor.py`` path) that have NO structured perception
+    layer. In that mode, the policy appends a legacy contradiction
+    whenever the VLM claims a physical item with no qualifying track,
+    so the outcome can never be promoted past REVIEW on VLM alone.
+    Real track evidence (perception_result with a valid track) still
+    allows VERIFIED — the flag is a hint, not a hard veto.
     """
     if not isinstance(parsed, dict):
         parsed = {}
@@ -192,6 +201,12 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
     if vlm_says_physical_item and not physical_item_track:
         contradictions.append(
             "vlm claims physical item presented but no track evidence")
+    # Legacy path (e.g. in-process monitor.py) has NO structured
+    # perception. Tag the absence explicitly so the contradiction list
+    # records it and the reviewer queue knows why.
+    if legacy_review_only and not physical_item_track:
+        contradictions.append(
+            "legacy_review_only path: no structured perception evidence")
 
     limitations = parsed.get("limitations") or []
     notes = [str(s)[:240] for s in limitations] if isinstance(limitations,

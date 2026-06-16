@@ -55,7 +55,7 @@ def test_artifact_sha_equals_literal_file_sha(tmp_path, monkeypatch):
     pkg, case_id = _new_pkg(SM)
     literal = hashlib.sha256(Path(pkg["uri"]).read_bytes()).hexdigest()
     assert pkg["sha256"] == literal
-    assert pkg["file_sha256"] == literal
+    assert pkg["literal_file_sha256"] == literal
 
     from db.models import Artifact
     with SM() as s:
