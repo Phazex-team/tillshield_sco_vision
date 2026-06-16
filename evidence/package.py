@@ -160,43 +160,71 @@ def build_package(session: Session, case_id: str) -> dict:
     }
 
 
+_PACKAGE_SHA_PLACEHOLDER = "0" * 64
+
+
 def write_package(session: Session, case_id: str) -> dict:
-    """Build + persist the package. Returns the saved dict including
-    the package_sha256 and on-disk path. Appends a versioned filename
-    so prior packages are preserved (PRODUCTION_SPEC: packages are
-    append/versioned, never overwritten silently)."""
+    """Build + persist the package. The on-disk file is self-verifying:
+
+      * ``audit.package_sha256`` inside the JSON is the sha256 of the
+        FULL file with that field zeroed out. ``evidence.verify`` can
+        reproduce the hash by reading the file, replacing the field
+        value with 64 zeros, and re-hashing.
+      * ``audit.content_sha256`` is the sha256 of the payload BEFORE
+        the package_sha256 field is finalised — useful for detecting
+        substantive changes.
+
+    Returns a dict including the file's actual hash (which equals the
+    embedded ``package_sha256``). Appends a versioned filename so prior
+    packages are preserved.
+    """
     payload = build_package(session, case_id)
-    blob = json.dumps(payload, indent=2, sort_keys=True,
-                      default=str).encode()
-    sha = hashlib.sha256(blob).hexdigest()
-    payload["audit"]["package_sha256"] = sha
+    # 1) content_sha256: hash of the canonical payload BEFORE the
+    # package_sha256 field exists. Stable across multiple writes of
+    # the same case state (modulo the built_at timestamp).
+    content_blob = json.dumps(payload, indent=2, sort_keys=True,
+                              default=str).encode()
+    content_sha = hashlib.sha256(content_blob).hexdigest()
+    payload["audit"]["content_sha256"] = content_sha
+
+    # 2) Write the file with a placeholder sha; compute the real
+    # file-hash; then patch the placeholder with the real hash.
+    payload["audit"]["package_sha256"] = _PACKAGE_SHA_PLACEHOLDER
+    placeholder_blob = json.dumps(payload, indent=2, sort_keys=True,
+                                  default=str).encode()
+    file_sha = hashlib.sha256(placeholder_blob).hexdigest()
+    final_blob = placeholder_blob.replace(
+        b'"package_sha256": "' + _PACKAGE_SHA_PLACEHOLDER.encode() + b'"',
+        b'"package_sha256": "' + file_sha.encode() + b'"',
+    )
 
     out_dir = case_dir(case_id) / PACKAGE_DIR_NAME
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Versioned filename: pkg_<timestamp>_<sha8>.json
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    fname = f"pkg_{ts}_{sha[:8]}.json"
+    fname = f"pkg_{ts}_{file_sha[:8]}.json"
     out_path = out_dir / fname
-    final_blob = json.dumps(payload, indent=2, sort_keys=True,
-                            default=str).encode()
     out_path.write_bytes(final_blob)
 
-    # Record the package as an artifact row so downstream callers find
-    # it via the case-artifacts relationship.
+    # Artifact row stores the SELF-VERIFYING file_sha. A reviewer who
+    # downloads the file can call evidence.verify_package_file to
+    # confirm tamper-evident integrity offline.
     art = Artifact(
         case_id=case_id,
         artifact_type="PACKAGE",
         uri=str(out_path),
-        sha256=hashlib.sha256(final_blob).hexdigest(),
+        sha256=file_sha,
         mime_type="application/json",
-        artifact_metadata={"versioned_filename": fname},
+        artifact_metadata={"versioned_filename": fname,
+                           "content_sha256": content_sha,
+                           "hash_scheme": "sha256_with_zeroed_field"},
     )
     session.add(art)
     session.flush()
     return {
         "case_id": case_id,
         "uri": str(out_path),
-        "sha256": art.sha256,
+        "sha256": file_sha,
+        "content_sha256": content_sha,
         "payload": payload,
     }
 

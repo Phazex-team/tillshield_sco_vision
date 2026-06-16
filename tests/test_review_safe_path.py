@@ -82,7 +82,17 @@ def test_review_safe_payload_with_clean_handover_is_verified():
         "confidence": "high",
         "limitations": [],
     }
-    summary = summary_from_vlm(clean, footage_valid=True)
+    # Independent perception evidence is required for VERIFIED; VLM
+    # alone cannot upgrade a case (PRODUCTION_SPEC §11 track gating).
+    perception = {"tracks": [{"tracker_id": "track_X",
+                              "label": "shirt",
+                              "physical_item_candidate": True,
+                              "zones": ["counter_zone"],
+                              "events": ["entered_counter_zone",
+                                         "handover_candidate"],
+                              "confidence": 0.9}]}
+    summary = summary_from_vlm(clean, footage_valid=True,
+                               perception_result=perception)
     decision = decide(summary)
     assert decision.outcome == OUTCOME_VERIFIED
 

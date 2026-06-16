@@ -25,6 +25,9 @@ def main() -> int:
     ap.add_argument("--reload", action="store_true")
     ap.add_argument("--skip-checks", action="store_true",
                     help="Skip startup integrity checks (dev only).")
+    ap.add_argument("--skip-db-init", action="store_true",
+                    help="Skip DB schema init (assume migrations were "
+                         "applied externally — production Postgres path).")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -41,6 +44,20 @@ def main() -> int:
             print(f"STARTUP FAILED:\n{exc}", file=sys.stderr)
             return 2
         log.info("startup checks ok: %s", summary)
+
+    # Initialise the DB schema before serving so a fresh repo never
+    # 500s on /api/v1/storage/disk or /api/v1/cases. For dev / SQLite
+    # this is idempotent and equivalent to running the Postgres
+    # migration. Production Postgres deployments should pre-apply
+    # ``db/migrations/0001_core.sql`` and pass ``--skip-db-init``.
+    if not args.skip_db_init:
+        try:
+            from db.session import init_schema
+            init_schema()
+            log.info("db schema initialised")
+        except Exception:
+            log.exception("db schema init failed")
+            return 2
 
     import uvicorn
     uvicorn.run("app.main:app", host=args.host, port=args.port,

@@ -79,8 +79,11 @@ def run_perception(session, case, window) -> dict:
             production_mode=False,
         )
 
+    window_start_ts = (window.actual_start_at or
+                       window.requested_start_at)
     return run_perception_on_window(
         window_path=window.path,
+        window_start_ts=window_start_ts,
         fps=int(cfg.settings.get("gemma_video_fps", 25)),
         zones=_load_zones(cfg, case.camera_id),
         falcon_client=FalconClient(model_path=falcon_path),
@@ -97,18 +100,25 @@ def run_perception_on_window(*,
                              falcon_client: FalconClient,
                              sam2_client: Sam2Client,
                              sampling: SamplingPolicy,
+                             window_start_ts: Optional[datetime] = None,
                              ocr_engine: Optional[OcrEngine] = None,
                              falcon_query: str = DEFAULT_FALCON_QUERY,
                              ) -> dict:
     """Decode + run perception on a single video window. ``window_path``
     may be ``None`` in offline / synthetic test mode — in that case the
     sampler returns no frames and the function returns an empty result
-    with the appropriate limitation tag."""
+    with the appropriate limitation tag.
+
+    ``window_start_ts`` anchors every detection / track / keyframe
+    timestamp to real CCTV wall-clock time. Callers must pass it for
+    real-world correctness; tests may omit it (and a limitation is
+    emitted noting the fallback)."""
     limitations: list[str] = []
     detections: list[Detection] = []
     frames_for_ocr: dict[int, object] = {}
 
-    frames = _sample_frames(window_path, fps, sampling, limitations)
+    frames = _sample_frames(window_path, fps, sampling, limitations,
+                            window_start_ts=window_start_ts)
     if not frames:
         return {
             "detections": [], "tracks": [], "keyframes": [],
@@ -165,7 +175,10 @@ def run_perception_on_window(*,
 
 def _sample_frames(window_path: Optional[str], fps: int,
                    sampling: SamplingPolicy,
-                   limitations: list[str]) -> list[tuple[int, datetime, object]]:
+                   limitations: list[str],
+                   *,
+                   window_start_ts: Optional[datetime] = None
+                   ) -> list[tuple[int, datetime, object]]:
     if not window_path:
         limitations.append("no_window_path")
         return []
@@ -185,10 +198,19 @@ def _sample_frames(window_path: Optional[str], fps: int,
         cap.release()
         limitations.append("video_zero_frames")
         return []
+    # Anchor sampling timestamps to the actual CCTV window start so
+    # detections / tracks / keyframes carry real wall-clock values.
+    if window_start_ts is None:
+        base_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+        limitations.append("perception_ts_anchored_to_now")
+    elif window_start_ts.tzinfo is not None:
+        base_ts = window_start_ts.astimezone(timezone.utc).replace(
+            tzinfo=None)
+    else:
+        base_ts = window_start_ts
     plan = plan_indices(
         fps=actual_fps, frame_count=frame_count,
-        base_start_ts=datetime.now(timezone.utc).replace(tzinfo=None),
-        policy=sampling,
+        base_start_ts=base_ts, policy=sampling,
     )
     out: list[tuple[int, datetime, object]] = []
     for idx, ts in plan:

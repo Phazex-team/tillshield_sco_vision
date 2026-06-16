@@ -124,7 +124,11 @@ def test_camera_gap_forces_review():
     assert d.outcome == OUTCOME_REVIEW
 
 
-def test_legacy_vlm_payload_adapter():
+def test_legacy_vlm_payload_adapter_needs_track_evidence_to_verify():
+    """Track-gating contract: VLM alone never produces VERIFIED. The
+    legacy ``physical_item_presented`` field is now a self-reported
+    hint; a real ``perception_result`` track must independently
+    confirm it for the policy to upgrade."""
     parsed = {
         "handover_occurred": True,
         "item_count": 1,
@@ -133,9 +137,24 @@ def test_legacy_vlm_payload_adapter():
         "physical_item_presented": True,
         "confidence": "high",
     }
-    summary = summary_from_vlm(parsed, footage_valid=True)
-    d = decide(summary)
-    assert d.outcome == OUTCOME_VERIFIED
+    # Without perception evidence the policy must NOT verify.
+    summary_no_track = summary_from_vlm(parsed, footage_valid=True)
+    assert decide(summary_no_track).outcome == OUTCOME_REVIEW
+
+    # With independent perception evidence, the policy may verify.
+    perception = {
+        "tracks": [{
+            "tracker_id": "track_0001",
+            "label": "shirt",
+            "physical_item_candidate": True,
+            "zones": ["counter_zone"],
+            "events": ["entered_counter_zone", "handover_candidate"],
+            "confidence": 0.9,
+        }]
+    }
+    summary_with_track = summary_from_vlm(parsed, footage_valid=True,
+                                          perception_result=perception)
+    assert decide(summary_with_track).outcome == OUTCOME_VERIFIED
 
 
 def test_policy_never_emits_fraud_label():

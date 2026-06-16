@@ -43,6 +43,11 @@ fraud_detection_v3.backup.*.tar.gz
 # the destination machine can verify after rsync/tar from a prepared
 # repo. The 100+GB of weights themselves are not.
 models/hf/
-wheelhouse/
+# Wheelhouse holds ~2.7 GB of binary wheels (sam2 + torch + cuda) needed
+# for an offline install. The repo tracks the manifest.json so verify
+# scripts can confirm coverage on the destination; the wheel files
+# themselves travel via tar/rsync, not git.
+wheelhouse/*
+!wheelhouse/manifest.json
 !models/README.md
 !models/manifest.json

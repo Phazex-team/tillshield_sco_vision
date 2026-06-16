@@ -156,8 +156,10 @@ def analyze_case(session: Session,
             log.exception("perception persist failed (continuing)")
 
     # ----- 4. Build the evidence manifest with REAL frames -----------
+    window_start_naive = build.actual_start_at or plan.requested_start
     sampled_frames = _extract_keyframe_data_urls(
         window_path=build.out_path,
+        window_start_ts=window_start_naive,
         keyframes=(perception_result or {}).get("keyframes") or [],
         max_frames=manifest_max_frames,
     )
@@ -295,6 +297,7 @@ def _storage_root() -> Path:
 
 
 def _extract_keyframe_data_urls(*, window_path: str,
+                                window_start_ts: datetime,
                                 keyframes: list,
                                 max_frames: int) -> list[dict]:
     """Decode a small number of frames from the built window and encode
@@ -342,6 +345,11 @@ def _extract_keyframe_data_urls(*, window_path: str,
                 break
     indices = sorted(indices)[:max_frames]
 
+    # Anchor frame timestamps to the actual CCTV window start so each
+    # frame carries a wall-clock value aligned with the POS event,
+    # not a synthetic placeholder.
+    base_ts = _ensure_naive_utc(window_start_ts)
+
     out: list[dict] = []
     from PIL import Image
     for i, idx in enumerate(indices):
@@ -357,19 +365,24 @@ def _extract_keyframe_data_urls(*, window_path: str,
         out.append({
             "frame_id": f"frame_{idx:06d}",
             "frame_idx": int(idx),
-            "ts": _ts_for_index(idx, fps).isoformat(),
+            "ts": _ts_for_index(idx, fps, base_ts).isoformat(),
             "image_url": f"data:image/jpeg;base64,{b64}",
         })
     cap.release()
     return out
 
 
-def _ts_for_index(idx: int, fps: float) -> datetime:
-    # The window starts at ``now`` for the offset; downstream just needs
-    # a consistent monotonic timestamp anchored to the window.
+def _ensure_naive_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _ts_for_index(idx: int, fps: float, base_ts: datetime) -> datetime:
+    """Frame timestamp = ``base_ts + idx/fps``. ``base_ts`` is the
+    real CCTV window start."""
     from datetime import timedelta
-    return datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(
-        seconds=idx / max(fps, 1.0))
+    return base_ts + timedelta(seconds=idx / max(fps, 1.0))
 
 
 def _adapt_vlm_result(vlm_result, prompt_version: str) -> dict:

@@ -4,6 +4,10 @@ Mounts the v1 API routers and the legacy static dashboard. The factory
 is intentionally side-effect-light: importing it should not load any
 model or start the segment recorder. Wire-up of long-running services
 happens in ``scripts/run_app.py``.
+
+The factory does ensure the SQLite/Postgres schema is initialised
+before requests are accepted — a fresh-repo deployment must never 500
+on the first read of ``/api/v1/storage/disk`` or ``/api/v1/cases``.
 """
 from __future__ import annotations
 
@@ -24,6 +28,14 @@ def create_app() -> FastAPI:
         docs_url="/api/v1/docs",
         openapi_url="/api/v1/openapi.json",
     )
+
+    # Idempotent schema init so a fresh repo serves correctly even
+    # before scripts/run_app.py runs its own init step.
+    try:
+        from db.session import init_schema
+        init_schema()
+    except Exception:
+        log.exception("db schema init failed at app construction")
 
     # Mount API v1 routers.
     from app.api import (

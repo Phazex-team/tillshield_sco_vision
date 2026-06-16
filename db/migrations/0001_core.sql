@@ -171,6 +171,72 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS detections (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id uuid NOT NULL REFERENCES cases(id),
+    video_window_id uuid REFERENCES video_windows(id),
+    label text NOT NULL,
+    score numeric NOT NULL DEFAULT 0,
+    bbox_xyxy jsonb,
+    frame_id text NOT NULL,
+    frame_idx int NOT NULL DEFAULT 0,
+    frame_ts timestamptz,
+    query text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS tracks (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id uuid NOT NULL REFERENCES cases(id),
+    video_window_id uuid REFERENCES video_windows(id),
+    label text NOT NULL,
+    tracker_id text,
+    first_seen_ts timestamptz,
+    last_seen_ts timestamptz,
+    confidence numeric NOT NULL DEFAULT 0,
+    zones jsonb,
+    events jsonb,
+    physical_item_candidate boolean NOT NULL DEFAULT false,
+    receipt_candidate boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS track_observations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    track_id uuid NOT NULL REFERENCES tracks(id),
+    detection_id uuid REFERENCES detections(id),
+    frame_id text NOT NULL,
+    frame_idx int NOT NULL DEFAULT 0,
+    frame_ts timestamptz,
+    bbox_xyxy jsonb
+);
+
+CREATE TABLE IF NOT EXISTS keyframes (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id uuid NOT NULL REFERENCES cases(id),
+    video_window_id uuid REFERENCES video_windows(id),
+    role text NOT NULL,
+    frame_id text NOT NULL,
+    frame_idx int NOT NULL DEFAULT 0,
+    frame_ts timestamptz,
+    track_id_ref text,
+    uri text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ocr_results (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id uuid NOT NULL REFERENCES cases(id),
+    video_window_id uuid REFERENCES video_windows(id),
+    frame_id text NOT NULL,
+    bbox_xyxy jsonb,
+    text text NOT NULL DEFAULT '',
+    confidence numeric NOT NULL DEFAULT 0,
+    engine text NOT NULL DEFAULT 'falcon',
+    crop_uri text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS ix_pos_events_at ON pos_events (pos_event_at);
 CREATE INDEX IF NOT EXISTS ix_cases_status ON cases (status);
 CREATE INDEX IF NOT EXISTS ix_segments_camera_time
@@ -178,3 +244,8 @@ CREATE INDEX IF NOT EXISTS ix_segments_camera_time
 CREATE INDEX IF NOT EXISTS ix_artifacts_case ON artifacts (case_id, artifact_type);
 CREATE INDEX IF NOT EXISTS ix_vlm_runs_case ON vlm_runs (case_id);
 CREATE INDEX IF NOT EXISTS ix_audit_entity ON audit_log (entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS ix_detections_case ON detections (case_id);
+CREATE INDEX IF NOT EXISTS ix_tracks_case ON tracks (case_id);
+CREATE INDEX IF NOT EXISTS ix_observations_track ON track_observations (track_id);
+CREATE INDEX IF NOT EXISTS ix_keyframes_case ON keyframes (case_id);
+CREATE INDEX IF NOT EXISTS ix_ocr_case ON ocr_results (case_id);

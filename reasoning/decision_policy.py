@@ -104,7 +104,9 @@ def decide(summary: EvidenceSummary) -> PolicyDecision:
 
 def summary_from_vlm(parsed: dict, *, footage_valid: bool,
                      obstructed: bool | None = None,
-                     camera_gap: bool = False) -> EvidenceSummary:
+                     camera_gap: bool = False,
+                     perception_result: dict | None = None
+                     ) -> EvidenceSummary:
     """Adapt a VLM ``reason`` payload to an ``EvidenceSummary``.
 
     Reads the review-safe schema (``physical_item_presented``,
@@ -112,26 +114,24 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
     ``limitations``) when present and falls back to the legacy schema
     fields so this adapter stays robust across model upgrades.
 
-    ``obstructed`` may be passed by the caller to override the VLM's
-    self-report (e.g. when an external occlusion detector decides).
+    **Track gating (PRODUCTION_SPEC §11):** ``physical_item_track`` is
+    derived ONLY from the perception layer's persisted tracks (passed
+    in via ``perception_result``). The VLM's ``physical_item_presented``
+    flag is captured separately as ``vlm_says_physical_item`` but it can
+    never set ``physical_item_track=True`` on its own. Without an
+    independent track-level signal, the policy refuses to upgrade a
+    case to ``VERIFIED`` even when the VLM claims a clean handover.
     """
     if not isinstance(parsed, dict):
-        return EvidenceSummary(
-            footage_valid=footage_valid,
-            obstructed=bool(obstructed),
-            camera_gap=camera_gap,
-            contradictions=["vlm output not a dict"],
-        )
+        parsed = {}
 
     confidence = str(parsed.get("confidence", "low")).lower()
-
-    # Items: review-safe key wins; legacy key kept as fallback.
     items = (parsed.get("items_observed")
              or parsed.get("items_handed_over")
              or [])
     receipt_visible = bool(parsed.get("receipt_visible", False))
-    physical_item = bool(parsed.get("physical_item_presented",
-                                    bool(items)))
+    vlm_says_physical_item = bool(parsed.get("physical_item_presented",
+                                              bool(items)))
 
     # Obstruction: explicit caller override > model self-report >
     # inverse of ``camera_view_clear`` > limitations heuristic.
@@ -143,22 +143,58 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
         else:
             obstructed = False
 
+    # ---- Track-gated physical_item_track --------------------------
+    # Independent perception evidence is the ONLY source that sets
+    # ``physical_item_track``. Both the runtime perception_result dict
+    # and any pre-projected ``tracks`` block on the parsed VLM payload
+    # (e.g. when the caller has already attached structured perception)
+    # are inspected — but the VLM's own narrative claim is never
+    # promoted into a track.
+    perception_tracks: list = []
+    if perception_result and isinstance(perception_result, dict):
+        perception_tracks = list(perception_result.get("tracks") or [])
+    physical_item_track = any(
+        bool(t.get("physical_item_candidate"))
+        and t.get("tracker_id")  # require a real tracker id
+        for t in perception_tracks
+        if isinstance(t, dict)
+    )
+    item_reaches_counter = any(
+        bool(t.get("physical_item_candidate"))
+        and any(z in (t.get("zones") or [])
+                for z in ("counter_zone", "staff_zone"))
+        and any(e in (t.get("events") or [])
+                for e in ("handover_candidate",
+                          "entered_counter_zone",
+                          "entered_staff_zone"))
+        for t in perception_tracks
+        if isinstance(t, dict)
+    )
+
+    contradictions: list[str] = []
+    # If the VLM claims a physical item but perception found no
+    # qualifying track, flag the disagreement so the policy downgrades
+    # to REVIEW. This is the core safety contract.
+    if vlm_says_physical_item and not physical_item_track:
+        contradictions.append(
+            "vlm claims physical item presented but no track evidence")
+
     limitations = parsed.get("limitations") or []
     notes = [str(s)[:240] for s in limitations] if isinstance(limitations,
                                                               list) else []
 
     return EvidenceSummary(
         footage_valid=footage_valid,
-        physical_item_track=physical_item,
-        item_reaches_counter=physical_item and bool(
-            parsed.get("handover_occurred", False)),
+        physical_item_track=physical_item_track,
+        item_reaches_counter=item_reaches_counter,
         receipt_visible=receipt_visible,
         obstructed=bool(obstructed),
         camera_gap=camera_gap,
         vlm_confidence=confidence,
         vlm_outcome_hint=(
-            "VERIFIED" if (physical_item and receipt_visible) else "REVIEW"
+            "VERIFIED" if (physical_item_track and receipt_visible)
+            else "REVIEW"
         ),
-        contradictions=[],
+        contradictions=contradictions,
         notes=notes,
     )

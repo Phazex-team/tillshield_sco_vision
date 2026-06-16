@@ -125,19 +125,27 @@ def test_extract_keyframe_data_urls_returns_frames_for_real_mp4(tmp_path):
     rec.record_one_segment(_synthetic_frames(50))
     mp4s = list((tmp_path / "s").rglob("*.mp4"))
     assert mp4s
+    window_start = datetime(2026, 6, 15, 14, 0, 0)
     frames = _extract_keyframe_data_urls(
-        window_path=str(mp4s[0]), keyframes=[], max_frames=4)
+        window_path=str(mp4s[0]),
+        window_start_ts=window_start,
+        keyframes=[], max_frames=4)
     assert len(frames) >= 1
     for f in frames:
         assert f["image_url"].startswith("data:image/jpeg;base64,")
         assert "frame_id" in f
         assert isinstance(f["frame_idx"], int)
+        ts = datetime.fromisoformat(f["ts"])
+        assert ts.year == 2026 and ts.month == 6 and ts.day == 15
+        assert ts >= window_start
 
 
 def test_extract_keyframe_data_urls_returns_empty_for_missing_file():
     from app.case_runner import _extract_keyframe_data_urls
     assert _extract_keyframe_data_urls(
-        window_path="/nope/nada.mp4", keyframes=[], max_frames=4) == []
+        window_path="/nope/nada.mp4",
+        window_start_ts=datetime(2026, 6, 15, 14, 0, 0),
+        keyframes=[], max_frames=4) == []
 
 
 # ---------------------------------------------------------------------------
