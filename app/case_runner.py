@@ -229,11 +229,16 @@ def analyze_case(session: Session,
     session.flush()
 
     # ----- 7. Decision policy ----------------------------------------
+    # Track-gated: pass the perception_result through so the policy can
+    # derive physical_item_track from real persisted tracks. Without
+    # this, the VLM could upgrade a case alone — the contract the
+    # K-series fixed in summary_from_vlm.
     summary = summary_from_vlm(
         vlm_result_dict.get("parsed", {}),
         footage_valid=True,
         obstructed=_perception_obstructed(perception_result),
         camera_gap=False,
+        perception_result=perception_result,
     )
     if vlm_result_dict.get("error"):
         summary.contradictions.append(f"vlm error: {vlm_result_dict['error']}")

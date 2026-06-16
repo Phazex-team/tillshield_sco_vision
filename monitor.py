@@ -656,7 +656,15 @@ def build_analyzer(cfg: dict, slogger: SessionLogger,
             from reasoning.decision_policy import (
                 OUTCOME_VERIFIED, decide, summary_from_vlm,
             )
-            evidence_summary = summary_from_vlm(result, footage_valid=True)
+            # The in-process monitor path does NOT persist structured
+            # perception tracks (that lives in the transaction-led
+            # analyze_case flow). Mark this call legacy_review_only so
+            # the policy refuses to upgrade to VERIFIED on VLM alone —
+            # every case here lands in the reviewer queue.
+            evidence_summary = summary_from_vlm(
+                result, footage_valid=True,
+                legacy_review_only=True,
+            )
             decision = decide(evidence_summary)
             result["policy_outcome"] = decision.outcome
             result["policy_reasons"] = list(decision.reasons)

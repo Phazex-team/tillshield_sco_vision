@@ -153,9 +153,23 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
     perception_tracks: list = []
     if perception_result and isinstance(perception_result, dict):
         perception_tracks = list(perception_result.get("tracks") or [])
+
+    def _track_identity(t: dict) -> str:
+        """Accept both perception-runtime shape (``track_id`` — what
+        ``perception.pipeline._t_dict`` emits) AND the persisted ORM
+        shape (``tracker_id`` — the column on ``db.models.Track``).
+        Either qualifies as 'a real tracker assigned an ID'."""
+        if not isinstance(t, dict):
+            return ""
+        for key in ("track_id", "tracker_id"):
+            v = t.get(key)
+            if v:
+                return str(v)
+        return ""
+
     physical_item_track = any(
         bool(t.get("physical_item_candidate"))
-        and t.get("tracker_id")  # require a real tracker id
+        and _track_identity(t)
         for t in perception_tracks
         if isinstance(t, dict)
     )

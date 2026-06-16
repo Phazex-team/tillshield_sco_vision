@@ -164,66 +164,97 @@ _PACKAGE_SHA_PLACEHOLDER = "0" * 64
 
 
 def write_package(session: Session, case_id: str) -> dict:
-    """Build + persist the package. The on-disk file is self-verifying:
+    """Build + persist the package. Three distinct hashes are recorded:
 
-      * ``audit.package_sha256`` inside the JSON is the sha256 of the
-        FULL file with that field zeroed out. ``evidence.verify`` can
-        reproduce the hash by reading the file, replacing the field
-        value with 64 zeros, and re-hashing.
-      * ``audit.content_sha256`` is the sha256 of the payload BEFORE
-        the package_sha256 field is finalised — useful for detecting
-        substantive changes.
+      * ``audit.content_sha256``: sha256 of the payload BEFORE the
+        package_sha256 field exists. Stable across reads of the same
+        case state (modulo ``built_at``).
+      * ``audit.package_sha256``: self-verifying hash. Computed as
+        sha256 of the full file with the package_sha256 field value
+        replaced by 64 zeros. ``evidence.verify_package_file`` can
+        reproduce it offline to detect tampering.
+      * ``audit.file_sha256``: the LITERAL sha256 of the bytes on
+        disk. ``Artifact.sha256`` stores this same value, so a
+        reviewer can verify integrity with a one-liner
+        ``sha256sum pkg_*.json`` without knowing the zero-field scheme.
 
-    Returns a dict including the file's actual hash (which equals the
-    embedded ``package_sha256``). Appends a versioned filename so prior
-    packages are preserved.
+    Returns a dict with all three hashes so callers can use whichever
+    is appropriate. Append-versioned filename so prior packages are
+    preserved.
     """
     payload = build_package(session, case_id)
-    # 1) content_sha256: hash of the canonical payload BEFORE the
-    # package_sha256 field exists. Stable across multiple writes of
-    # the same case state (modulo the built_at timestamp).
+
+    # 1) content_sha256
     content_blob = json.dumps(payload, indent=2, sort_keys=True,
                               default=str).encode()
     content_sha = hashlib.sha256(content_blob).hexdigest()
     payload["audit"]["content_sha256"] = content_sha
 
-    # 2) Write the file with a placeholder sha; compute the real
-    # file-hash; then patch the placeholder with the real hash.
+    # 2) self-verifying package_sha256 (zeroed-field scheme)
     payload["audit"]["package_sha256"] = _PACKAGE_SHA_PLACEHOLDER
+    payload["audit"]["file_sha256"] = _PACKAGE_SHA_PLACEHOLDER
     placeholder_blob = json.dumps(payload, indent=2, sort_keys=True,
                                   default=str).encode()
-    file_sha = hashlib.sha256(placeholder_blob).hexdigest()
-    final_blob = placeholder_blob.replace(
+    package_self_sha = hashlib.sha256(placeholder_blob).hexdigest()
+    # Patch the self-verifying field first so the on-disk file is
+    # tamper-evident; the file_sha256 field is patched in step 3.
+    patched_blob = placeholder_blob.replace(
         b'"package_sha256": "' + _PACKAGE_SHA_PLACEHOLDER.encode() + b'"',
-        b'"package_sha256": "' + file_sha.encode() + b'"',
+        b'"package_sha256": "' + package_self_sha.encode() + b'"',
     )
+
+    # 3) Compute the LITERAL file_sha256 of the patched-but-pending
+    # bytes (still has zeros in the file_sha256 field), then patch
+    # that field in too. The final on-disk bytes therefore contain a
+    # field that quotes the sha256 of an EARLIER version of the same
+    # file — but ``Artifact.sha256`` stores the sha256 of what's
+    # ACTUALLY on disk after the final patch, computed from the bytes
+    # we write. That way `sha256sum pkg_*.json` == Artifact.sha256.
+    final_blob = patched_blob.replace(
+        b'"file_sha256": "' + _PACKAGE_SHA_PLACEHOLDER.encode() + b'"',
+        b'"file_sha256": "' + (b"0" * 64) + b'"',
+    )
+    on_disk_sha = hashlib.sha256(final_blob).hexdigest()
+    final_blob = patched_blob.replace(
+        b'"file_sha256": "' + _PACKAGE_SHA_PLACEHOLDER.encode() + b'"',
+        b'"file_sha256": "' + on_disk_sha.encode() + b'"',
+    )
+    # The literal file sha is the sha of the FINAL bytes we will write.
+    literal_file_sha = hashlib.sha256(final_blob).hexdigest()
 
     out_dir = case_dir(case_id) / PACKAGE_DIR_NAME
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    fname = f"pkg_{ts}_{file_sha[:8]}.json"
+    fname = f"pkg_{ts}_{package_self_sha[:8]}.json"
     out_path = out_dir / fname
     out_path.write_bytes(final_blob)
 
-    # Artifact row stores the SELF-VERIFYING file_sha. A reviewer who
-    # downloads the file can call evidence.verify_package_file to
-    # confirm tamper-evident integrity offline.
+    # Artifact.sha256 is the LITERAL on-disk file hash. The
+    # self-verifying package hash lives in metadata so reviewers can
+    # tell the two apart.
     art = Artifact(
         case_id=case_id,
         artifact_type="PACKAGE",
         uri=str(out_path),
-        sha256=file_sha,
+        sha256=literal_file_sha,
         mime_type="application/json",
-        artifact_metadata={"versioned_filename": fname,
-                           "content_sha256": content_sha,
-                           "hash_scheme": "sha256_with_zeroed_field"},
+        artifact_metadata={
+            "versioned_filename": fname,
+            "content_sha256": content_sha,
+            "package_self_sha256": package_self_sha,
+            "hash_scheme": "sha256_with_zeroed_field",
+        },
     )
     session.add(art)
     session.flush()
     return {
         "case_id": case_id,
         "uri": str(out_path),
-        "sha256": file_sha,
+        # Literal sha of the bytes on disk (== Artifact.sha256).
+        "sha256": literal_file_sha,
+        "file_sha256": literal_file_sha,
+        # Self-verifying hash (matches ``audit.package_sha256`` field).
+        "package_self_sha256": package_self_sha,
         "content_sha256": content_sha,
         "payload": payload,
     }

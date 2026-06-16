@@ -135,7 +135,12 @@ gpu:
 # ----------------------------------------------------------------------
 storage:
   raw_segment_retention_hours: 10
-  min_free_disk_gb: 25
+  # PRODUCTION_SPEC defaults: keep at least 100 GiB free on the storage
+  # root. The DGX Spark target ships with a 4 TB NVMe; 100 GiB is the
+  # conservative buffer that leaves room for one fully-bundled model
+  # refresh (~110 GiB) without contention. Do not lower without first
+  # measuring real headroom — never below 25 GiB.
+  min_free_disk_gb: 100
   cleanup_dry_run_default: true
 
 # ----------------------------------------------------------------------
