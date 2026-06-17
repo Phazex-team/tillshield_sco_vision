@@ -133,14 +133,7 @@ def ingest_batch(session: Session, batch: PosBatchIn,
         select(PosBatch).where(PosBatch.payload_hash == payload_hash)
     ).scalar_one_or_none()
     if existing_batch is not None:
-        return {
-            "batch_id": existing_batch.id,
-            "events_inserted": 0,
-            "events_already_present": len(batch.events),
-            "cases_created": 0,
-            "ignored_unmapped_workstation_events": 0,
-            "duplicate_batch": True,
-        }
+        return _duplicate_batch_result(existing_batch.id, batch)
 
     pb = PosBatch(
         source_system=batch.source_system,
@@ -151,8 +144,20 @@ def ingest_batch(session: Session, batch: PosBatchIn,
         payload_hash=payload_hash,
         raw_payload=raw,
     )
-    session.add(pb)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(pb)
+            session.flush()
+    except IntegrityError:
+        # Concurrent replay: another session inserted the same payload_hash
+        # after our pre-check. Keep this idempotent instead of surfacing a
+        # 500 from the unique constraint.
+        existing_batch = session.execute(
+            select(PosBatch).where(PosBatch.payload_hash == payload_hash)
+        ).scalar_one_or_none()
+        if existing_batch is None:
+            raise
+        return _duplicate_batch_result(existing_batch.id, batch)
 
     inserted = 0
     already = 0
@@ -180,6 +185,17 @@ def ingest_batch(session: Session, batch: PosBatchIn,
         "cases_created": cases_created,
         "ignored_unmapped_workstation_events": unmapped,
         "duplicate_batch": False,
+    }
+
+
+def _duplicate_batch_result(batch_id: str, batch: PosBatchIn) -> dict:
+    return {
+        "batch_id": batch_id,
+        "events_inserted": 0,
+        "events_already_present": len(batch.events),
+        "cases_created": 0,
+        "ignored_unmapped_workstation_events": 0,
+        "duplicate_batch": True,
     }
 
 
@@ -215,12 +231,12 @@ def _upsert_event(session: Session,
         currency=ev.currency,
         raw_payload=ev.raw_payload,
     )
-    session.add(row)
     try:
-        session.flush()
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
     except IntegrityError:
         # Race lost; the row exists, so it's not new.
-        session.rollback()
         return None
     return row.id
 
@@ -249,10 +265,14 @@ def _open_case_for_event(session: Session,
         # No valid workstation->camera route: never fall back to the
         # first/default camera. Persist the event, open no case.
         return (False, "unmapped")
-    session.add(Case(
-        pos_event_id=pos_event_id,
-        camera_id=camera_id,
-        status="OPEN",
-    ))
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(Case(
+                pos_event_id=pos_event_id,
+                camera_id=camera_id,
+                status="OPEN",
+            ))
+            session.flush()
+    except IntegrityError:
+        return (False, "exists")
     return (True, None)
