@@ -27,6 +27,12 @@
       padding: 14px 22px; border-bottom: 1px solid var(--border);
       display: flex; align-items: center; gap: 18px;
     }
+    .brand {
+      display: flex; align-items: center; gap: 10px; min-width: 0;
+    }
+    .brand-logo {
+      width: 30px; height: 38px; object-fit: contain; flex: 0 0 auto;
+    }
     header h1 { font-size: 18px; margin: 0; font-weight: 600; }
     header .badge {
       font-size: 11px; padding: 3px 8px; border-radius: 5px;
@@ -148,11 +154,20 @@
       font-family: ui-monospace, monospace; word-break: break-word; }
     .save-status.ok { color: var(--ok); }
     .save-status.err { color: var(--high); }
+    @media (max-width: 640px) {
+      header { gap: 10px; padding: 12px 14px; }
+      .brand-logo { width: 24px; height: 30px; }
+      header h1 { font-size: 16px; }
+    }
   </style>
 </head>
 <body>
 <header>
-  <h1>Return / Refund Visual Review</h1>
+  <div class="brand">
+    <img class="brand-logo" src="/assets/tillshield-icon-white.png"
+         alt="TillShield" />
+    <h1>Return / Refund Visual Review</h1>
+  </div>
   <span class="badge">operator console</span>
   <span class="grow"></span>
   <span class="memory" id="memory">memory: —</span>

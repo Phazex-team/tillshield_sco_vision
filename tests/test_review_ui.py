@@ -74,6 +74,13 @@ def test_review_ui_calls_v1_api():
     assert "/reprocess" in src
 
 
+def test_review_ui_has_tillshield_logo():
+    src = (ROOT / "static" / "review.html").read_text()
+    assert "/assets/tillshield-icon-white.png" in src
+    assert 'class="brand-logo"' in src
+    assert 'alt="TillShield"' in src
+
+
 def test_review_ui_wires_video_stream():
     src = (ROOT / "static" / "review.html").read_text()
     assert "/video/windows/" in src and "/stream" in src
