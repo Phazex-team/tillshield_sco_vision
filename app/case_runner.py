@@ -22,6 +22,7 @@ import base64
 import io
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,9 +74,27 @@ def analyze_case(session: Session,
     if pos is None:
         raise ValueError("case has no POS event linked")
 
+    # Processing-time observability: lightweight perf_counter timers
+    # threaded through every analysis stage. The dict is advisory only
+    # (never read by the decision policy) and is persisted into
+    # VlmRun.input_manifest at the end so the reviewer UI + evidence
+    # package can render a timing legend. ``try/finally`` is used per
+    # stage so an exception still records the elapsed time it took to
+    # fail. Stages that did not run are OMITTED rather than reported
+    # as 0, so the operator can tell apart "didn't run" from "ran <1ms".
+    _t_total = time.perf_counter()
+    timings: dict[str, Any] = {}
+
+    def _ms_since(t0: float) -> int:
+        return int((time.perf_counter() - t0) * 1000)
+
     # ----- 1. Resolve window from segment index ----------------------
     storage_root = _storage_root()
-    plan = plan_window(session, case.camera_id, pos.pos_event_at)
+    _t = time.perf_counter()
+    try:
+        plan = plan_window(session, case.camera_id, pos.pos_event_at)
+    finally:
+        timings["window_resolution_ms"] = _ms_since(_t)
     window = VideoWindow(
         case_id=case.id,
         camera_id=case.camera_id,
@@ -94,7 +113,12 @@ def analyze_case(session: Session,
     # only annotates metadata + (if export is enabled and succeeds)
     # provides the exact clip; otherwise the local recorder/segment path
     # below is used. Never raises.
-    nvr_clip = _try_nvr_window(case, pos.pos_event_at, window, storage_root)
+    _t = time.perf_counter()
+    try:
+        nvr_clip = _try_nvr_window(case, pos.pos_event_at, window,
+                                    storage_root)
+    finally:
+        timings["nvr_acquisition_ms"] = _ms_since(_t)
 
     audit.record(session, action="case.window_resolved",
                  entity_type="case", entity_id=case.id,
@@ -110,8 +134,12 @@ def analyze_case(session: Session,
                 / f"window_{window.id}.mp4")
 
     # ----- 2. Acquire the window MP4: NVR clip first, else local ------
+    _t = time.perf_counter()
     if nvr_clip:
-        build = _adopt_clip(nvr_clip, plan)
+        try:
+            build = _adopt_clip(nvr_clip, plan)
+        finally:
+            timings["window_build_ms"] = _ms_since(_t)
         window.acquisition_source = "nvr_clip_retrieved"
     else:
         # Fall back to the existing local recorded-segment path.
@@ -123,16 +151,20 @@ def analyze_case(session: Session,
             # segments are missing; only default it when NVR was off.
             if not window.acquisition_source:
                 window.acquisition_source = "local_no_segments"
+            timings["window_build_ms"] = _ms_since(_t)
             return _close_invalid(session, case, plan.invalid_reason)
         segments = (session.query(VideoSegment)
                     .filter(VideoSegment.id.in_(plan.matched_segment_ids))
                     .order_by(VideoSegment.start_at.asc()).all())
-        build = build_window(
-            segments=segments,
-            requested_start=plan.requested_start,
-            requested_end=plan.requested_end,
-            out_path=out_path,
-        )
+        try:
+            build = build_window(
+                segments=segments,
+                requested_start=plan.requested_start,
+                requested_end=plan.requested_end,
+                out_path=out_path,
+            )
+        finally:
+            timings["window_build_ms"] = _ms_since(_t)
         if not build.ok:
             window.status = "FAILED"
             window.failure_reason = build.failure_reason
@@ -159,11 +191,20 @@ def analyze_case(session: Session,
         except Exception as exc:
             log.warning("perception pipeline unavailable: %s", exc)
     if perception_runner is not None:
+        _t = time.perf_counter()
         try:
-            perception_result = perception_runner(session, case, window)
-        except Exception:
-            log.exception("perception failed; treating as obstructed evidence")
-            perception_result = None
+            try:
+                perception_result = perception_runner(session, case, window)
+            except Exception:
+                log.exception("perception failed; treating as "
+                              "obstructed evidence")
+                perception_result = None
+        finally:
+            timings["perception_total_ms"] = _ms_since(_t)
+        if isinstance(perception_result, dict):
+            inner = perception_result.get("timings_ms")
+            if isinstance(inner, dict):
+                timings["perception"] = inner
 
     # Persist perception evidence so the evidence package + graph see
     # real rows, not in-memory dicts.
@@ -177,18 +218,27 @@ def analyze_case(session: Session,
 
     # ----- 4. Build the evidence manifest with REAL frames -----------
     window_start_naive = build.actual_start_at or plan.requested_start
-    sampled_frames = _extract_keyframe_data_urls(
-        window_path=build.out_path,
-        window_start_ts=window_start_naive,
-        keyframes=(perception_result or {}).get("keyframes") or [],
-        max_frames=manifest_max_frames,
-    )
+    _t = time.perf_counter()
+    try:
+        sampled_frames = _extract_keyframe_data_urls(
+            window_path=build.out_path,
+            window_start_ts=window_start_naive,
+            keyframes=(perception_result or {}).get("keyframes") or [],
+            max_frames=manifest_max_frames,
+        )
+    finally:
+        timings["manifest_frame_extract_ms"] = _ms_since(_t)
 
     # ROI-driven labeled crops + caption preamble for the active VLM
     # primary (Qwen3-VL). When no active labeled_crops view exists for
     # this camera, ``vlm_roi_extras`` is None and the manifest keeps
     # its full-frame-only shape — pure back-compat with the K-series.
-    vlm_roi_extras = _build_vlm_roi_extras(case.camera_id, sampled_frames)
+    _t = time.perf_counter()
+    try:
+        vlm_roi_extras = _build_vlm_roi_extras(case.camera_id,
+                                                sampled_frames)
+    finally:
+        timings["vlm_roi_prepare_ms"] = _ms_since(_t)
 
     # ----- 5. Reasoning ----------------------------------------------
     # Build the manifest once. Both the real chain and any injected
@@ -233,19 +283,37 @@ def analyze_case(session: Session,
             log.warning("VLM chain unavailable: %s", exc)
 
     if vlm_runner is not None:
+        _t = time.perf_counter()
         try:
             # Production / new-style runners take (session, case, window,
             # manifest). Old test-style runners take (session, case,
             # window); fall back transparently.
             try:
-                vlm_result_dict = vlm_runner(session, case, window,
-                                             manifest) or {}
-            except TypeError:
-                vlm_result_dict = vlm_runner(session, case, window) or {}
-        except Exception as exc:
-            log.exception("VLM run raised")
-            vlm_result_dict = {"error": str(exc),
-                               "provider": "chain", "model_name": "chain"}
+                try:
+                    vlm_result_dict = vlm_runner(session, case, window,
+                                                 manifest) or {}
+                except TypeError:
+                    vlm_result_dict = vlm_runner(session, case, window) or {}
+            except Exception as exc:
+                log.exception("VLM run raised")
+                vlm_result_dict = {"error": str(exc),
+                                   "provider": "chain",
+                                   "model_name": "chain"}
+        finally:
+            timings["vlm_total_ms"] = _ms_since(_t)
+
+    # Per-provider vlm fingerprint. ``provider`` is the actual provider
+    # that returned the result (the ChainProvider wraps each member's
+    # ``VLMResult`` and returns it verbatim, so under a Qwen failure +
+    # Gemma success this is ``"gemma"`` — not the configured primary).
+    timings["vlm"] = {
+        "provider": vlm_result_dict.get("provider"),
+        "model_name": vlm_result_dict.get("model_name"),
+        "model_snapshot": vlm_result_dict.get("model_snapshot"),
+        "latency_ms": vlm_result_dict.get("latency_ms"),
+        "status": "FAILED" if vlm_result_dict.get("error") else "SUCCEEDED",
+        "error": vlm_result_dict.get("error"),
+    }
 
     # ----- 6. Persist VLM run row ------------------------------------
     input_manifest = {
@@ -257,6 +325,9 @@ def analyze_case(session: Session,
         input_manifest["provider_metadata"] = vlm_result_dict["provider_metadata"]
     if isinstance(vlm_result_dict.get("usage"), dict):
         input_manifest["usage"] = vlm_result_dict["usage"]
+    # NOTE: ``processing_timings_ms`` is attached AFTER the decision +
+    # package_write timings are recorded below; we stamp it on the row
+    # just before commit so total_ms reflects real end-to-end work.
     run = VlmRun(
         case_id=case.id,
         provider=vlm_result_dict.get("provider", "chain"),
@@ -279,16 +350,21 @@ def analyze_case(session: Session,
     # derive physical_item_track from real persisted tracks. Without
     # this, the VLM could upgrade a case alone — the contract the
     # K-series fixed in summary_from_vlm.
-    summary = summary_from_vlm(
-        vlm_result_dict.get("parsed", {}),
-        footage_valid=True,
-        obstructed=_perception_obstructed(perception_result),
-        camera_gap=False,
-        perception_result=perception_result,
-    )
-    if vlm_result_dict.get("error"):
-        summary.contradictions.append(f"vlm error: {vlm_result_dict['error']}")
-    decision = decide(summary)
+    _t = time.perf_counter()
+    try:
+        summary = summary_from_vlm(
+            vlm_result_dict.get("parsed", {}),
+            footage_valid=True,
+            obstructed=_perception_obstructed(perception_result),
+            camera_gap=False,
+            perception_result=perception_result,
+        )
+        if vlm_result_dict.get("error"):
+            summary.contradictions.append(
+                f"vlm error: {vlm_result_dict['error']}")
+        decision = decide(summary)
+    finally:
+        timings["decision_ms"] = _ms_since(_t)
     case.outcome = decision.outcome
     case.risk_score = decision.risk_score
     case.risk_reasons = list(decision.reasons)
@@ -296,8 +372,28 @@ def analyze_case(session: Session,
     case.status = "CLOSED"
     case.closed_at = datetime.now(timezone.utc)
 
+    # Finalise total + persist timings into the VlmRun row BEFORE the
+    # package is written so the evidence package can read the same dict
+    # the reviewer UI does. SQLAlchemy's default JSON column does NOT
+    # detect in-place mutation, so we explicitly assign a *new* dict
+    # each time to force the row to be marked dirty.
+    timings["total_ms"] = _ms_since(_t_total)
+    run.input_manifest = {**input_manifest,
+                          "processing_timings_ms": dict(timings)}
+    session.flush()
+
     # ----- 8. Evidence package ---------------------------------------
-    package = write_package(session, case.id)
+    _t = time.perf_counter()
+    try:
+        package = write_package(session, case.id)
+    finally:
+        timings["package_write_ms"] = _ms_since(_t)
+    # Refresh the total now that the package has been written and
+    # re-assign (NEW dict) so the row carries the post-package timing.
+    timings["total_ms"] = _ms_since(_t_total)
+    run.input_manifest = {**input_manifest,
+                          "processing_timings_ms": dict(timings)}
+    session.flush()
 
     audit.record(session, action="case.decided",
                  entity_type="case", entity_id=case.id,

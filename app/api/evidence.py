@@ -53,3 +53,79 @@ def evidence_graph(case_id: str) -> dict:
             raise HTTPException(status_code=404,
                                 detail="case has no evidence graph yet")
         return graph
+
+
+@router.get("/{case_id}/processing-timings")
+def case_processing_timings(case_id: str) -> dict:
+    """Return the *final* processing timings for ``case_id`` straight
+    from the latest ``VlmRun.input_manifest`` row.
+
+    Why a dedicated endpoint exists:
+      The immutable evidence package on disk is hashed once, BEFORE
+      ``package_write_ms`` could be measured. The same VlmRun row in
+      the DB is then re-assigned with the final timings (including
+      ``package_write_ms`` and a post-package ``total_ms``). Reading
+      the package file would therefore show stale pre-package totals.
+      This endpoint reads the DB so the reviewer UI can render the
+      *real* end-to-end totals without rewriting (and re-hashing) the
+      immutable package.
+
+    Timing-focused response shape (intentionally minimal — no
+    ``input_manifest``, no ``provider_metadata``, no ``usage``, no
+    base64 frames)::
+
+        {
+          "case_id":               str,
+          "provider":              str | null,
+          "model_name":            str | null,
+          "model_snapshot":        str | null,
+          "status":                str | null,
+          "latency_ms":            int | null,
+          "error":                 str | null,
+          "processing_timings_ms": dict | null,
+          "source":                "vlm_runs.input_manifest"
+        }
+    """
+    from sqlalchemy import select
+
+    from db.models import Case, VlmRun
+    from db.session import get_sessionmaker
+
+    SM = get_sessionmaker()
+    with SM() as s:
+        if s.get(Case, case_id) is None:
+            raise HTTPException(status_code=404,
+                                detail=f"case {case_id!r} not found")
+        run = s.execute(
+            select(VlmRun)
+            .where(VlmRun.case_id == case_id)
+            # Newest first by finished_at then started_at; either may
+            # be NULL on a still-running/old row, so we fall back to
+            # the auto-generated ``id`` last for a deterministic order.
+            .order_by(VlmRun.finished_at.desc().nullslast(),
+                      VlmRun.started_at.desc().nullslast(),
+                      VlmRun.id.desc())
+            .limit(1)
+        ).scalars().first()
+        if run is None:
+            raise HTTPException(
+                status_code=404,
+                detail="no vlm_run yet for case")
+
+        manifest = run.input_manifest if isinstance(
+            run.input_manifest, dict) else {}
+        timings = manifest.get("processing_timings_ms")
+        if not isinstance(timings, dict):
+            timings = None
+
+        return {
+            "case_id": case_id,
+            "provider": run.provider,
+            "model_name": run.model_name,
+            "model_snapshot": run.model_snapshot,
+            "status": run.status,
+            "latency_ms": run.latency_ms,
+            "error": run.error,
+            "processing_timings_ms": timings,
+            "source": "vlm_runs.input_manifest",
+        }

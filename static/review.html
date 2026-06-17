@@ -237,6 +237,16 @@
       </div>
       <h3 style="font-size:13px;margin:18px 0 8px 0">Timeline</h3>
       <div class="timeline" id="timeline"></div>
+      <h3 style="font-size:13px;margin:18px 0 8px 0">Processing timings</h3>
+      <div style="font-size:11px;color:var(--muted);margin:0 0 6px 0">
+        Read-only timings recorded by the backend. Missing values render
+        as <code>—</code>. Decision policy never reads these.
+      </div>
+      <table id="timings-table" style="font-size:12px">
+        <thead><tr><th>Stage</th><th>ms</th></tr></thead>
+        <tbody></tbody>
+      </table>
+
       <h3 style="font-size:13px;margin:18px 0 8px 0">Model Claims</h3>
       <div class="kv" id="claims"></div>
       <h3 style="font-size:13px;margin:18px 0 8px 0">Limitations</h3>
@@ -564,6 +574,101 @@ function renderEvidenceSource(window_) {
     el.appendChild(sub);
   }
 }
+function renderTimingsLegend(reasoning, timingsPayload) {
+  const tbody = document.querySelector("#timings-table tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  // ---------- Fallback chain for provider/model/status/latency ----------
+  // 1. Start from the MOST RECENT reasoning row in the immutable
+  //    package — this is always present if any model has run.
+  // 2. If the DB timings endpoint returned a payload, override with
+  //    its top-level fields (the freshest source).
+  // 3. If the payload's processing_timings_ms.vlm sub-dict exists,
+  //    prefer those fields (this is the per-VLM fingerprint stamped
+  //    at run time, honest on Gemma-fallback).
+  // None of these branches can crash on missing keys.
+  const lastReasoning = (reasoning && reasoning.length)
+    ? reasoning[reasoning.length - 1] : {};
+  let provider = lastReasoning.provider || null;
+  let model = lastReasoning.model_name || null;
+  let status = lastReasoning.status || null;
+  let vlmLatency = (lastReasoning.latency_ms != null)
+    ? lastReasoning.latency_ms : null;
+  let vlmError = lastReasoning.error || null;
+
+  if (timingsPayload && typeof timingsPayload === "object") {
+    if (timingsPayload.provider) provider = timingsPayload.provider;
+    if (timingsPayload.model_name) model = timingsPayload.model_name;
+    if (timingsPayload.status) status = timingsPayload.status;
+    if (timingsPayload.latency_ms != null)
+      vlmLatency = timingsPayload.latency_ms;
+    if (timingsPayload.error) vlmError = timingsPayload.error;
+  }
+
+  // The stage rows + the actual-provider VLM sub-dict come ONLY from
+  // the DB endpoint (the immutable package's pre-package snapshot is
+  // intentionally not used for stage rows so the legend cannot lie
+  // about package_write_ms / post-package total_ms).
+  const t = (timingsPayload
+              && typeof timingsPayload.processing_timings_ms === "object")
+    ? timingsPayload.processing_timings_ms : null;
+  if (t && typeof t.vlm === "object" && t.vlm) {
+    if (t.vlm.provider) provider = t.vlm.provider;
+    if (t.vlm.model_name) model = t.vlm.model_name;
+    if (t.vlm.status) status = t.vlm.status;
+    if (t.vlm.latency_ms != null) vlmLatency = t.vlm.latency_ms;
+    if (t.vlm.error) vlmError = t.vlm.error;
+  }
+
+  // ---------- Render ----------
+  const dash = '<span style="color:var(--muted)">—</span>';
+  const fmtMs = v => (typeof v === "number" && isFinite(v))
+    ? `${v} ms` : dash;
+  const rows = [
+    ["Total",                t ? t.total_ms : null],
+    ["Window resolution",    t ? t.window_resolution_ms : null],
+    ["NVR acquisition",      t ? t.nvr_acquisition_ms : null],
+    ["Window build / adopt", t ? t.window_build_ms : null],
+    ["Perception total",     t ? t.perception_total_ms : null],
+    ["  Falcon",             t && t.perception ? t.perception.falcon_ms : null],
+    ["  SAM 2",              t && t.perception ? t.perception.sam2_ms : null],
+    ["  OCR",                t && t.perception ? t.perception.ocr_ms : null],
+    ["Manifest frame extract", t ? t.manifest_frame_extract_ms : null],
+    ["VLM ROI prepare",      t ? t.vlm_roi_prepare_ms : null],
+    ["VLM total",            t ? t.vlm_total_ms : null],
+    ["Decision policy",      t ? t.decision_ms : null],
+    ["Package write",        t ? t.package_write_ms : null],
+  ];
+  for (const [label, value] of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${escapeHtml(label)}</td><td>${fmtMs(value)}</td>`;
+    tbody.appendChild(tr);
+  }
+  // Provider / model / status row — separate so a missing timing dict
+  // does NOT hide the fact that a particular provider served the case.
+  const providerRow = document.createElement("tr");
+  providerRow.innerHTML =
+    `<td>VLM provider used</td><td>${provider ? escapeHtml(provider) : dash}</td>`;
+  tbody.appendChild(providerRow);
+  const modelRow = document.createElement("tr");
+  modelRow.innerHTML =
+    `<td>VLM model</td><td>${model ? escapeHtml(model) : dash}</td>`;
+  tbody.appendChild(modelRow);
+  const statusRow = document.createElement("tr");
+  const statusText = status ? escapeHtml(status) : dash;
+  const errSuffix = vlmError
+    ? ` <span style="color:var(--high)">(${escapeHtml(vlmError).slice(0,200)})</span>`
+    : "";
+  statusRow.innerHTML =
+    `<td>VLM status</td><td>${statusText}${errSuffix}</td>`;
+  tbody.appendChild(statusRow);
+  const latencyRow = document.createElement("tr");
+  latencyRow.innerHTML =
+    `<td>VLM latency</td><td>${fmtMs(vlmLatency)}</td>`;
+  tbody.appendChild(latencyRow);
+}
+
 function kvSet(el, obj) {
   el.innerHTML = "";
   for (const [k, v] of Object.entries(obj || {})) {
@@ -581,16 +686,34 @@ function kvSet(el, obj) {
 
 async function openCase(caseId) {
   currentCase = caseId;
-  const [caseR, pkgR] = await Promise.all([
+  // Fetch case detail + immutable evidence package + the DB-backed
+  // processing-timings payload concurrently. The timings endpoint is
+  // optional: any failure must NOT block case rendering — the legend
+  // will simply show dashes for stage rows.
+  //
+  // We wrap the timings fetch in ``.catch(() => null)`` BEFORE
+  // ``Promise.all`` so a network-level rejection (DNS error, aborted
+  // connection, server crash mid-flight) resolves to ``null`` instead
+  // of rejecting the whole join. Without this wrapper, Promise.all
+  // would reject and openCase would abort with an unhandled error.
+  const timingsReq = fetch(
+    `${API}/cases/${caseId}/processing-timings`).catch(() => null);
+  const [caseR, pkgR, timingsR] = await Promise.all([
     fetch(`${API}/cases/${caseId}`),
     fetch(`${API}/cases/${caseId}/evidence-package`),
+    timingsReq,
   ]);
   if (!caseR.ok) {
     alert("case fetch failed");
     return;
   }
   const c = await caseR.json();
-  const pkg = pkgR.ok ? await pkgR.json() : null;
+  const pkg = pkgR && pkgR.ok ? await pkgR.json() : null;
+  let timingsPayload = null;
+  if (timingsR && timingsR.ok) {
+    try { timingsPayload = await timingsR.json(); }
+    catch (_) { timingsPayload = null; }
+  }
   const detail = document.getElementById("detail-panel");
   detail.hidden = false;
   detail.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -693,6 +816,17 @@ async function openCase(caseId) {
     li.textContent = `[${o.engine}] "${o.text}" (${o.confidence})`;
     ocrUl.appendChild(li);
   }
+
+  // Processing timings legend. Two backend sources:
+  //   * pkg.reasoning[] — immutable package payload, used for the
+  //     provider/model/status/latency fallback so even cases with no
+  //     timing dict still surface what served them.
+  //   * timingsPayload  — DB-backed snapshot from
+  //     GET /cases/{id}/processing-timings, used for the stage
+  //     timing rows (including post-package package_write_ms and the
+  //     post-package total_ms, which the on-disk package can't carry).
+  // Missing values render as `—`. Nothing is computed in JS.
+  renderTimingsLegend(pkg?.reasoning || [], timingsPayload);
 
   const claims = document.getElementById("claims");
   claims.innerHTML = "";

@@ -123,34 +123,53 @@ def run_perception_on_window(*,
     timestamp to real CCTV wall-clock time. Callers must pass it for
     real-world correctness; tests may omit it (and a limitation is
     emitted noting the fallback)."""
+    import time as _time
     limitations: list[str] = []
     detections: list[Detection] = []
     frames_for_ocr: dict[int, object] = {}
+    # Per-stage timings (perf_counter, integer ms). Skipped stages are
+    # OMITTED rather than reported as 0 so the operator can tell apart
+    # "ran in <1ms" from "didn't run at all". ``total_ms`` is always
+    # populated. The result block is advisory only — decision policy
+    # never reads it.
+    t0 = _time.perf_counter()
+    timings: dict[str, int] = {}
 
+    def _ms_since(start: float) -> int:
+        return int((_time.perf_counter() - start) * 1000)
+
+    t_sample = _time.perf_counter()
     frames = _sample_frames(window_path, fps, sampling, limitations,
                             window_start_ts=window_start_ts)
+    timings["sample_frames_ms"] = _ms_since(t_sample)
     if not frames:
+        timings["total_ms"] = _ms_since(t0)
         return {
             "detections": [], "tracks": [], "keyframes": [],
             "ocr": [], "masks": [], "limitations": limitations,
             "obstructed": False,
+            "timings_ms": timings,
         }
 
     # Compute Falcon ROI crop (full-frame coords). Detection bboxes
     # come back already offset to full-frame so every downstream
     # consumer keeps the same coordinate space.
     falcon_crop = _falcon_roi_crop(frames, falcon_roi_view, limitations)
+    t_falcon = _time.perf_counter()
     try:
-        detections = falcon_client.detect_on_frames(
-            [(idx, ts, img) for idx, ts, img in frames],
-            query=falcon_query,
-            roi_crop=falcon_crop,
-        )
-        for idx, ts, img in frames:
-            frames_for_ocr[idx] = img
-    except Exception:
-        log.exception("falcon detection failed")
-        limitations.append("falcon_unavailable")
+        try:
+            detections = falcon_client.detect_on_frames(
+                [(idx, ts, img) for idx, ts, img in frames],
+                query=falcon_query,
+                roi_crop=falcon_crop,
+            )
+            for idx, ts, img in frames:
+                frames_for_ocr[idx] = img
+        except Exception:
+            log.exception("falcon detection failed")
+            limitations.append("falcon_unavailable")
+    finally:
+        timings["falcon_ms"] = _ms_since(t_falcon)
 
     # SAM 2 ROI filter (filter-only by detection centre — we never crop
     # the image because SAM 2 needs full context for accurate masks).
@@ -165,28 +184,42 @@ def run_perception_on_window(*,
         mid_idx = frames[len(frames) // 2][0]
         mid_img = next((img for idx, ts, img in frames
                         if idx == mid_idx), frames[0][2])
+        t_sam = _time.perf_counter()
         try:
-            masks = sam2_client.segment(mid_img, sam_detections)
-        except Exception:
-            log.exception("sam2 segment failed")
-            limitations.append("sam2_unavailable")
+            try:
+                masks = sam2_client.segment(mid_img, sam_detections)
+            except Exception:
+                log.exception("sam2 segment failed")
+                limitations.append("sam2_unavailable")
+        finally:
+            timings["sam2_ms"] = _ms_since(t_sam)
     elif sam_detections:
         limitations.append("sam2_unavailable")
+        # Honest omission: sam2_ms is left out when no inference ran.
 
+    t_tracker = _time.perf_counter()
     tracker = Tracker()
     tracker.update(detections)
     tracks = tracker.export()
     tracks = annotate_tracks(tracks, detections, zones=zones)
+    timings["tracker_ms"] = _ms_since(t_tracker)
 
     ocr_input_detections = _filter_by_roi(detections, ocr_roi_view,
                                            limit_tag="ocr_roi_filter",
                                            limitations=limitations)
-    ocr, ocr_limitations = run_ocr(ocr_engine, ocr_input_detections,
-                                    frames_for_ocr)
+    t_ocr = _time.perf_counter()
+    try:
+        ocr, ocr_limitations = run_ocr(ocr_engine, ocr_input_detections,
+                                        frames_for_ocr)
+    finally:
+        timings["ocr_ms"] = _ms_since(t_ocr)
     limitations.extend(ocr_limitations)
 
+    t_kf = _time.perf_counter()
     keyframes = select_keyframes(tracks, detections)
+    timings["keyframes_ms"] = _ms_since(t_kf)
     obstructed = any("obstruct" in l.lower() for l in limitations)
+    timings["total_ms"] = _ms_since(t0)
     return {
         "detections": [_d_dict(d) for d in detections],
         "tracks": [_t_dict(t) for t in tracks],
@@ -195,6 +228,7 @@ def run_perception_on_window(*,
         "masks": [_m_dict(m) for m in masks],
         "limitations": limitations,
         "obstructed": obstructed,
+        "timings_ms": timings,
     }
 
 

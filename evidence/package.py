@@ -139,6 +139,14 @@ def build_package(session: Session, case_id: str) -> dict:
                 "latency_ms": r.latency_ms,
                 "output": r.output_json,
                 "error": r.error,
+                # Lightweight processing-time observability. Only the
+                # timings sub-dict is exposed (not the full input
+                # manifest) so base64 frame URLs / large provider
+                # metadata never leak into the package payload. Missing
+                # data renders as a missing key in JSON; the UI shows
+                # ``—`` rather than synthesising a number.
+                "processing_timings_ms":
+                    (r.input_manifest or {}).get("processing_timings_ms"),
             }
             for r in vlm_runs
         ],

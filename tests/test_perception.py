@@ -277,3 +277,13 @@ def test_pipeline_assembles_tracks_when_detections_provided_via_synthetic_frames
     assert any(t["physical_item_candidate"] for t in result["tracks"])
     assert result["keyframes"], "expected at least one keyframe"
     assert "sam2_unavailable" in result["limitations"]
+    # Lightweight processing timings (advisory only; never read by the
+    # decision policy). SAM 2 was skipped here so its key must be
+    # OMITTED (honesty rule), but Falcon, tracker, OCR, keyframes,
+    # sample_frames, and total must all be present.
+    t = result.get("timings_ms")
+    assert isinstance(t, dict)
+    for k in ("sample_frames_ms", "falcon_ms", "tracker_ms",
+              "ocr_ms", "keyframes_ms", "total_ms"):
+        assert k in t, f"timings_ms missing {k!r}: {t}"
+    assert "sam2_ms" not in t, "skipped SAM 2 must be omitted"
