@@ -76,6 +76,7 @@ def create_app() -> FastAPI:
         health as health_router,
         integrations_tillshield as tillshield_router,
         memory as memory_router,
+        ops as ops_router,
         pos as pos_router,
         review as review_router,
         storage as storage_router,
@@ -90,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(video_router.router, prefix="/api/v1")
     app.include_router(admin_router.router, prefix="/api/v1")
     app.include_router(storage_router.router, prefix="/api/v1")
+    app.include_router(ops_router.router, prefix="/api/v1")
     app.include_router(tillshield_router.router, prefix="/api/v1")
 
     # Legacy dashboard static files (review-safe; see static/index.html).

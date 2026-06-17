@@ -219,26 +219,55 @@ def _check_sam2_runtime(cfg) -> Optional[str]:
     return None
 
 
-def _check_qwen_vllm_backend(cfg) -> Optional[str]:
-    """Warning-only check that Qwen3-VL's vLLM endpoint is reachable
-    AND advertises the configured ``served_model_name``.
+def qwen_vllm_status(cfg) -> dict:
+    """Crash-safe Qwen3-VL backend status, structured for both the
+    startup warning string and the ``/api/v1/ops/status`` aggregator.
 
-    Returns ``None`` when:
-      * Qwen3-VL is disabled OR the configured backend is not
-        ``vllm_openai`` (rollback path), OR
-      * /v1/models contains the served model name.
-    Returns a short warning string in all other situations. NEVER
-    raises; this function must never block startup."""
+    Returned shape (all keys always present):
+      {
+        "enabled": bool,         # qwen3_vl.enabled in config.yaml
+        "backend": str,          # 'vllm_openai' | 'local_transformers' | 'unknown'
+        "healthy": bool|None,    # None when the check could not run
+        "detail": str,           # human-readable status line
+        "served_model_name": str|None,
+        "base_url": str|None,
+        "checked": bool,         # True iff a real probe was attempted
+        "error": str|None,       # exception text when the check raised
+      }
+
+    NEVER raises — every error path produces a structured fallback dict.
+    """
+    out: dict = {
+        "enabled": False,
+        "backend": "unknown",
+        "healthy": None,
+        "detail": "",
+        "served_model_name": None,
+        "base_url": None,
+        "checked": False,
+        "error": None,
+    }
     try:
         qwen_cfg = cfg.models.get("qwen3_vl") if cfg else None
-        if qwen_cfg is None or not qwen_cfg.enabled:
-            return None
+        if qwen_cfg is None:
+            out["detail"] = "qwen3_vl not configured"
+            return out
+        out["enabled"] = bool(qwen_cfg.enabled)
         backend = (qwen_cfg.extra.get("provider") or "vllm_openai")
+        out["backend"] = str(backend)
+        if not qwen_cfg.enabled:
+            out["detail"] = "qwen3_vl disabled in config"
+            return out
         if backend != "vllm_openai":
-            return None
+            out["detail"] = (f"backend is {backend!r}; vLLM readiness "
+                             "check skipped")
+            return out
+        out["served_model_name"] = str(
+            qwen_cfg.extra.get("served_model_name") or "qwen3_vl")
+        out["base_url"] = str(
+            qwen_cfg.extra.get("base_url")
+            or "http://127.0.0.1:8000/v1")
         from reasoning.providers.qwen3_vl import Qwen3VLProvider
-        # Construct a probe with only the kwargs the validator + health
-        # check need. Constructor is cheap (no model load, no socket).
         kwargs = {k: v for k, v in qwen_cfg.extra.items()
                   if k not in ("local_path",)}
         probe = Qwen3VLProvider(
@@ -246,14 +275,34 @@ def _check_qwen_vllm_backend(cfg) -> Optional[str]:
             enabled=True,
             **kwargs,
         )
+        out["checked"] = True
         healthy, detail = probe._vllm_health()
-        if healthy:
-            return None
-        return (f"qwen3_vl vllm backend not ready (warning, not blocking): "
-                f"{detail}")
+        out["healthy"] = bool(healthy)
+        out["detail"] = detail
     except Exception as exc:  # never block startup on a check failure
-        return (f"qwen3_vl vllm readiness check raised "
-                f"(warning, not blocking): {type(exc).__name__}: {exc}")
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        out["detail"] = f"vllm readiness check raised: {out['error']}"
+        out["healthy"] = False
+    return out
+
+
+def _check_qwen_vllm_backend(cfg) -> Optional[str]:
+    """Warning-only check that Qwen3-VL's vLLM endpoint is reachable
+    AND advertises the configured ``served_model_name``.
+
+    Returns ``None`` when the backend is not vLLM (rollback), the
+    provider is disabled, or vLLM is healthy. Returns a short warning
+    string otherwise. NEVER raises; this function must never block
+    startup."""
+    s = qwen_vllm_status(cfg)
+    if s["backend"] != "vllm_openai":
+        return None
+    if not s["enabled"]:
+        return None
+    if s["healthy"]:
+        return None
+    return (f"qwen3_vl vllm backend not ready (warning, not blocking): "
+            f"{s['detail']}")
 
 
 def _check_provider_chain(cfg, production: bool) -> dict:

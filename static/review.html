@@ -36,7 +36,21 @@
     header .memory {
       font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace;
     }
+    nav.tabs {
+      display: flex; gap: 4px; padding: 0 22px;
+      border-bottom: 1px solid var(--border); background: var(--bg);
+    }
+    nav.tabs button {
+      background: transparent; border: none; color: var(--muted);
+      padding: 12px 16px; font-size: 13px; cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+    nav.tabs button.active {
+      color: var(--text); border-bottom-color: var(--accent);
+    }
     main { padding: 22px; max-width: 1280px; margin: 0 auto; }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
     .panel {
       background: var(--panel); border: 1px solid var(--border);
       border-radius: 8px; padding: 18px; margin-bottom: 22px;
@@ -78,6 +92,10 @@
     .pill.CLOSED { background: rgba(61, 220, 132, 0.15); color: var(--ok); }
     .pill.IN_REVIEW { background: rgba(91, 141, 239, 0.18); color: var(--accent); }
     .pill.REPROCESSING { background: rgba(255, 176, 32, 0.18); color: var(--warn); }
+    .pill.OK { background: rgba(61, 220, 132, 0.15); color: var(--ok); }
+    .pill.WARNING { background: rgba(255, 176, 32, 0.18); color: var(--warn); }
+    .pill.ERROR { background: rgba(255, 85, 102, 0.18); color: var(--high); }
+    .pill.UNKNOWN { background: rgba(138, 147, 166, 0.18); color: var(--invalid); }
     .empty { color: var(--muted); padding: 30px 0; text-align: center; }
     .detail-grid {
       display: grid; grid-template-columns: 1fr 1fr; gap: 22px;
@@ -98,116 +116,277 @@
       repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
     video { width: 100%; background: black; border-radius: 5px; }
     a { color: var(--accent); }
+    pre.json {
+      background: #0e131a; padding: 10px; border-radius: 5px;
+      font-size: 11px; line-height: 1.4; overflow-x: auto;
+      font-family: ui-monospace, monospace; color: var(--text);
+      max-height: 400px; margin: 0;
+    }
+    .status-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .status-card {
+      background: #0e131a; border: 1px solid var(--border);
+      border-radius: 6px; padding: 12px;
+    }
+    .status-card h3 {
+      margin: 0 0 8px 0; font-size: 12px;
+      letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .status-card .detail {
+      font-family: ui-monospace, monospace; font-size: 12px;
+      color: var(--muted); word-break: break-word; line-height: 1.4;
+    }
+    .warning-list { font-size: 12px; }
+    .warning-list li { margin-bottom: 6px; }
+    .prompt-area textarea { width: 100%; min-height: 110px;
+      font-family: ui-monospace, monospace; font-size: 12px; }
+    .prompt-area label { display: block; margin-top: 10px; }
+    .save-status { font-size: 12px; margin-top: 8px; min-height: 16px;
+      font-family: ui-monospace, monospace; word-break: break-word; }
+    .save-status.ok { color: var(--ok); }
+    .save-status.err { color: var(--high); }
   </style>
 </head>
 <body>
 <header>
   <h1>Return / Refund Visual Review</h1>
-  <span class="badge">case queue</span>
+  <span class="badge">operator console</span>
   <span class="grow"></span>
   <span class="memory" id="memory">memory: —</span>
   <button id="refresh">Refresh</button>
 </header>
 
+<nav class="tabs" id="tabs">
+  <button data-tab="cases" class="active">Cases</button>
+  <button data-tab="pipeline">Pipeline</button>
+  <button data-tab="prompts">Prompts</button>
+  <button data-tab="storage">Storage</button>
+  <button data-tab="config">Config</button>
+</nav>
+
 <main>
-  <section class="panel" id="queue-panel">
-    <h2>Case Queue</h2>
-    <div class="row" style="margin-bottom: 12px">
-      <label class="field">
-        Outcome
-        <select id="filter-outcome">
-          <option value="">all</option>
-          <option>VERIFIED</option>
-          <option>REVIEW</option>
-          <option>HIGH_RISK_REVIEW</option>
-          <option>INVALID_VIDEO</option>
-        </select>
-      </label>
-      <label class="field">
-        Status
-        <select id="filter-status">
-          <option value="">all</option>
-          <option>OPEN</option>
-          <option>IN_REVIEW</option>
-          <option>CLOSED</option>
-          <option>REPROCESSING</option>
-        </select>
-      </label>
-    </div>
-    <table id="case-table">
-      <thead>
-        <tr>
-          <th>Case</th>
-          <th>POS Txn</th>
-          <th>Staff</th>
-          <th>SKU</th>
-          <th>Amount</th>
-          <th>POS time</th>
-          <th>Outcome</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-    <div id="queue-empty" class="empty" hidden>No cases yet — POS events
-      create cases automatically.</div>
+  <!-- ===================== CASES TAB ===================== -->
+  <section class="tab-pane active" id="tab-cases">
+    <section class="panel" id="queue-panel">
+      <h2>Case Queue</h2>
+      <div class="row" style="margin-bottom: 12px">
+        <label class="field">
+          Outcome
+          <select id="filter-outcome">
+            <option value="">all</option>
+            <option>VERIFIED</option>
+            <option>REVIEW</option>
+            <option>HIGH_RISK_REVIEW</option>
+            <option>INVALID_VIDEO</option>
+          </select>
+        </label>
+        <label class="field">
+          Status
+          <select id="filter-status">
+            <option value="">all</option>
+            <option>OPEN</option>
+            <option>IN_REVIEW</option>
+            <option>CLOSED</option>
+            <option>REPROCESSING</option>
+          </select>
+        </label>
+      </div>
+      <table id="case-table">
+        <thead>
+          <tr>
+            <th>Case</th>
+            <th>POS Txn</th>
+            <th>Staff</th>
+            <th>SKU</th>
+            <th>Amount</th>
+            <th>POS time</th>
+            <th>Outcome</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="queue-empty" class="empty" hidden>No cases yet — POS events
+        create cases automatically.</div>
+    </section>
+
+    <section class="panel" id="detail-panel" hidden>
+      <h2>Case Detail
+        <button id="close-detail" style="float:right;font-size:12px">Close</button>
+      </h2>
+      <div class="detail-grid">
+        <div>
+          <h3 style="font-size:13px;margin:0 0 8px 0">POS Event</h3>
+          <div class="kv" id="pos-kv"></div>
+          <h3 style="font-size:13px;margin:16px 0 8px 0">Decision</h3>
+          <div class="kv" id="decision-kv"></div>
+        </div>
+        <div>
+          <h3 style="font-size:13px;margin:0 0 8px 0">Video Window</h3>
+          <video id="video" controls preload="metadata" hidden></video>
+          <div class="empty" id="no-video">No window available yet.</div>
+          <h3 style="font-size:13px;margin:14px 0 6px 0">Evidence source</h3>
+          <div id="evidence-source" style="font-size:12px"></div>
+          <h3 style="font-size:13px;margin:16px 0 8px 0">Keyframes</h3>
+          <div class="keyframes" id="keyframes"></div>
+        </div>
+      </div>
+      <h3 style="font-size:13px;margin:18px 0 8px 0">Timeline</h3>
+      <div class="timeline" id="timeline"></div>
+      <h3 style="font-size:13px;margin:18px 0 8px 0">Model Claims</h3>
+      <div class="kv" id="claims"></div>
+      <h3 style="font-size:13px;margin:18px 0 8px 0">Limitations</h3>
+      <ul class="kv" id="limitations"></ul>
+      <h3 style="font-size:13px;margin:18px 0 8px 0">Audit Trail</h3>
+      <div class="timeline" id="audit"></div>
+
+      <h3 style="font-size:13px;margin:24px 0 10px 0">Reviewer Decision</h3>
+      <div class="reviewer-actions" id="reviewer-actions">
+        <button data-action="verified_physical_return" data-outcome="VERIFIED">
+          ✅ Verified physical return</button>
+        <button data-action="needs_review" data-outcome="REVIEW">
+          🔎 Needs review</button>
+        <button data-action="high_risk_review" data-outcome="HIGH_RISK_REVIEW">
+          ⚠️ High-risk review</button>
+        <button data-action="invalid_video" data-outcome="INVALID_VIDEO">
+          🚫 Invalid video</button>
+        <button data-action="camera_blind_spot" data-outcome="REVIEW">
+          📷 Camera blind spot</button>
+        <button data-action="pos_camera_mismatch" data-outcome="REVIEW">
+          🔀 POS / camera mismatch</button>
+      </div>
+      <div class="notes" style="margin-top:12px">
+        <label class="field" style="display:block">Notes
+          <textarea id="review-notes" placeholder="optional"></textarea>
+        </label>
+      </div>
+      <div class="row" style="margin-top:12px;justify-content:flex-end">
+        <button id="reprocess-btn" class="danger">Request reprocess</button>
+        <button id="submit-action" class="primary" disabled>
+          Submit reviewer decision</button>
+      </div>
+    </section>
   </section>
 
-  <section class="panel" id="detail-panel" hidden>
-    <h2>Case Detail
-      <button id="close-detail" style="float:right;font-size:12px">Close</button>
-    </h2>
-    <div class="detail-grid">
-      <div>
-        <h3 style="font-size:13px;margin:0 0 8px 0">POS Event</h3>
-        <div class="kv" id="pos-kv"></div>
-        <h3 style="font-size:13px;margin:16px 0 8px 0">Decision</h3>
-        <div class="kv" id="decision-kv"></div>
+  <!-- ===================== PIPELINE TAB ===================== -->
+  <section class="tab-pane" id="tab-pipeline">
+    <section class="panel">
+      <h2>Pipeline status
+        <button id="ops-refresh" style="float:right;font-size:12px">Refresh</button>
+      </h2>
+      <div class="row" style="margin-bottom:12px;color:var(--muted);font-size:12px">
+        <span>Generated: <span id="ops-generated">—</span></span>
+        <span>Production offline mode: <span id="ops-production-mode">—</span></span>
       </div>
-      <div>
-        <h3 style="font-size:13px;margin:0 0 8px 0">Video Window</h3>
-        <video id="video" controls preload="metadata" hidden></video>
-        <div class="empty" id="no-video">No window available yet.</div>
-        <h3 style="font-size:13px;margin:14px 0 6px 0">Evidence source</h3>
-        <div id="evidence-source" style="font-size:12px"></div>
-        <h3 style="font-size:13px;margin:16px 0 8px 0">Keyframes</h3>
-        <div class="keyframes" id="keyframes"></div>
-      </div>
-    </div>
-    <h3 style="font-size:13px;margin:18px 0 8px 0">Timeline</h3>
-    <div class="timeline" id="timeline"></div>
-    <h3 style="font-size:13px;margin:18px 0 8px 0">Model Claims</h3>
-    <div class="kv" id="claims"></div>
-    <h3 style="font-size:13px;margin:18px 0 8px 0">Limitations</h3>
-    <ul class="kv" id="limitations"></ul>
-    <h3 style="font-size:13px;margin:18px 0 8px 0">Audit Trail</h3>
-    <div class="timeline" id="audit"></div>
+      <div class="status-grid" id="ops-grid"></div>
+      <h3 style="font-size:13px;margin:18px 0 6px 0">Cameras &amp; segment freshness</h3>
+      <table id="ops-cameras">
+        <thead><tr><th>Camera</th><th>Latest segment at</th>
+          <th>Age (s)</th><th>Pill</th><th>Detail</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <h3 style="font-size:13px;margin:18px 0 6px 0">Warnings (non-blocking)</h3>
+      <ul class="warning-list" id="ops-warnings"></ul>
+      <div class="empty" id="ops-error" hidden></div>
+    </section>
+  </section>
 
-    <h3 style="font-size:13px;margin:24px 0 10px 0">Reviewer Decision</h3>
-    <div class="reviewer-actions" id="reviewer-actions">
-      <button data-action="verified_physical_return" data-outcome="VERIFIED">
-        ✅ Verified physical return</button>
-      <button data-action="needs_review" data-outcome="REVIEW">
-        🔎 Needs review</button>
-      <button data-action="high_risk_review" data-outcome="HIGH_RISK_REVIEW">
-        ⚠️ High-risk review</button>
-      <button data-action="invalid_video" data-outcome="INVALID_VIDEO">
-        🚫 Invalid video</button>
-      <button data-action="camera_blind_spot" data-outcome="REVIEW">
-        📷 Camera blind spot</button>
-      <button data-action="pos_camera_mismatch" data-outcome="REVIEW">
-        🔀 POS / camera mismatch</button>
-    </div>
-    <div class="notes" style="margin-top:12px">
-      <label class="field" style="display:block">Notes
-        <textarea id="review-notes" placeholder="optional"></textarea>
-      </label>
-    </div>
-    <div class="row" style="margin-top:12px;justify-content:flex-end">
-      <button id="reprocess-btn" class="danger">Request reprocess</button>
-      <button id="submit-action" class="primary" disabled>
-        Submit reviewer decision</button>
-    </div>
+  <!-- ===================== PROMPTS TAB ===================== -->
+  <section class="tab-pane" id="tab-prompts">
+    <section class="panel">
+      <h2>Prompt editor</h2>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
+        Edits go through <code>PATCH /api/v1/admin/prompts/{camera_id}</code>.
+        The backend refuses unsafe phrasing and writes an audit log
+        entry for every save. The review-safe contract cannot be
+        regressed via this UI.
+      </p>
+      <div class="row" style="margin-bottom:12px">
+        <label class="field">Camera
+          <select id="prompt-camera"></select>
+        </label>
+        <label class="field">Admin token
+          <input id="prompt-admin-token" type="password" placeholder="X-PhazeX-Admin-Token (optional if unset)" style="width:280px"/>
+        </label>
+        <button id="prompt-reload">Reload from server</button>
+      </div>
+      <div class="prompt-area">
+        <label>
+          <span style="font-size:12px;color:var(--muted)">Falcon prompt (perception)</span>
+          <textarea id="prompt-falcon"></textarea>
+        </label>
+        <label>
+          <span style="font-size:12px;color:var(--muted)">VLM system prompt (Gemma / Qwen)</span>
+          <textarea id="prompt-gemma-system"></textarea>
+        </label>
+        <label>
+          <span style="font-size:12px;color:var(--muted)">VLM user prompt (Gemma / Qwen)</span>
+          <textarea id="prompt-gemma-user"></textarea>
+        </label>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">
+        Safety scan (live load): <span id="prompt-safety">—</span>
+      </div>
+      <div class="row" style="margin-top:12px;justify-content:flex-end">
+        <button id="prompt-save" class="primary">Save prompts</button>
+      </div>
+      <div class="save-status" id="prompt-save-status"></div>
+    </section>
+  </section>
+
+  <!-- ===================== STORAGE TAB ===================== -->
+  <section class="tab-pane" id="tab-storage">
+    <section class="panel">
+      <h2>Disk &amp; retention
+        <button id="storage-refresh" style="float:right;font-size:12px">Refresh</button>
+      </h2>
+      <div class="status-grid" id="storage-grid"></div>
+      <h3 style="font-size:13px;margin:18px 0 6px 0">Retention cleanup</h3>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
+        Cleanup never touches segments linked to a case, evidence package,
+        or audit artifact. Dry-run is always safe. Execute requires the
+        admin token below and is audited.
+      </p>
+      <div class="row" style="margin-bottom:12px">
+        <label class="field">Admin token
+          <input id="storage-admin-token" type="password" placeholder="X-PhazeX-Admin-Token" style="width:280px"/>
+        </label>
+        <button id="storage-dry-run">Dry-run cleanup</button>
+        <button id="storage-execute" class="danger">Execute cleanup</button>
+      </div>
+      <div class="save-status" id="storage-status"></div>
+      <h3 style="font-size:13px;margin:16px 0 6px 0">Candidate segments</h3>
+      <pre class="json" id="storage-candidates">(no dry-run yet)</pre>
+    </section>
+  </section>
+
+  <!-- ===================== CONFIG TAB ===================== -->
+  <section class="tab-pane" id="tab-config">
+    <section class="panel">
+      <h2>Effective configuration (read-only)
+        <button id="config-refresh" style="float:right;font-size:12px">Refresh</button>
+      </h2>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
+        Secrets are redacted server-side. Use <code>config.yaml</code>
+        for full edits — broad YAML editing is intentionally not
+        exposed here.
+      </p>
+      <h3 style="font-size:13px;margin:0 0 6px 0">Cameras</h3>
+      <pre class="json" id="config-cameras">—</pre>
+      <h3 style="font-size:13px;margin:12px 0 6px 0">Models</h3>
+      <pre class="json" id="config-models">—</pre>
+      <h3 style="font-size:13px;margin:12px 0 6px 0">Reasoning</h3>
+      <pre class="json" id="config-reasoning">—</pre>
+      <h3 style="font-size:13px;margin:12px 0 6px 0">GPU / Memory thresholds</h3>
+      <pre class="json" id="config-gpu">—</pre>
+      <h3 style="font-size:13px;margin:12px 0 6px 0">Storage retention</h3>
+      <pre class="json" id="config-storage">—</pre>
+      <h3 style="font-size:13px;margin:12px 0 6px 0">TillShield integration</h3>
+      <pre class="json" id="config-tillshield">—</pre>
+    </section>
   </section>
 </main>
 
@@ -215,6 +394,23 @@
 const API = "/api/v1";
 let selectedAction = null;
 let currentCase = null;
+
+// ---- Tab plumbing ----
+function activateTab(name) {
+  for (const b of document.querySelectorAll("nav.tabs button")) {
+    b.classList.toggle("active", b.dataset.tab === name);
+  }
+  for (const p of document.querySelectorAll(".tab-pane")) {
+    p.classList.toggle("active", p.id === `tab-${name}`);
+  }
+  if (name === "pipeline") refreshOps();
+  if (name === "prompts") refreshPrompts();
+  if (name === "storage") refreshStorage();
+  if (name === "config") refreshConfig();
+}
+for (const b of document.querySelectorAll("nav.tabs button")) {
+  b.onclick = () => activateTab(b.dataset.tab);
+}
 
 async function refreshMemory() {
   try {
@@ -269,8 +465,6 @@ function escapeHtml(s) {
     '"': "&quot;", "'": "&#39;",
   }[c]));
 }
-// Human-readable evidence-source line: where the window came from
-// (NVR on-demand clip vs local recorded segments) plus NVR query detail.
 const SOURCE_LABELS = {
   nvr_clip_retrieved:            ["📼", "NVR historical clip (retrieved on-demand)", "#36c275"],
   nvr_recording_found_no_export: ["🗄️", "NVR has footage — local segments used", "#e0b341"],
@@ -348,8 +542,6 @@ async function openCase(caseId) {
     package_sha256: pkg?.audit?.package_sha256,
   });
 
-  // Video playback — wire to the real /video/windows/{id}/stream
-  // endpoint when a SUCCEEDED window exists for this case.
   const video = document.getElementById("video");
   const noVideo = document.getElementById("no-video");
   const window_ = c.latest_window || null;
@@ -366,12 +558,8 @@ async function openCase(caseId) {
       : "no window available yet.";
   }
 
-  // Evidence source — which acquisition path produced the window
-  // (NVR on-demand clip vs local recorded segments) + NVR query detail.
   renderEvidenceSource(window_);
 
-  // Keyframes — show frame_id + role from real perception rows. The
-  // dedicated artifact crops are also rendered when their URI exists.
   const kfs = document.getElementById("keyframes");
   kfs.innerHTML = "";
   const perception = pkg?.perception || {};
@@ -397,7 +585,6 @@ async function openCase(caseId) {
     kfs.innerHTML = '<div class="empty">no keyframes selected</div>';
   }
 
-  // Timeline — use real package perception + reasoning events
   const tl = document.getElementById("timeline");
   tl.innerHTML = "";
   const events = [];
@@ -424,7 +611,6 @@ async function openCase(caseId) {
     tl.appendChild(row);
   }
 
-  // Tracks summary
   const tracksUl = document.createElement("ul");
   tracksUl.className = "kv";
   for (const t of (perception.tracks || [])) {
@@ -438,7 +624,6 @@ async function openCase(caseId) {
     tracksUl.appendChild(li);
   }
 
-  // OCR
   const ocrUl = document.createElement("ul");
   ocrUl.className = "kv";
   for (const o of (perception.ocr || [])) {
@@ -447,7 +632,6 @@ async function openCase(caseId) {
     ocrUl.appendChild(li);
   }
 
-  // Model claims
   const claims = document.getElementById("claims");
   claims.innerHTML = "";
   const reasoning = pkg?.reasoning || [];
@@ -470,7 +654,6 @@ async function openCase(caseId) {
     claims.appendChild(ocrTitle); claims.appendChild(ocrUl);
   }
 
-  // Limitations
   const lim = document.getElementById("limitations");
   lim.innerHTML = "";
   const limitations = [];
@@ -486,7 +669,6 @@ async function openCase(caseId) {
     lim.innerHTML = '<li class="empty">none reported</li>';
   }
 
-  // Audit
   const audit = document.getElementById("audit");
   audit.innerHTML = "";
   for (const a of (pkg?.audit_trail || [])) {
@@ -558,6 +740,299 @@ document.getElementById("refresh").onclick = () => {
 document.getElementById("filter-outcome").onchange = refreshCases;
 document.getElementById("filter-status").onchange = refreshCases;
 
+// ===================== PIPELINE TAB =====================
+function statusCard(title, panel) {
+  const pill = (panel && panel.pill) || "UNKNOWN";
+  const detail = (panel && (panel.detail || panel.error)) || "";
+  const extra = [];
+  for (const k of ["state", "used_gb", "total_gb",
+                   "free_gb", "min_free_gb", "low_disk_state",
+                   "backend", "served_model_name", "base_url",
+                   "members", "active_primary", "last_successful_poll_at",
+                   "model"]) {
+    if (panel && panel[k] !== undefined && panel[k] !== null) {
+      const v = (typeof panel[k] === "object")
+        ? JSON.stringify(panel[k]) : String(panel[k]);
+      extra.push(`<div><span style="color:var(--muted)">${k}</span>: ${escapeHtml(v)}</div>`);
+    }
+  }
+  return `
+    <div class="status-card">
+      <h3>${escapeHtml(title)} ${pillEl(pill)}</h3>
+      <div class="detail">${escapeHtml(detail)}</div>
+      <div class="detail" style="margin-top:6px">${extra.join("")}</div>
+    </div>`;
+}
+function pillEl(s) {
+  const cls = String(s).replace(/[^A-Z_]/g, "");
+  return `<span class="pill ${cls}">${escapeHtml(s)}</span>`;
+}
+async function refreshOps() {
+  const out = document.getElementById("ops-grid");
+  const err = document.getElementById("ops-error");
+  err.hidden = true;
+  try {
+    const r = await fetch(`${API}/ops/status`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const s = await r.json();
+    document.getElementById("ops-generated").textContent = s.generated_at || "—";
+    document.getElementById("ops-production-mode").textContent =
+      s.production_offline_mode ? "true" : "false";
+    const cards = [
+      statusCard("Memory guard", s.memory),
+      statusCard("Disk / storage", s.storage),
+      statusCard("Provider chain", s.provider_chain),
+      statusCard("Qwen3-VL (vLLM)", s.qwen_vllm),
+      statusCard("Gemma fallback", s.gemma),
+      statusCard("TillShield poller", s.tillshield),
+      statusCard("Cases", s.cases),
+    ];
+    out.innerHTML = cards.join("");
+
+    const tbody = document.querySelector("#ops-cameras tbody");
+    tbody.innerHTML = "";
+    for (const cam of (s.cameras || [])) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(cam.id || "—")}<br><span style="color:var(--muted);font-size:11px">${escapeHtml(cam.name || "")}</span></td>
+        <td>${escapeHtml(cam.latest_segment_at || "—")}</td>
+        <td>${cam.latest_segment_age_seconds ?? "—"}</td>
+        <td>${pillEl(cam.pill || "UNKNOWN")}</td>
+        <td><span style="color:var(--muted)">${escapeHtml(cam.detail || cam.error || "")}</span></td>`;
+      tbody.appendChild(tr);
+    }
+    if (!s.cameras || s.cameras.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No cameras configured.</td></tr>';
+    }
+
+    const wl = document.getElementById("ops-warnings");
+    wl.innerHTML = "";
+    if (s.warnings && s.warnings.length) {
+      for (const w of s.warnings) {
+        const li = document.createElement("li");
+        li.textContent = w;
+        wl.appendChild(li);
+      }
+    } else {
+      wl.innerHTML = '<li class="empty">No warnings reported.</li>';
+    }
+  } catch (e) {
+    err.hidden = false;
+    err.textContent = `ops/status failed: ${e}`;
+  }
+}
+document.getElementById("ops-refresh").onclick = refreshOps;
+
+// ===================== PROMPTS TAB =====================
+let _promptCache = {};  // camera_id -> row
+async function refreshPrompts() {
+  try {
+    const r = await fetch(`${API}/admin/prompts`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const body = await r.json();
+    const sel = document.getElementById("prompt-camera");
+    const before = sel.value;
+    sel.innerHTML = "";
+    _promptCache = {};
+    for (const row of (body.items || [])) {
+      _promptCache[row.camera_id] = row;
+      const opt = document.createElement("option");
+      opt.value = row.camera_id;
+      opt.textContent = `${row.camera_id} — ${row.scenario_label || row.classifier || ""}`;
+      sel.appendChild(opt);
+    }
+    if (before && _promptCache[before]) sel.value = before;
+    loadSelectedPrompt();
+  } catch (e) {
+    document.getElementById("prompt-save-status").textContent =
+      `load failed: ${e}`;
+  }
+}
+function loadSelectedPrompt() {
+  const id = document.getElementById("prompt-camera").value;
+  const row = _promptCache[id];
+  if (!row) return;
+  document.getElementById("prompt-falcon").value = row.falcon || "";
+  document.getElementById("prompt-gemma-system").value = row.gemma_system || "";
+  document.getElementById("prompt-gemma-user").value = row.gemma_user || "";
+  const safetyEl = document.getElementById("prompt-safety");
+  const violations = row.safety_violation || [];
+  if (violations.length) {
+    safetyEl.innerHTML = `<span class="pill ERROR">${violations.length} violation(s)</span> ` +
+      escapeHtml(violations.join(", "));
+  } else {
+    safetyEl.innerHTML = '<span class="pill OK">no banned phrases detected</span>';
+  }
+  const ss = document.getElementById("prompt-save-status");
+  ss.className = "save-status"; ss.textContent = "";
+}
+document.getElementById("prompt-reload").onclick = refreshPrompts;
+document.getElementById("prompt-camera").onchange = loadSelectedPrompt;
+
+document.getElementById("prompt-save").onclick = async () => {
+  const id = document.getElementById("prompt-camera").value;
+  if (!id) return;
+  const body = {
+    falcon: document.getElementById("prompt-falcon").value || null,
+    gemma_system: document.getElementById("prompt-gemma-system").value || null,
+    gemma_user: document.getElementById("prompt-gemma-user").value || null,
+  };
+  const headers = { "Content-Type": "application/json" };
+  const tok = document.getElementById("prompt-admin-token").value.trim();
+  if (tok) headers["X-PhazeX-Admin-Token"] = tok;
+  const ss = document.getElementById("prompt-save-status");
+  ss.className = "save-status"; ss.textContent = "saving…";
+  try {
+    const r = await fetch(`${API}/admin/prompts/${encodeURIComponent(id)}`, {
+      method: "PATCH", headers, body: JSON.stringify(body),
+    });
+    const txt = await r.text();
+    let payload = null;
+    try { payload = JSON.parse(txt); } catch (_) { /* keep raw text */ }
+    if (r.ok) {
+      ss.className = "save-status ok";
+      ss.textContent = `saved: updated_fields=${JSON.stringify(payload?.updated_fields || [])}`;
+      refreshPrompts();
+    } else {
+      ss.className = "save-status err";
+      const rejected = payload?.detail?.rejected_phrases;
+      if (rejected) {
+        const lines = Object.entries(rejected).map(([f, phrases]) =>
+          `${f}: ${phrases.join(", ")}`);
+        ss.textContent = `rejected (${r.status}) — ` + lines.join(" | ");
+      } else {
+        ss.textContent = `save failed (${r.status}): ${txt.slice(0, 400)}`;
+      }
+    }
+  } catch (e) {
+    ss.className = "save-status err"; ss.textContent = `network error: ${e}`;
+  }
+};
+
+// ===================== STORAGE TAB =====================
+async function refreshStorage() {
+  const grid = document.getElementById("storage-grid");
+  try {
+    const r = await fetch(`${API}/storage/disk`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const s = await r.json();
+    const lowDisk = !!s.low_disk_state;
+    const expired = s.expired_unlinked_segments || 0;
+    const pill = lowDisk ? "ERROR" : (expired > 0 ? "WARNING" : "OK");
+    grid.innerHTML = [
+      statusCard("Disk", {
+        pill,
+        detail: `${s.free_gb}G free / threshold ${s.min_free_gb}G`,
+        free_gb: s.free_gb, min_free_gb: s.min_free_gb,
+        low_disk_state: lowDisk,
+      }),
+      statusCard("Retention", {
+        pill: expired > 0 ? "WARNING" : "OK",
+        detail: `oldest raw segment: ${s.oldest_raw_segment_at || "(none yet)"}`,
+        retention_hours: s.retention_hours,
+        expired_unlinked_segments: expired,
+      }),
+      statusCard("Storage root", {
+        pill: "OK",
+        detail: s.storage_root,
+        total_bytes: s.total_bytes, used_bytes: s.used_bytes,
+        free_bytes: s.free_bytes,
+        storage_root_size_bytes: s.storage_root_size_bytes,
+      }),
+    ].join("");
+  } catch (e) {
+    grid.innerHTML = `<div class="empty">storage/disk failed: ${escapeHtml(String(e))}</div>`;
+  }
+}
+document.getElementById("storage-refresh").onclick = refreshStorage;
+
+document.getElementById("storage-dry-run").onclick = async () => {
+  const status = document.getElementById("storage-status");
+  status.className = "save-status"; status.textContent = "computing candidates…";
+  try {
+    const r = await fetch(`${API}/storage/cleanup/dry-run`, { method: "POST" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const body = await r.json();
+    status.className = "save-status ok";
+    status.textContent = `dry-run: ${body.candidates.length} candidate segment(s) (no files deleted)`;
+    document.getElementById("storage-candidates").textContent =
+      JSON.stringify(body.candidates, null, 2) || "[]";
+  } catch (e) {
+    status.className = "save-status err";
+    status.textContent = `dry-run failed: ${e}`;
+  }
+};
+
+document.getElementById("storage-execute").onclick = async () => {
+  if (!confirm("Delete expired UNLINKED raw segments? Linked case/evidence segments are never touched.")) return;
+  const status = document.getElementById("storage-status");
+  const tok = document.getElementById("storage-admin-token").value.trim();
+  status.className = "save-status"; status.textContent = "executing…";
+  try {
+    const headers = {};
+    if (tok) headers["X-PhazeX-Admin-Token"] = tok;
+    const r = await fetch(`${API}/storage/cleanup/execute`,
+                          { method: "POST", headers });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      status.className = "save-status err";
+      status.textContent = `execute failed (${r.status}): ${JSON.stringify(body.detail || body)}`;
+      return;
+    }
+    status.className = "save-status ok";
+    status.textContent =
+      `execute: deleted ${body.deleted_rows} segments, failed ${(body.failed || []).length}`;
+    document.getElementById("storage-candidates").textContent =
+      JSON.stringify(body, null, 2);
+    refreshStorage();
+  } catch (e) {
+    status.className = "save-status err";
+    status.textContent = `execute network error: ${e}`;
+  }
+};
+
+// ===================== CONFIG TAB =====================
+async function refreshConfig() {
+  try {
+    const r = await fetch(`${API}/admin/config`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const c = await r.json();
+    document.getElementById("config-cameras").textContent =
+      JSON.stringify(c.cameras, null, 2);
+    document.getElementById("config-models").textContent =
+      JSON.stringify(c.models, null, 2);
+    document.getElementById("config-reasoning").textContent =
+      JSON.stringify(c.reasoning, null, 2);
+    document.getElementById("config-gpu").textContent =
+      JSON.stringify(c.gpu, null, 2);
+    document.getElementById("config-storage").textContent =
+      JSON.stringify(c.storage, null, 2);
+    // tillshield lives under settings/integrations in the raw config but
+    // /admin/config only returns the redacted top-level groups. Fetch the
+    // tillshield-specific summary from /ops/status when present.
+    try {
+      const opsR = await fetch(`${API}/ops/status`);
+      if (opsR.ok) {
+        const ops = await opsR.json();
+        document.getElementById("config-tillshield").textContent =
+          JSON.stringify({
+            enabled: ops.tillshield?.enabled,
+            base_url: ops.tillshield?.base_url,
+            poll_every_seconds: ops.tillshield?.poll_every_seconds,
+            allowed_workstation_ids: ops.tillshield?.allowed_workstation_ids,
+            workstation_camera_map: ops.tillshield?.workstation_camera_map,
+            validation_issues: ops.tillshield?.validation_issues,
+          }, null, 2);
+      }
+    } catch (_) { /* fall through */ }
+  } catch (e) {
+    document.getElementById("config-cameras").textContent =
+      `admin/config failed: ${e}`;
+  }
+}
+document.getElementById("config-refresh").onclick = refreshConfig;
+
+// Boot
 refreshMemory();
 refreshCases();
 setInterval(refreshMemory, 15000);
