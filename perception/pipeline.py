@@ -81,6 +81,10 @@ def run_perception(session, case, window) -> dict:
 
     window_start_ts = (window.actual_start_at or
                        window.requested_start_at)
+    # Resolve per-model ROI views for the active camera. Each view is
+    # ``None`` when no usable assignment exists, in which case the
+    # corresponding model keeps its full-frame behavior.
+    from app.camera_rois import model_view
     return run_perception_on_window(
         window_path=window.path,
         window_start_ts=window_start_ts,
@@ -90,6 +94,9 @@ def run_perception(session, case, window) -> dict:
         sam2_client=Sam2Client(model_path=sam2_path),
         ocr_engine=OcrEngine(model_path=ocr_path),
         sampling=SamplingPolicy(),
+        falcon_roi_view=model_view(cfg, case.camera_id, "falcon"),
+        sam2_roi_view=model_view(cfg, case.camera_id, "sam2"),
+        ocr_roi_view=model_view(cfg, case.camera_id, "ocr"),
     )
 
 
@@ -103,6 +110,9 @@ def run_perception_on_window(*,
                              window_start_ts: Optional[datetime] = None,
                              ocr_engine: Optional[OcrEngine] = None,
                              falcon_query: str = DEFAULT_FALCON_QUERY,
+                             falcon_roi_view: Optional[dict] = None,
+                             sam2_roi_view: Optional[dict] = None,
+                             ocr_roi_view: Optional[dict] = None,
                              ) -> dict:
     """Decode + run perception on a single video window. ``window_path``
     may be ``None`` in offline / synthetic test mode — in that case the
@@ -126,10 +136,15 @@ def run_perception_on_window(*,
             "obstructed": False,
         }
 
+    # Compute Falcon ROI crop (full-frame coords). Detection bboxes
+    # come back already offset to full-frame so every downstream
+    # consumer keeps the same coordinate space.
+    falcon_crop = _falcon_roi_crop(frames, falcon_roi_view, limitations)
     try:
         detections = falcon_client.detect_on_frames(
             [(idx, ts, img) for idx, ts, img in frames],
             query=falcon_query,
+            roi_crop=falcon_crop,
         )
         for idx, ts, img in frames:
             frames_for_ocr[idx] = img
@@ -137,19 +152,25 @@ def run_perception_on_window(*,
         log.exception("falcon detection failed")
         limitations.append("falcon_unavailable")
 
+    # SAM 2 ROI filter (filter-only by detection centre — we never crop
+    # the image because SAM 2 needs full context for accurate masks).
+    sam_detections = _filter_by_roi(detections, sam2_roi_view,
+                                     limit_tag="sam2_roi_filter",
+                                     limitations=limitations)
+
     masks: list[Mask] = []
-    if detections and sam2_client.has_capability():
+    if sam_detections and sam2_client.has_capability():
         # Pick a representative frame near the middle of the window
         # for SAM 2; this matches the existing single-frame pipeline.
         mid_idx = frames[len(frames) // 2][0]
         mid_img = next((img for idx, ts, img in frames
                         if idx == mid_idx), frames[0][2])
         try:
-            masks = sam2_client.segment(mid_img, detections)
+            masks = sam2_client.segment(mid_img, sam_detections)
         except Exception:
             log.exception("sam2 segment failed")
             limitations.append("sam2_unavailable")
-    elif detections:
+    elif sam_detections:
         limitations.append("sam2_unavailable")
 
     tracker = Tracker()
@@ -157,7 +178,11 @@ def run_perception_on_window(*,
     tracks = tracker.export()
     tracks = annotate_tracks(tracks, detections, zones=zones)
 
-    ocr, ocr_limitations = run_ocr(ocr_engine, detections, frames_for_ocr)
+    ocr_input_detections = _filter_by_roi(detections, ocr_roi_view,
+                                           limit_tag="ocr_roi_filter",
+                                           limitations=limitations)
+    ocr, ocr_limitations = run_ocr(ocr_engine, ocr_input_detections,
+                                    frames_for_ocr)
     limitations.extend(ocr_limitations)
 
     keyframes = select_keyframes(tracks, detections)
@@ -231,12 +256,69 @@ def _load_zones(cfg, camera_id: str) -> list[Zone]:
         if cam.get("id") != camera_id:
             continue
         for name, z in (cam.get("zones") or {}).items():
+            if not isinstance(z, dict):
+                continue
             try:
+                # ``z`` may carry the new ``label``/``purpose`` siblings
+                # — only the spatial keys matter for decision-policy
+                # zone semantics, so we extract them tolerantly.
                 zones.append(Zone(name=name, x=int(z["x"]), y=int(z["y"]),
                                   w=int(z["w"]), h=int(z["h"])))
             except (KeyError, TypeError, ValueError):
                 continue
     return zones
+
+
+def _falcon_roi_crop(frames, view, limitations) -> Optional[tuple[int, int, int, int]]:
+    """Build the per-window Falcon crop bbox from the model view, or
+    return ``None`` when no usable assignment exists.
+
+    The crop is expanded by ``margin_pct`` and clipped to the actual
+    frame size (frames are assumed to share dimensions across a single
+    window, which is true for the recorder's segments)."""
+    if not view or view.get("mode") != "union_crop":
+        return None
+    zones = view.get("resolved_zones") or []
+    if not zones:
+        return None
+    from app.camera_rois import apply_margin, union_bbox
+    bbox = union_bbox(zones)
+    if bbox is None:
+        return None
+    if not frames:
+        return None
+    _idx, _ts, sample = frames[0]
+    try:
+        w, h = sample.size
+    except Exception:
+        limitations.append("falcon_roi_crop_image_size_unavailable")
+        return None
+    cropped = apply_margin(bbox, float(view.get("margin_pct") or 0.0),
+                            int(w), int(h))
+    limitations.append(
+        f"falcon_roi_crop={cropped} margin={view.get('margin_pct') or 0.0}")
+    return cropped
+
+
+def _filter_by_roi(detections, view, *, limit_tag: str, limitations) -> list:
+    """Return only detections whose centre falls inside any resolved
+    ROI for ``view``. When the view is missing/empty, the detections
+    are returned unchanged (back-compat). The number of filtered-out
+    detections is recorded as a limitation so the reviewer can see
+    when ROI gating dropped evidence."""
+    if not view or not detections:
+        return detections
+    zones = view.get("resolved_zones") or []
+    if not zones:
+        return detections
+    from app.camera_rois import detection_inside_rois
+    kept = [d for d in detections
+            if detection_inside_rois(list(d.bbox_xyxy), zones)]
+    dropped = len(detections) - len(kept)
+    if dropped:
+        limitations.append(
+            f"{limit_tag}: dropped {dropped} detection(s) outside ROI union")
+    return kept
 
 
 def _d_dict(d: Detection) -> dict:

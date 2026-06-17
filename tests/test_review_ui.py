@@ -139,6 +139,26 @@ def test_review_ui_config_calls_admin_config_readonly():
     assert "config-models" in src
 
 
+def test_review_ui_has_camera_rois_tab():
+    src = (ROOT / "static" / "review.html").read_text()
+    assert "data-tab=\"rois\"" in src
+    assert "tab-rois" in src
+    # ROI editor controls + admin token field are present.
+    for ident in ("roi-camera", "roi-admin-token",
+                  "roi-zone-table", "roi-models",
+                  "roi-add-zone", "roi-save",
+                  "roi-save-status"):
+        assert ident in src, f"missing ROI UI id {ident!r}"
+    # ROI API endpoints are referenced from the JS.
+    assert "/admin/camera-rois" in src
+    # The 5 supported models each show up in the model assignment block.
+    for m in ("falcon", "sam2", "ocr", "qwen3_vl", "gemma"):
+        assert m in src
+    # We explicitly state that visual calibration is not available
+    # rather than faking it.
+    assert "Visual calibration" in src and "unavailable" in src
+
+
 def test_review_ui_no_start_stop_external_processes():
     """The console must NOT pretend to start/stop vLLM, Gemma, the
     recorder, or the POS poller — those are managed externally."""

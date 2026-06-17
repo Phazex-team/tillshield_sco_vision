@@ -252,7 +252,9 @@ def test_pipeline_assembles_tracks_when_detections_provided_via_synthetic_frames
                    (50, base + timedelta(seconds=2), object())]
 
     class _Stub:
-        def detect_on_frames(self, frames, *, query):
+        def detect_on_frames(self, frames, *, query, **kwargs):
+            # kwargs absorbs newer perception-pipeline knobs such as
+            # ``roi_crop=`` without breaking the test contract.
             return detections
         def _ensure_loaded(self):
             pass

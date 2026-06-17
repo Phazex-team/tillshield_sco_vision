@@ -184,11 +184,29 @@ def analyze_case(session: Session,
         max_frames=manifest_max_frames,
     )
 
+    # ROI-driven labeled crops + caption preamble for the active VLM
+    # primary (Qwen3-VL). When no active labeled_crops view exists for
+    # this camera, ``vlm_roi_extras`` is None and the manifest keeps
+    # its full-frame-only shape — pure back-compat with the K-series.
+    vlm_roi_extras = _build_vlm_roi_extras(case.camera_id, sampled_frames)
+
     # ----- 5. Reasoning ----------------------------------------------
     # Build the manifest once. Both the real chain and any injected
     # ``vlm_runner`` receive it as a fourth positional arg, so tests can
     # assert that ``manifest.frames`` is non-empty for a valid window.
     from reasoning.providers.base import EvidenceManifest
+    manifest_frames = list(sampled_frames)
+    manifest_user_prompt = None
+    manifest_meta: dict = {"prompt_version": prompt_version}
+    if vlm_roi_extras is not None:
+        # The helper already composes the FINAL ordered frame list so
+        # the user-prompt's "Attached images" section matches the
+        # actual provider attachment order one-to-one.
+        manifest_frames = list(vlm_roi_extras["frames"])
+        manifest_user_prompt = vlm_roi_extras["user_prompt"]
+        manifest_meta["rois"] = vlm_roi_extras["roi_descriptors"]
+        manifest_meta["roi_caption_text"] = vlm_roi_extras["caption_text"]
+
     manifest = EvidenceManifest(
         case_id=case.id,
         camera_id=case.camera_id,
@@ -196,10 +214,11 @@ def analyze_case(session: Session,
                          or plan.requested_start).isoformat(),
         window_end_ts=(build.actual_end_at
                        or plan.requested_end).isoformat(),
-        frames=sampled_frames,
+        frames=manifest_frames,
         tracks=(perception_result or {}).get("tracks") or [],
         ocr=(perception_result or {}).get("ocr") or [],
-        metadata={"prompt_version": prompt_version},
+        user_prompt=manifest_user_prompt,
+        metadata=manifest_meta,
     )
 
     vlm_result_dict: dict = {}
@@ -511,6 +530,197 @@ def _summarise_perception(perception_result: Optional[dict]) -> dict:
         "ocr": len(perception_result.get("ocr") or []),
         "detections": len(perception_result.get("detections") or []),
         "limitations": perception_result.get("limitations") or [],
+    }
+
+
+def _build_vlm_roi_extras(camera_id: str,
+                          sampled_frames: list[dict]
+                          ) -> Optional[dict]:
+    """Return the full ordered VLM manifest extras when the active
+    primary VLM has a ``labeled_crops`` view configured for
+    ``camera_id``. Returns ``None`` otherwise so the manifest keeps its
+    existing full-frame shape.
+
+    The returned dict carries:
+
+      * ``frames`` — the FINAL ordered list of manifest frames that the
+        provider will attach in this exact order: full-frame overview
+        entries (if ``include_full_frame_overview`` is on) followed by
+        the labeled ROI crops, grouped by source frame and then by zone
+        order. The provider's image-list order is identical to this
+        list — see ``Qwen3VLProvider._analyze_vllm`` /
+        ``GemmaProvider.analyze_evidence``.
+      * ``user_prompt`` — a composed text prompt that, BEFORE the
+        canonical JSON request, contains an ordered ``Attached images``
+        section pairing position 1..N with frame_id, kind (overview |
+        roi_crop), roi_id/label/crop_xyxy/source_frame_id where
+        applicable. The model is therefore told exactly which image is
+        which ROI in the same order the image parts arrive.
+      * ``caption_text`` — the same ROI section text exposed for audit
+        / persistence purposes.
+      * ``roi_descriptors`` — list of full ROI definitions for
+        ``manifest.metadata["rois"]``.
+      * ``include_full_frame_overview`` — echo of the resolved flag.
+      * ``primary_model`` — which provider's view drove the assembly.
+
+    Captions/labels round-trip from stable operator-chosen identifiers.
+    """
+    if not sampled_frames:
+        return None
+    try:
+        from app.camera_rois import apply_margin, model_view
+        from app.config import load_config
+        from reasoning.providers.qwen3_vl import DEFAULT_USER_PROMPT
+    except Exception:
+        log.exception("roi extras: imports failed")
+        return None
+    try:
+        cfg = load_config()
+    except Exception:
+        log.exception("roi extras: cfg load failed")
+        return None
+    reasoning_cfg = (cfg.raw.get("reasoning") if cfg else None) or {}
+    primary = reasoning_cfg.get("primary_provider") or "qwen3_vl"
+    view = model_view(cfg, camera_id, primary)
+    if view is None:
+        view = model_view(cfg, camera_id, "qwen3_vl")
+    if view is None or view.get("mode") != "labeled_crops":
+        return None
+    zones = view.get("resolved_zones") or []
+    if not zones:
+        return None
+    include_overview = bool(view.get("include_full_frame_overview", True))
+
+    try:
+        from PIL import Image
+        import io
+        import base64
+    except Exception:
+        log.exception("roi extras: PIL unavailable")
+        return None
+
+    def _decode(url: str):
+        if not url.startswith("data:image"):
+            return None
+        try:
+            _, b64 = url.split(",", 1)
+            raw = base64.b64decode(b64)
+            img = Image.open(io.BytesIO(raw))
+            return img.convert("RGB") if img.mode != "RGB" else img
+        except Exception:
+            log.exception("roi extras: decode failed")
+            return None
+
+    sample = _decode(sampled_frames[0].get("image_url") or "")
+    if sample is None:
+        return None
+    src_w, src_h = sample.size
+
+    # Pick source frames to clip from: first + middle keep the manifest
+    # compact while still covering more than a single instant.
+    n = len(sampled_frames)
+    source_indices = sorted({0, n // 2}) if n > 1 else [0]
+    margin_pct = float(view.get("margin_pct") or 0.0)
+    extra_frames: list[dict] = []
+    for src_idx in source_indices:
+        src = sampled_frames[src_idx]
+        src_img = _decode(src.get("image_url") or "")
+        if src_img is None:
+            continue
+        src_frame_id = src.get("frame_id") or f"frame_{src_idx:06d}"
+        for z in zones:
+            x1, y1, x2, y2 = apply_margin(
+                (int(z["x"]), int(z["y"]),
+                 int(z["x"]) + int(z["w"]), int(z["y"]) + int(z["h"])),
+                margin_pct, src_w, src_h)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crop = src_img.crop((x1, y1, x2, y2))
+            buf = io.BytesIO()
+            crop.save(buf, format="JPEG", quality=85)
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            extra_frames.append({
+                "frame_id": f"{src_frame_id}__roi_{z['id']}",
+                "frame_idx": src.get("frame_idx"),
+                "ts": src.get("ts"),
+                "image_url": f"data:image/jpeg;base64,{b64}",
+                "source_frame_id": src_frame_id,
+                "roi_id": z["id"],
+                "roi_label": z.get("label") or z["id"],
+                "crop_xyxy": [int(x1), int(y1), int(x2), int(y2)],
+            })
+
+    if not extra_frames:
+        return None
+
+    # Build the FINAL ordered frames list — this is the exact order the
+    # provider will attach images in, so the user-prompt manifest below
+    # can number each position confidently.
+    overview_frames: list[dict] = list(sampled_frames) if include_overview \
+        else []
+    final_frames = overview_frames + extra_frames
+
+    # Compose the user prompt. We start with an "Attached images"
+    # section that pairs position -> image (overview vs roi_crop with
+    # full metadata). Then the operator-supplied ROI caption + ROI
+    # legend, and finally the canonical JSON request kept verbatim so
+    # the review-safe contract (no fraud verdict, conservative
+    # confidence) cannot regress through ROI editing.
+    image_lines: list[str] = []
+    image_lines.append(
+        "Attached images (the model receives them in this exact order):")
+    for pos, f in enumerate(final_frames, start=1):
+        if "roi_id" in f:
+            crop = f.get("crop_xyxy") or []
+            image_lines.append(
+                f"  [{pos}] roi_crop  frame_id={f.get('frame_id')}  "
+                f"roi_id={f.get('roi_id')}  "
+                f"label={f.get('roi_label')!r}  "
+                f"crop_xyxy={list(crop)}  "
+                f"source_frame_id={f.get('source_frame_id')}")
+        else:
+            image_lines.append(
+                f"  [{pos}] overview  frame_id={f.get('frame_id')}  "
+                f"ts={f.get('ts')}")
+
+    caption_lines: list[str] = []
+    if include_overview:
+        caption_lines.append(
+            "Camera ROI views — the manifest above includes a full-frame "
+            "overview AND additional labeled crops.")
+    else:
+        caption_lines.append(
+            "Camera ROI views — the manifest above contains labeled "
+            "crops only (no full-frame overview).")
+    if view.get("caption"):
+        caption_lines.append(view["caption"])
+    caption_lines.append("ROI legend:")
+    for z in zones:
+        bits = [f"- {z['id']} [{z.get('label') or z['id']}]"]
+        if z.get("purpose"):
+            bits.append(f"({z['purpose']})")
+        caption_lines.append(" ".join(bits))
+
+    caption_text = "\n".join(image_lines + [""] + caption_lines)
+    user_prompt = caption_text + "\n\n" + DEFAULT_USER_PROMPT
+
+    roi_descriptors = [
+        {"id": z["id"],
+         "label": z.get("label") or z["id"],
+         "purpose": z.get("purpose") or "",
+         "x": int(z["x"]), "y": int(z["y"]),
+         "w": int(z["w"]), "h": int(z["h"])}
+        for z in zones
+    ]
+
+    return {
+        "frames": final_frames,
+        "extra_frames": extra_frames,
+        "user_prompt": user_prompt,
+        "caption_text": caption_text,
+        "roi_descriptors": roi_descriptors,
+        "include_full_frame_overview": include_overview,
+        "primary_model": primary,
     }
 
 

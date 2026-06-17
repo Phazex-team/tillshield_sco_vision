@@ -90,6 +90,12 @@ _DEFAULT_USER = (
     "Output ONLY the JSON object. No preamble, no markdown."
 )
 
+# Public re-export so ``app.case_runner`` (and tests) can compose the
+# canonical structured-JSON request with an ROI-guidance preamble
+# without forking the prompt body. Drift would silently change the
+# review-safe contract for every camera, so we keep one source of truth.
+DEFAULT_USER_PROMPT: str = _DEFAULT_USER
+
 
 _DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1"
 _DEFAULT_HOST = "127.0.0.1"

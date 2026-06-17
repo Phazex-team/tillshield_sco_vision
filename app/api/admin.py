@@ -259,3 +259,148 @@ def update_prompts(camera_id: str,
                                      overrides.model_dump().items()
                                      if v is not None),
             "prompts": new_prompts}
+
+
+# ---------------------------------------------------------------------------
+# Camera ROIs (per-camera ROI registry + per-model view assignments)
+# ---------------------------------------------------------------------------
+
+@router.get("/camera-rois")
+def list_camera_rois_endpoint() -> dict:
+    """Return ROI registry + model assignments for every camera."""
+    from app.camera_rois import list_camera_rois
+    from app.config import load_config
+    return {"items": list_camera_rois(load_config())}
+
+
+@router.get("/camera-rois/{camera_id}")
+def get_camera_rois(camera_id: str) -> dict:
+    from app.camera_rois import describe_camera_rois
+    from app.config import load_config
+    cfg = load_config()
+    for cam in cfg.cameras:
+        if cam.get("id") == camera_id:
+            return describe_camera_rois(cam)
+    raise HTTPException(status_code=404,
+                        detail=f"camera {camera_id!r} not configured")
+
+
+@router.patch("/camera-rois/{camera_id}")
+def update_camera_rois(camera_id: str,
+                       payload: dict = Body(...),
+                       request: Request = None,
+                       x_phazex_admin_token: Optional[str] = Header(default=None),
+                       ) -> dict:
+    """Persist ROI registry + model view assignments for ``camera_id``.
+
+    Payload (both keys optional, at least one required)::
+
+        {
+          "zones": {
+            "counter_zone": {"label": "...", "purpose": "...",
+                              "x": 0, "y": 0, "w": 100, "h": 100}
+          },
+          "model_roi_views": {
+            "falcon":   {"enabled": true, "roi_ids": ["counter_zone"],
+                          "mode": "union_crop", "margin_pct": 0.08,
+                          "caption": "..."},
+            "qwen3_vl": {"enabled": true, "roi_ids": ["counter_zone"],
+                          "include_full_frame_overview": true,
+                          "mode": "labeled_crops", "caption": "..."}
+          }
+        }
+
+    Admin-token gated like ``PATCH /admin/prompts/{camera_id}``. Every
+    successful write produces an ``AuditLog`` row with before/after.
+    """
+    _check_admin_token(x_phazex_admin_token)
+
+    from pathlib import Path
+    import yaml as _yaml
+
+    from app import audit
+    from app.camera_rois import (
+        SUPPORTED_MODELS, describe_camera_rois, validate_roi_update,
+    )
+    from app.config import DEFAULT_CONFIG_PATH, load_config
+    from db.session import get_sessionmaker
+
+    cfg = load_config()
+    target_cam = None
+    for cam in cfg.cameras:
+        if cam.get("id") == camera_id:
+            target_cam = cam
+            break
+    if target_cam is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"camera {camera_id!r} not found")
+
+    # When PATCH does not include zones, model_roi_views validation
+    # checks against the existing zones on disk so an old config that
+    # forgot a roi id is still rejected. We pass the current ids as a
+    # kwarg — NEVER as a payload key — so the public top-level-keys
+    # check stays strict.
+    current_ids = list((target_cam.get("zones") or {}).keys())
+
+    try:
+        cleaned = validate_roi_update(payload or {},
+                                       current_roi_ids=current_ids)
+    except Exception as exc:
+        raise HTTPException(status_code=400,
+                            detail={"error": str(exc)})
+
+    raw_path = Path(DEFAULT_CONFIG_PATH)
+    data = _yaml.safe_load(raw_path.read_text()) or {}
+    cameras = data.get("cameras") or []
+    target = None
+    for c in cameras:
+        if c.get("id") == camera_id:
+            target = c
+            break
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"camera {camera_id!r} not in config.yaml")
+
+    before = describe_camera_rois(target)
+
+    if "zones" in cleaned:
+        target["zones"] = cleaned["zones"]
+    if "model_roi_views" in cleaned:
+        existing_views = target.get("model_roi_views") or {}
+        merged: dict = dict(existing_views) if isinstance(
+            existing_views, dict) else {}
+        for model, body in cleaned["model_roi_views"].items():
+            merged[model] = {**(merged.get(model) or {}), **body}
+        # Drop any keys for unsupported models so a typo doesn't linger.
+        merged = {k: v for k, v in merged.items()
+                  if k in SUPPORTED_MODELS}
+        target["model_roi_views"] = merged
+
+    raw_path.write_text(_yaml.safe_dump(data, sort_keys=False))
+
+    after = describe_camera_rois(target)
+
+    SM = get_sessionmaker()
+    with SM() as s:
+        audit.record(
+            s, action="admin.camera_rois_update",
+            entity_type="camera", entity_id=camera_id,
+            actor_type="admin_api",
+            before={"zones": before["zones"],
+                    "model_roi_views": before["model_roi_views"]},
+            after={"zones": after["zones"],
+                   "model_roi_views": after["model_roi_views"]},
+            ip=(request.client.host if request and request.client else None),
+            user_agent=(request.headers.get("user-agent")
+                        if request else None),
+        )
+        s.commit()
+
+    return {
+        "camera_id": camera_id,
+        "updated_keys": sorted(cleaned.keys()),
+        "zones": after["zones"],
+        "model_roi_views": after["model_roi_views"],
+    }

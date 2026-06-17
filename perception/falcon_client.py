@@ -55,7 +55,8 @@ class FalconClient:
                          frames: list[tuple[int, datetime, Image.Image]],
                          *,
                          query: Optional[str] = None,
-                         categories: Optional[dict[str, str]] = None
+                         categories: Optional[dict[str, str]] = None,
+                         roi_crop: Optional[tuple[int, int, int, int]] = None
                          ) -> list[Detection]:
         """Run category-aware detection on ``(frame_idx, ts, pil_image)``.
 
@@ -65,25 +66,55 @@ class FalconClient:
         the categories under a generic "item" bucket). Exceptions are
         caught per (frame, category) so one decode failure never loses
         the rest of the window.
+
+        ``roi_crop`` (optional ``(x1, y1, x2, y2)`` in *full-frame*
+        pixel coordinates) restricts Falcon to the cropped region.
+        Detection ``bbox_xyxy`` values are translated back to full-frame
+        coordinates before being returned, so every downstream consumer
+        (tracker, SAM 2, OCR, decision policy, evidence package) keeps
+        its full-frame coordinate contract.
         """
         self._ensure_loaded()
         cats = dict(categories or self.DEFAULT_CATEGORIES)
         if query:
             cats.setdefault("item", query)
+        ox, oy = 0, 0
+        if roi_crop is not None:
+            ox, oy = int(roi_crop[0]), int(roi_crop[1])
         results: list[Detection] = []
         for frame_idx, ts, img in frames:
+            target_img = img
+            if roi_crop is not None:
+                # Clip the crop to the actual image bounds; Falcon would
+                # otherwise mis-handle out-of-bounds crops.
+                w, h = img.size
+                cx1 = max(0, min(int(roi_crop[0]), w))
+                cy1 = max(0, min(int(roi_crop[1]), h))
+                cx2 = max(cx1, min(int(roi_crop[2]), w))
+                cy2 = max(cy1, min(int(roi_crop[3]), h))
+                if cx2 > cx1 and cy2 > cy1:
+                    target_img = img.crop((cx1, cy1, cx2, cy2))
+                    ox, oy = cx1, cy1
+                else:
+                    target_img = img
+                    ox, oy = 0, 0
             for label, cat_query in cats.items():
                 try:
-                    _, dets = self._detector.detect(img, query=cat_query)
+                    _, dets = self._detector.detect(target_img,
+                                                    query=cat_query)
                 except Exception:
                     log.exception("falcon detect failed on frame %d (%s)",
                                   frame_idx, label)
                     continue
                 for d in dets:
+                    bx = [float(x) for x in d.bbox_px]
+                    if ox or oy:
+                        bx = [bx[0] + ox, bx[1] + oy,
+                              bx[2] + ox, bx[3] + oy]
                     results.append(Detection(
                         label=label,
                         score=float(getattr(d, "score", 0.0)) or 0.5,
-                        bbox_xyxy=[float(x) for x in d.bbox_px],
+                        bbox_xyxy=bx,
                         frame_id=f"frame_{frame_idx:06d}",
                         frame_idx=frame_idx,
                         ts=ts,

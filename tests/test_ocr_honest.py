@@ -102,7 +102,8 @@ def test_pipeline_propagates_ocr_unavailable_limitation(monkeypatch):
     fake_frames = [(0, base, object())]
 
     class _StubFalcon:
-        def detect_on_frames(self, frames, *, query):
+        def detect_on_frames(self, frames, *, query, **kwargs):
+            # **kwargs swallows newer pipeline knobs such as ``roi_crop=``.
             return detections
         def _ensure_loaded(self):
             pass
