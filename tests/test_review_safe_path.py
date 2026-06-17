@@ -181,6 +181,7 @@ def test_qwen3_vl_provider_does_not_call_hf_hub_download(monkeypatch):
     p = providers.get_provider(
         "qwen3_vl",
         model_name="Qwen/Qwen3-VL-30B-A3B-Instruct",
+        provider="local_transformers",
         local_path="/definitely/not/here",
         enabled=True,
     )

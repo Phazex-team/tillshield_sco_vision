@@ -360,10 +360,12 @@ def test_chain_falls_back_to_gemma_when_qwen_errors():
     from reasoning.providers import ChainProvider, get_provider
 
     # Build a Qwen that always errors (missing local path) and a Gemma
-    # that returns a benign result.
+    # that returns a benign result. Force the legacy local_transformers
+    # path so the error shape stays "structured error" not "raised".
     qwen = get_provider(
         "qwen3_vl", model_name="Qwen/Qwen3-VL-30B-A3B-Instruct",
-        enabled=True, local_path="/definitely/not/here",
+        enabled=True, provider="local_transformers",
+        local_path="/definitely/not/here",
     )
     # Gemma to a closed port — its analyze_evidence returns an error
     # too, but with a different shape. Use a stub provider for clarity.

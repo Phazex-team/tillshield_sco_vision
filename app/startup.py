@@ -73,6 +73,15 @@ def run_startup_checks(*, strict: Optional[bool] = None) -> dict:
         if sam2_issue:
             issues.append(sam2_issue)
 
+    # 7. vLLM readiness for the Qwen3-VL active runtime. WARNING-ONLY:
+    # the API / recorder / reviewer UI must come up even if vLLM is
+    # not running yet, because the chain falls back to Gemma and the
+    # decision policy degrades to REVIEW.
+    if production:
+        vllm_warning = _check_qwen_vllm_backend(cfg)
+        if vllm_warning:
+            warnings.append(vllm_warning)
+
     if production and issues:
         joined = "\n  - ".join(issues)
         raise StartupCheckError(
@@ -208,6 +217,43 @@ def _check_sam2_runtime(cfg) -> Optional[str]:
     if not path:
         return "sam2 weights not bundled under ./models/hf/"
     return None
+
+
+def _check_qwen_vllm_backend(cfg) -> Optional[str]:
+    """Warning-only check that Qwen3-VL's vLLM endpoint is reachable
+    AND advertises the configured ``served_model_name``.
+
+    Returns ``None`` when:
+      * Qwen3-VL is disabled OR the configured backend is not
+        ``vllm_openai`` (rollback path), OR
+      * /v1/models contains the served model name.
+    Returns a short warning string in all other situations. NEVER
+    raises; this function must never block startup."""
+    try:
+        qwen_cfg = cfg.models.get("qwen3_vl") if cfg else None
+        if qwen_cfg is None or not qwen_cfg.enabled:
+            return None
+        backend = (qwen_cfg.extra.get("provider") or "vllm_openai")
+        if backend != "vllm_openai":
+            return None
+        from reasoning.providers.qwen3_vl import Qwen3VLProvider
+        # Construct a probe with only the kwargs the validator + health
+        # check need. Constructor is cheap (no model load, no socket).
+        kwargs = {k: v for k, v in qwen_cfg.extra.items()
+                  if k not in ("local_path",)}
+        probe = Qwen3VLProvider(
+            model_name=qwen_cfg.name,
+            enabled=True,
+            **kwargs,
+        )
+        healthy, detail = probe._vllm_health()
+        if healthy:
+            return None
+        return (f"qwen3_vl vllm backend not ready (warning, not blocking): "
+                f"{detail}")
+    except Exception as exc:  # never block startup on a check failure
+        return (f"qwen3_vl vllm readiness check raised "
+                f"(warning, not blocking): {type(exc).__name__}: {exc}")
 
 
 def _check_provider_chain(cfg, production: bool) -> dict:

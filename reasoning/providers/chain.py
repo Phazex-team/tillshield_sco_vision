@@ -20,6 +20,10 @@ from .base import (
     VLMProvider,
     VLMResult,
 )
+# Module-scope import so tests can monkeypatch
+# ``reasoning.providers.chain.resolve_model_path`` and have
+# ``build_active_provider`` honor the patched binding.
+from app.config import resolve_model_path
 
 
 log = logging.getLogger(__name__)
@@ -181,7 +185,6 @@ def build_active_provider(cfg: Any) -> VLMProvider:
     ``analyze_evidence`` produces a structured error, which the
     deterministic decision policy degrades to ``REVIEW`` upstream.
     """
-    from app.config import resolve_model_path
     from . import get_provider
 
     reasoning_cfg = (cfg.raw.get("reasoning") if cfg else None) or {}
@@ -203,15 +206,29 @@ def build_active_provider(cfg: Any) -> VLMProvider:
         # path-presence; Gemma reaches the transformers HTTP server.
         local_path = None
         if key == "qwen3_vl":
-            try:
-                local_path = resolve_model_path(model_cfg)
-            except Exception as exc:
-                log.warning("%s path resolution failed: %s", key, exc)
-            if not local_path:
-                log.warning(
-                    "%s enabled but no local snapshot found; skipping",
-                    key)
-                continue
+            backend = (model_cfg.extra.get("provider")
+                       or "vllm_openai")
+            if backend == "local_transformers":
+                # Rollback path: must have a real repo-local snapshot.
+                try:
+                    local_path = resolve_model_path(model_cfg)
+                except Exception as exc:
+                    log.warning("%s path resolution failed: %s", key, exc)
+                if not local_path:
+                    log.warning(
+                        "%s enabled (local_transformers) but no local "
+                        "snapshot found; skipping",
+                        key)
+                    continue
+            else:
+                # vllm_openai backend talks to a local HTTP server; the
+                # repo-local HF bundle is NOT required for the active
+                # runtime path. Active-runtime gate is the vLLM
+                # /v1/models startup check in app.startup.
+                log.info(
+                    "%s using backend=%s; bypassing repo-local HF "
+                    "bundle gate (active runtime is local vLLM HTTP)",
+                    key, backend)
         kwargs = {k: v for k, v in model_cfg.extra.items()
                   if k not in ("local_path",)}
         if local_path:

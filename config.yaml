@@ -119,10 +119,32 @@ models:
   qwen3_vl:
     enabled: true
     name: Qwen/Qwen3-VL-30B-A3B-Instruct
-    max_new_tokens: 512
-    temperature: 0.1
+    # Active backend. ``vllm_openai`` hits a local-only vLLM
+    # OpenAI-compatible server (no HF imports, no GPU load from this
+    # process). ``local_transformers`` is the in-process rollback path
+    # (HF Transformers + optional bitsandbytes nf4) and is only used
+    # when the operator explicitly flips this back.
+    provider: vllm_openai
+    # Strict local-only endpoint. The provider rejects anything other
+    # than this exact base_url unless ``allow_localhost_alias`` /
+    # ``allow_port_override`` is opted into.
+    base_url: http://127.0.0.1:8000/v1
+    served_model_name: qwen3_vl
+    checkpoint_label: Qwen3-VL-30B-A3B-Instruct-FP8
+    precision: fp8
+    timeout_sec: 120
+    health_timeout_sec: 3
+    request_retries: 1
+    allow_localhost_alias: false
+    allow_port_override: false
+    max_frame_long_edge: 1280
+    max_frame_pixels: 1048576
+    max_tokens: 512
+    # ---- local_transformers rollback knobs (ignored under vllm_openai) ----
     # 4-bit (nf4) load: the bf16 30B peaks >121G on this box and OOMs;
     # 4-bit keeps it ~18G resident. bitsandbytes verified on GB10.
+    max_new_tokens: 512
+    temperature: 0.1
     load_in_4bit: true
     local_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
   # Segmentation model used by the perception pipeline. The path is

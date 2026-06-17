@@ -31,6 +31,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -83,29 +84,85 @@ def _load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text())
 
 
+def _qwen_backend(cfg) -> str:
+    """Active backend declared for ``models.qwen3_vl``. Defaults to
+    ``vllm_openai`` when the key is absent so an older config that
+    never set ``provider:`` still gets the new behavior."""
+    try:
+        qwen_cfg = cfg.models.get("qwen3_vl") if cfg else None
+    except Exception:
+        return "vllm_openai"
+    if qwen_cfg is None:
+        return "vllm_openai"
+    return str(qwen_cfg.extra.get("provider") or "vllm_openai")
+
+
+def _qwen_runtime_note(cfg) -> str:
+    """One-line operator-facing note about which Qwen path is active so
+    the operator reading the verifier output is NOT misled when the HF
+    bundle is missing but the active runtime is vLLM (and vice versa)."""
+    backend = _qwen_backend(cfg)
+    if backend == "vllm_openai":
+        return ("note: qwen3_vl active runtime = vLLM OpenAI HTTP "
+                "(active-runtime gate is the vLLM /v1/models startup "
+                "health check, NOT the HF bundle).")
+    return ("note: qwen3_vl active runtime = local_transformers "
+            "(active-runtime gate is the HF bundle under ./models/hf/).")
+
+
+def _qwen_required_name(registry: dict) -> Optional[str]:
+    """Locate the registry entry name for the Qwen3-VL bundle (if any)
+    so we can re-classify it as rollback-only under provider=vllm_openai."""
+    for entry in (registry.get("required") or []):
+        repo = (entry.get("repo") or "").lower()
+        name = (entry.get("name") or "")
+        if "qwen3-vl" in repo.lower() or "qwen3_vl" in name.lower() \
+                or "qwen3-vl" in name.lower():
+            return name
+    return None
+
+
 def verify_required_assets(registry: dict, manifest: dict,
-                           *, full_hash: bool) -> dict:
+                           *, full_hash: bool,
+                           qwen_backend: str = "vllm_openai") -> dict:
     by_name = {m.get("name") or m.get("model_id"): m
                for m in manifest.get("models", [])}
 
     summary = {"required_present": [], "required_missing": [],
-               "optional_present": [], "optional_missing": []}
+               "optional_present": [], "optional_missing": [],
+               "rollback_only_present": [], "rollback_only_missing": []}
+    qwen_name = _qwen_required_name(registry)
+    qwen_is_rollback = (qwen_backend == "vllm_openai")
 
     for entry in registry.get("required", []) or []:
         name = entry.get("name")
+        # Under provider=vllm_openai the Qwen HF bundle is the
+        # rollback-only asset, not part of the active runtime. Route it
+        # to ``rollback_only_{present,missing}`` so a missing bundle
+        # does not fail the required gate.
+        treat_as_rollback = bool(
+            qwen_is_rollback and qwen_name and name == qwen_name
+        )
+        missing_bucket = ("rollback_only_missing" if treat_as_rollback
+                          else "required_missing")
+        present_bucket = ("rollback_only_present" if treat_as_rollback
+                          else "required_present")
         m = by_name.get(name)
         if m is None or m.get("status") != "present":
-            summary["required_missing"].append({
+            rec = {
                 "name": name, "repo": entry.get("repo"),
                 "official_source": entry.get("official_source") or "",
                 "fallback": entry.get("fallback"),
-            })
+            }
+            if treat_as_rollback:
+                rec["active_runtime"] = "vllm_openai"
+            summary[missing_bucket].append(rec)
             continue
         # Confirm files actually present on disk and (optionally) the
         # sha256 of every tracked file.
         snap_dir = BUNDLE_ROOT / m["model_id"] / m["snapshot"]
         if not snap_dir.is_dir():
-            summary["required_missing"].append({
+            summary[missing_bucket].append({
                 "name": name, "repo": entry.get("repo"),
                 "official_source": "manifest claims present but "
                                    f"{snap_dir} not on disk",
@@ -114,13 +171,13 @@ def verify_required_assets(registry: dict, manifest: dict,
         for f in m.get("files", []):
             fp = snap_dir / f["rel_path"]
             if not fp.is_file():
-                summary["required_missing"].append({
+                summary[missing_bucket].append({
                     "name": name, "repo": entry.get("repo"),
                     "official_source": f"file missing: {fp}",
                 })
                 break
             if fp.stat().st_size != f["bytes"]:
-                summary["required_missing"].append({
+                summary[missing_bucket].append({
                     "name": name, "repo": entry.get("repo"),
                     "official_source": (
                         f"size mismatch on {fp.name}: "
@@ -129,13 +186,13 @@ def verify_required_assets(registry: dict, manifest: dict,
                 })
                 break
             if full_hash and _sha256(fp) != f["sha256"]:
-                summary["required_missing"].append({
+                summary[missing_bucket].append({
                     "name": name, "repo": entry.get("repo"),
                     "official_source": f"sha256 drift on {fp.name}",
                 })
                 break
         else:
-            summary["required_present"].append({
+            summary[present_bucket].append({
                 "name": name, "snapshot": m["snapshot"],
                 "files": m["file_count"], "bytes": m["total_bytes"],
             })
@@ -167,13 +224,19 @@ def verify_runtime_assets(registry: dict) -> list[str]:
     return issues
 
 
-def verify_config_paths(*, production_mode: bool) -> list[str]:
+def verify_config_paths(*, production_mode: bool,
+                        qwen_backend: str = "vllm_openai") -> list[str]:
     from app.config import load_config, resolve_model_path
 
     cfg = load_config()
     issues: list[str] = []
     for key, model_cfg in cfg.models.items():
         if not model_cfg.enabled:
+            continue
+        # Under provider=vllm_openai the Qwen HF bundle is rollback-only.
+        # Do NOT fail verify_config_paths for a missing snapshot — the
+        # active runtime gate is the vLLM /v1/models startup check.
+        if key == "qwen3_vl" and qwen_backend == "vllm_openai":
             continue
         try:
             resolved = resolve_model_path(model_cfg,
@@ -224,14 +287,29 @@ def main() -> int:
         print(f"BUNDLE FAIL: {exc}", file=sys.stderr)
         return 2
 
+    try:
+        from app.config import load_config
+        cfg = load_config()
+    except Exception as exc:
+        print(f"WARN: could not load config.yaml: {exc}", file=sys.stderr)
+        cfg = None
+    qwen_backend = _qwen_backend(cfg)
+    print(_qwen_runtime_note(cfg))
+    print(f"qwen3_vl backend = {qwen_backend}")
+    print()
+
     summary = verify_required_assets(registry, manifest,
-                                     full_hash=args.full_hash)
+                                     full_hash=args.full_hash,
+                                     qwen_backend=qwen_backend)
 
     for m in summary["required_present"]:
         print(f"OK  REQUIRED  {m['name']}  snapshot={m['snapshot']}  "
               f"files={m['files']}  bytes={m['bytes']}")
     for m in summary["optional_present"]:
         print(f"OK  optional  {m['name']}  snapshot={m['snapshot']}")
+    for m in summary["rollback_only_present"]:
+        print(f"OK  rollback-only  {m['name']}  snapshot={m['snapshot']}  "
+              f"files={m['files']}  bytes={m['bytes']}")
 
     if summary["required_missing"]:
         print()
@@ -247,11 +325,17 @@ def main() -> int:
         # CI can pick it up.
         return 2
 
+    for m in summary["rollback_only_missing"]:
+        print(f"warn  rollback-only missing: {m['name']}  ({m['repo']})  "
+              f"-> active runtime is {m.get('active_runtime', 'vllm_openai')}; "
+              "operational gate is vLLM /v1/models")
+
     runtime_issues = verify_runtime_assets(registry)
     for issue in runtime_issues:
         print(f"RUNTIME ASSET FAIL: {issue}", file=sys.stderr)
 
-    config_issues = verify_config_paths(production_mode=args.production)
+    config_issues = verify_config_paths(production_mode=args.production,
+                                        qwen_backend=qwen_backend)
     for issue in config_issues:
         print(f"CONFIG FAIL: {issue}", file=sys.stderr)
 

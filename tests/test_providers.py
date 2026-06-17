@@ -55,6 +55,7 @@ def test_qwen3_disabled_by_default():
     p = providers.get_provider(
         "qwen3_vl",
         model_name="Qwen/Qwen3-VL-30B-A3B-Instruct",
+        provider="local_transformers",
         local_path="/nonexistent/path",
         enabled=False,
     )
@@ -69,6 +70,7 @@ def test_qwen3_detects_missing_local_path_when_enabled():
     p = providers.get_provider(
         "qwen3_vl",
         model_name="Qwen/Qwen3-VL-30B-A3B-Instruct",
+        provider="local_transformers",
         local_path="/definitely/not/here",
         enabled=True,
     )
@@ -86,6 +88,7 @@ def test_qwen3_detects_real_local_path(tmp_path):
     p = providers.get_provider(
         "qwen3_vl",
         model_name="Qwen/Qwen3-VL-30B-A3B-Instruct",
+        provider="local_transformers",
         local_path=str(snapshot),
         enabled=True,
     )

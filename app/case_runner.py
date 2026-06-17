@@ -229,15 +229,22 @@ def analyze_case(session: Session,
                                "provider": "chain", "model_name": "chain"}
 
     # ----- 6. Persist VLM run row ------------------------------------
+    input_manifest = {
+        "window_id": window.id,
+        "frame_count": len(sampled_frames),
+        "perception": _summarise_perception(perception_result),
+    }
+    if isinstance(vlm_result_dict.get("provider_metadata"), dict):
+        input_manifest["provider_metadata"] = vlm_result_dict["provider_metadata"]
+    if isinstance(vlm_result_dict.get("usage"), dict):
+        input_manifest["usage"] = vlm_result_dict["usage"]
     run = VlmRun(
         case_id=case.id,
         provider=vlm_result_dict.get("provider", "chain"),
         model_name=vlm_result_dict.get("model_name", "chain"),
         model_snapshot=vlm_result_dict.get("model_snapshot"),
         prompt_version=prompt_version,
-        input_manifest={"window_id": window.id,
-                        "frame_count": len(sampled_frames),
-                        "perception": _summarise_perception(perception_result)},
+        input_manifest=input_manifest,
         output_json=vlm_result_dict.get("parsed", {}),
         status="FAILED" if vlm_result_dict.get("error") else "SUCCEEDED",
         latency_ms=vlm_result_dict.get("latency_ms"),
@@ -466,14 +473,33 @@ def _ts_for_index(idx: int, fps: float, base_ts: datetime) -> datetime:
 
 
 def _adapt_vlm_result(vlm_result, prompt_version: str) -> dict:
-    return {
+    parsed = dict(vlm_result.parsed or {})
+    # ``_model_run`` is stamped by the active provider when it returns a
+    # successful result. Lift it out of ``parsed`` (where the VLM body
+    # would otherwise sit) into top-level fields so the VlmRun row can
+    # persist the provider/runtime fingerprint without polluting
+    # ``output_json`` with framework metadata.
+    model_run = parsed.pop("_model_run", None) \
+        if isinstance(parsed.get("_model_run"), dict) else None
+    out = {
         "provider": vlm_result.provider,
         "model_name": vlm_result.model_name,
-        "parsed": dict(vlm_result.parsed or {}),
+        "parsed": parsed,
         "latency_ms": vlm_result.latency_ms,
         "error": vlm_result.error,
         "prompt_version": prompt_version,
     }
+    if isinstance(model_run, dict):
+        meta = model_run.get("provider_metadata")
+        if isinstance(meta, dict):
+            out["provider_metadata"] = meta
+        snap = model_run.get("model_snapshot")
+        if isinstance(snap, str) and snap:
+            out["model_snapshot"] = snap
+        usage = model_run.get("usage")
+        if isinstance(usage, dict):
+            out["usage"] = usage
+    return out
 
 
 def _summarise_perception(perception_result: Optional[dict]) -> dict:
