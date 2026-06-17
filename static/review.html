@@ -452,6 +452,29 @@
   <!-- ===================== CONFIG TAB ===================== -->
   <section class="tab-pane" id="tab-config">
     <section class="panel">
+      <h2>Model controls
+        <button id="model-controls-refresh" style="float:right;font-size:12px">Refresh</button>
+      </h2>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px 0">
+        Config-level enable/disable for each stage. Changes apply to the
+        <strong>next case or reprocess only</strong> &mdash; an
+        analysis already in flight keeps the snapshot it loaded at
+        start. This panel never starts, stops, or restarts vLLM, the
+        Gemma server, the segment recorder, or any other process; those
+        remain managed externally. No memory is freed by toggling.
+      </p>
+      <div id="model-controls-list"></div>
+      <ul id="model-controls-warnings" class="warning-list" style="margin-top:10px"></ul>
+      <div class="row" style="margin-top:10px">
+        <label class="field">Admin token
+          <input id="model-controls-admin-token" type="password" placeholder="X-PhazeX-Admin-Token (optional if unset)" style="width:280px"/>
+        </label>
+        <button id="model-controls-save" class="primary">Save model controls</button>
+      </div>
+      <div class="save-status" id="model-controls-save-status"></div>
+    </section>
+
+    <section class="panel">
       <h2>Effective configuration (read-only)
         <button id="config-refresh" style="float:right;font-size:12px">Refresh</button>
       </h2>
@@ -493,7 +516,7 @@ function activateTab(name) {
   if (name === "prompts") refreshPrompts();
   if (name === "rois") refreshRois();
   if (name === "storage") refreshStorage();
-  if (name === "config") refreshConfig();
+  if (name === "config") { refreshConfig(); refreshModelControls(); }
 }
 for (const b of document.querySelectorAll("nav.tabs button")) {
   b.onclick = () => activateTab(b.dataset.tab);
@@ -1460,6 +1483,168 @@ document.getElementById("roi-save").onclick = async () => {
     }
   } catch (e) {
     ss.className = "save-status err"; ss.textContent = `network error: ${e}`;
+  }
+};
+
+// ===================== MODEL CONTROLS (Config tab section) ============
+// Config-level enable/disable per stage. No process is started or
+// stopped by these toggles — that is a hard contract for this surface.
+let _modelControlsState = null;  // mirrors GET /admin/model-controls
+
+function _vlmEnabled(state) {
+  return !!(state && (state.qwen3_vl || state.gemma));
+}
+function _modelControlsLocalValidation(state) {
+  // Mirror backend rules so the operator sees the rejection before
+  // they hit Save. Never mutate state here.
+  const issues = [];
+  if (!state.falcon && !state.qwen3_vl && !state.gemma) {
+    issues.push("At least one of Falcon / Qwen3-VL / Gemma must remain "
+                + "enabled (an independent source is required).");
+  }
+  if (state.sam2 && !state.falcon) {
+    issues.push("SAM 2 cannot run while Falcon is disabled — it consumes "
+                + "Falcon boxes.");
+  }
+  if (state.ocr && !state.falcon) {
+    issues.push("OCR cannot run while Falcon is disabled — it runs on "
+                + "Falcon receipt/document detections.");
+  }
+  return issues;
+}
+function _modelControlsAdvisoryWarnings(state) {
+  const warnings = [];
+  if (!state.falcon) {
+    warnings.push("Falcon disabled: no track evidence will exist, so "
+                  + "cases will likely fall through to REVIEW.");
+  }
+  if (!_vlmEnabled(state)) {
+    warnings.push("Both VLM providers disabled: provider chain will "
+                  + "return a structured error and the decision policy "
+                  + "will degrade to REVIEW.");
+  }
+  if (state.qwen3_vl && !state.gemma) {
+    warnings.push("Gemma fallback disabled: a Qwen3-VL failure will "
+                  + "surface as an error with no VLM fallback.");
+  }
+  return warnings;
+}
+async function refreshModelControls() {
+  try {
+    const r = await fetch(`${API}/admin/model-controls`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    _modelControlsState = await r.json();
+    renderModelControls();
+  } catch (e) {
+    const list = document.getElementById("model-controls-list");
+    if (list) list.innerHTML =
+      `<div class="empty">model controls load failed: ${escapeHtml(String(e))}</div>`;
+  }
+}
+function renderModelControls() {
+  const host = document.getElementById("model-controls-list");
+  if (!host) return;
+  host.innerHTML = "";
+  const items = (_modelControlsState && _modelControlsState.models) || [];
+  for (const item of items) {
+    const depBadge = (item.dependencies && item.dependencies.length)
+      ? `<span style="color:var(--warn);font-size:11px;margin-left:6px">`
+        + `depends on: ${item.dependencies.join(", ")}</span>`
+      : "";
+    const card = document.createElement("div");
+    card.className = "panel";
+    card.style.background = "#0e131a";
+    card.style.padding = "10px";
+    card.style.marginBottom = "8px";
+    card.innerHTML = `
+      <label class="field" style="display:flex;gap:10px;align-items:center">
+        <input type="checkbox" data-model-toggle="${escapeHtml(item.id)}"
+               ${item.enabled ? "checked" : ""}/>
+        <strong>${escapeHtml(item.label)}</strong> ${depBadge}
+      </label>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px">
+        ${escapeHtml(item.caption)}
+      </div>
+      <div style="font-size:11px;color:var(--muted);font-family:ui-monospace,monospace;margin-top:2px">
+        ${escapeHtml(item.config_key)}
+      </div>`;
+    host.appendChild(card);
+  }
+  for (const inp of host.querySelectorAll("[data-model-toggle]")) {
+    inp.onchange = () => {
+      const id = inp.dataset.modelToggle;
+      const m = _modelControlsState.models.find(x => x.id === id);
+      if (m) m.enabled = inp.checked;
+      _modelControlsState.state = _modelControlsState.state || {};
+      _modelControlsState.state[id] = inp.checked;
+      renderModelControlsWarnings();
+    };
+  }
+  renderModelControlsWarnings();
+}
+function renderModelControlsWarnings() {
+  const wl = document.getElementById("model-controls-warnings");
+  if (!wl) return;
+  wl.innerHTML = "";
+  const state = (_modelControlsState && _modelControlsState.state) || {};
+  const localIssues = _modelControlsLocalValidation(state);
+  for (const issue of localIssues) {
+    const li = document.createElement("li");
+    li.innerHTML =
+      `<span class="pill ERROR">REJECT</span> ${escapeHtml(issue)}`;
+    wl.appendChild(li);
+  }
+  for (const warn of _modelControlsAdvisoryWarnings(state)) {
+    const li = document.createElement("li");
+    li.innerHTML =
+      `<span class="pill WARNING">WARN</span> ${escapeHtml(warn)}`;
+    wl.appendChild(li);
+  }
+  const save = document.getElementById("model-controls-save");
+  if (save) save.disabled = localIssues.length > 0;
+}
+document.getElementById("model-controls-refresh").onclick =
+  refreshModelControls;
+document.getElementById("model-controls-save").onclick = async () => {
+  const ss = document.getElementById("model-controls-save-status");
+  const state = (_modelControlsState && _modelControlsState.state) || {};
+  const localIssues = _modelControlsLocalValidation(state);
+  if (localIssues.length) {
+    ss.className = "save-status err";
+    ss.textContent = "Rejected locally: " + localIssues.join(" | ");
+    return;
+  }
+  const payload = {
+    falcon:   !!state.falcon,
+    sam2:     !!state.sam2,
+    ocr:      !!state.ocr,
+    qwen3_vl: !!state.qwen3_vl,
+    gemma:    !!state.gemma,
+  };
+  const headers = {"Content-Type": "application/json"};
+  const tok = document.getElementById("model-controls-admin-token").value.trim();
+  if (tok) headers["X-PhazeX-Admin-Token"] = tok;
+  ss.className = "save-status"; ss.textContent = "saving…";
+  try {
+    const r = await fetch(`${API}/admin/model-controls`,
+      {method: "PATCH", headers, body: JSON.stringify(payload)});
+    const txt = await r.text();
+    let body = null;
+    try { body = JSON.parse(txt); } catch (_) {}
+    if (r.ok) {
+      _modelControlsState = body;
+      renderModelControls();
+      ss.className = "save-status ok";
+      ss.textContent = "saved — applies to next case or reprocess; "
+        + "in-flight cases keep their snapshot.";
+    } else {
+      ss.className = "save-status err";
+      ss.textContent = `save failed (${r.status}): ` +
+        (body?.detail?.error || txt.slice(0, 400));
+    }
+  } catch (e) {
+    ss.className = "save-status err";
+    ss.textContent = `network error: ${e}`;
   }
 };
 

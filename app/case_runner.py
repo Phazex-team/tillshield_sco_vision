@@ -49,12 +49,22 @@ def analyze_case(session: Session,
                  perception_runner: Optional[Callable] = None,
                  vlm_runner: Optional[Callable] = None,
                  prompt_version: str = "return_review_v1",
-                 manifest_max_frames: int = 12) -> dict:
+                 manifest_max_frames: int = 12,
+                 cfg=None) -> dict:
     """Run the full analysis for ``case_id`` and persist results.
 
     ``perception_runner`` and ``vlm_runner`` are dependency-injection
     hooks. Tests usually only override ``vlm_runner`` so they exercise
     real window-building + real frame extraction.
+
+    ``cfg`` is the AppConfig snapshot for this single case. When
+    omitted it is loaded ONCE here, at the start of the run, and
+    threaded through every helper that would otherwise call
+    ``load_config()`` mid-case. This means a ``config.yaml`` edit
+    that lands between the time the case starts and the time the
+    package is written CANNOT change provider selection / ROI views
+    / storage root for the in-flight case. Such edits take effect on
+    the NEXT case or reprocess.
     """
     from app import audit
     from evidence.package import write_package
@@ -88,8 +98,15 @@ def analyze_case(session: Session,
     def _ms_since(t0: float) -> int:
         return int((time.perf_counter() - t0) * 1000)
 
+    # Config snapshot for this case. Every helper below reads from
+    # ``cfg`` (or accepts it as a kwarg), so a mid-case config.yaml
+    # edit cannot retarget provider/ROI/storage in flight.
+    if cfg is None:
+        from app.config import load_config
+        cfg = load_config()
+
     # ----- 1. Resolve window from segment index ----------------------
-    storage_root = _storage_root()
+    storage_root = _storage_root(cfg)
     _t = time.perf_counter()
     try:
         plan = plan_window(session, case.camera_id, pos.pos_event_at)
@@ -116,7 +133,7 @@ def analyze_case(session: Session,
     _t = time.perf_counter()
     try:
         nvr_clip = _try_nvr_window(case, pos.pos_event_at, window,
-                                    storage_root)
+                                    storage_root, cfg=cfg)
     finally:
         timings["nvr_acquisition_ms"] = _ms_since(_t)
 
@@ -187,7 +204,13 @@ def analyze_case(session: Session,
     if perception_runner is None:
         try:
             from perception.pipeline import run_perception
-            perception_runner = run_perception
+            # Bind the config snapshot so the perception runner sees
+            # the same enable/disable flags as the rest of the case.
+            _cfg_snapshot = cfg
+
+            def _bound_perception(s, c, w):
+                return run_perception(s, c, w, cfg=_cfg_snapshot)
+            perception_runner = _bound_perception
         except Exception as exc:
             log.warning("perception pipeline unavailable: %s", exc)
     if perception_runner is not None:
@@ -236,7 +259,8 @@ def analyze_case(session: Session,
     _t = time.perf_counter()
     try:
         vlm_roi_extras = _build_vlm_roi_extras(case.camera_id,
-                                                sampled_frames)
+                                                sampled_frames,
+                                                cfg=cfg)
     finally:
         timings["vlm_roi_prepare_ms"] = _ms_since(_t)
 
@@ -274,9 +298,11 @@ def analyze_case(session: Session,
     vlm_result_dict: dict = {}
     if vlm_runner is None:
         try:
-            from app.config import load_config
             from reasoning.providers import build_active_provider
-            chain = build_active_provider(load_config())
+            # Use the snapshot — NOT a fresh load_config() — so a
+            # mid-case toggle of qwen3_vl/gemma cannot retarget the
+            # provider chain for this case.
+            chain = build_active_provider(cfg)
             vlm_runner = lambda s, c, w, m: _adapt_vlm_result(  # noqa: E731
                 chain.analyze_evidence(m), prompt_version)
         except Exception as exc:
@@ -438,20 +464,25 @@ def _close_invalid(session: Session, case: Case,
             "invalid_reason": reason, "package": package["uri"]}
 
 
-def _storage_root() -> Path:
-    from app.config import load_config
-    return load_config().storage_root
+def _storage_root(cfg=None) -> Path:
+    if cfg is None:
+        from app.config import load_config
+        cfg = load_config()
+    return cfg.storage_root
 
 
-def _camera_cfg(camera_id: str) -> dict:
-    from app.config import load_config
-    for c in load_config().cameras:
+def _camera_cfg(camera_id: str, cfg=None) -> dict:
+    if cfg is None:
+        from app.config import load_config
+        cfg = load_config()
+    for c in cfg.cameras:
         if c.get("id") == camera_id:
             return c
     return {}
 
 
-def _try_nvr_window(case, pos_event_at, window, storage_root) -> Optional[str]:
+def _try_nvr_window(case, pos_event_at, window, storage_root,
+                    *, cfg=None) -> Optional[str]:
     """Run NVR on-demand acquisition for this case window.
 
     Annotates ``window.acquisition_source`` + ``window.nvr_metadata`` and
@@ -461,7 +492,7 @@ def _try_nvr_window(case, pos_event_at, window, storage_root) -> Optional[str]:
     try:
         from video.nvr_dahua import (
             acquire_window, load_nvr_config, STATE_CLIP_RETRIEVED)
-        nvr_cfg = load_nvr_config(_camera_cfg(case.camera_id))
+        nvr_cfg = load_nvr_config(_camera_cfg(case.camera_id, cfg=cfg))
         out = (storage_root / "cases" / f"case_id={case.id}" / "window"
                / f"nvr_{window.id}.mp4")
         acq = acquire_window(nvr_cfg, pos_event_at,
@@ -630,7 +661,9 @@ def _summarise_perception(perception_result: Optional[dict]) -> dict:
 
 
 def _build_vlm_roi_extras(camera_id: str,
-                          sampled_frames: list[dict]
+                          sampled_frames: list[dict],
+                          *,
+                          cfg=None,
                           ) -> Optional[dict]:
     """Return the full ordered VLM manifest extras when the active
     primary VLM has a ``labeled_crops`` view configured for
@@ -665,16 +698,17 @@ def _build_vlm_roi_extras(camera_id: str,
         return None
     try:
         from app.camera_rois import apply_margin, model_view
-        from app.config import load_config
         from reasoning.providers.qwen3_vl import DEFAULT_USER_PROMPT
     except Exception:
         log.exception("roi extras: imports failed")
         return None
-    try:
-        cfg = load_config()
-    except Exception:
-        log.exception("roi extras: cfg load failed")
-        return None
+    if cfg is None:
+        try:
+            from app.config import load_config
+            cfg = load_config()
+        except Exception:
+            log.exception("roi extras: cfg load failed")
+            return None
     reasoning_cfg = (cfg.raw.get("reasoning") if cfg else None) or {}
     primary = reasoning_cfg.get("primary_provider") or "qwen3_vl"
     view = model_view(cfg, camera_id, primary)

@@ -246,7 +246,8 @@ def test_analyze_case_records_nvr_found_state(tmp_path, monkeypatch):
     monkeypatch.setattr(nv, "search_recordings", lambda c, a, b: [_match()])
     # Point case_runner at a camera that HAS nvr config.
     from app import case_runner
-    monkeypatch.setattr(case_runner, "_camera_cfg", lambda cid: CAM)
+    monkeypatch.setattr(case_runner, "_camera_cfg",
+                        lambda cid, **k: CAM)
     from db.models import VideoWindow
     from app.case_runner import analyze_case
     with SM() as s:
@@ -267,7 +268,8 @@ def test_analyze_case_without_nvr_config_unchanged(tmp_path, monkeypatch):
     """A camera with no nvr block behaves exactly as before."""
     SM = _fresh_session(tmp_path, monkeypatch)
     from app import case_runner
-    monkeypatch.setattr(case_runner, "_camera_cfg", lambda cid: {"id": cid})
+    monkeypatch.setattr(case_runner, "_camera_cfg",
+                        lambda cid, **k: {"id": cid})
     from db.models import VideoWindow
     from app.case_runner import analyze_case
     with SM() as s:

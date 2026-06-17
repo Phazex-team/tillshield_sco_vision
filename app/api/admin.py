@@ -404,3 +404,242 @@ def update_camera_rois(camera_id: str,
         "zones": after["zones"],
         "model_roi_views": after["model_roi_views"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Model controls (per-stage enable/disable, applies to NEXT case/reprocess)
+# ---------------------------------------------------------------------------
+
+# Map UI/PATCH key -> config.yaml ``models`` sub-key + UI metadata.
+# These are the only stages this control surface manages — anything
+# else stays out so the operator cannot accidentally toggle vLLM /
+# Gemma server processes from the reviewer UI (those are managed
+# externally; see the operations-console contract).
+MODEL_CONTROL_SPECS: tuple[dict, ...] = (
+    {
+        "id": "falcon", "config_key": "falcon",
+        "label": "Falcon detector",
+        "role": "perception_detector",
+        "dependencies": [],
+        "independent": True,
+        "caption": ("Independent detector; required for track evidence "
+                    "/ VERIFIED path."),
+        "default_when_missing": True,
+    },
+    {
+        "id": "sam2", "config_key": "sam2",
+        "label": "SAM 2 segmenter",
+        "role": "perception_segmenter",
+        "dependencies": ["falcon"],
+        "independent": False,
+        "caption": ("Uses Falcon boxes; no useful standalone mode in "
+                    "this pipeline."),
+        "default_when_missing": True,
+    },
+    {
+        "id": "ocr", "config_key": "falcon_ocr",
+        "label": "OCR",
+        "role": "perception_ocr",
+        "dependencies": ["falcon"],
+        "independent": False,
+        "caption": "Uses Falcon receipt/document detections.",
+        "default_when_missing": False,
+    },
+    {
+        "id": "qwen3_vl", "config_key": "qwen3_vl",
+        "label": "Qwen3-VL primary verifier",
+        "role": "vlm_primary",
+        "dependencies": [],
+        "independent": True,
+        "caption": "Independent VLM verifier.",
+        "default_when_missing": True,
+    },
+    {
+        "id": "gemma", "config_key": "gemma",
+        "label": "Gemma fallback verifier",
+        "role": "vlm_fallback",
+        "dependencies": [],
+        "independent": True,
+        "caption": ("Fallback VLM verifier; safe to disable, but Qwen "
+                    "failures then have no VLM fallback."),
+        "default_when_missing": True,
+    },
+)
+
+ALLOWED_MODEL_CONTROL_KEYS: frozenset = frozenset(
+    s["id"] for s in MODEL_CONTROL_SPECS)
+
+
+def _spec_by_id(model_id: str) -> Optional[dict]:
+    for s in MODEL_CONTROL_SPECS:
+        if s["id"] == model_id:
+            return s
+    return None
+
+
+def _current_model_enabled(cfg, model_id: str) -> bool:
+    spec = _spec_by_id(model_id)
+    if spec is None:
+        return False
+    m = cfg.models.get(spec["config_key"])
+    if m is None:
+        return bool(spec.get("default_when_missing", True))
+    return bool(m.enabled)
+
+
+def _model_control_warnings(state: dict) -> list[str]:
+    """Operator-facing, non-blocking warnings derived from the current
+    flag combination. These mirror the UI tooltips so backend + UI
+    cannot drift."""
+    warnings: list[str] = []
+    if not state.get("falcon"):
+        warnings.append(
+            "Falcon disabled: no perception track evidence will exist, "
+            "so cases will likely fall through to REVIEW.")
+    if not state.get("qwen3_vl") and not state.get("gemma"):
+        warnings.append(
+            "Both VLM providers disabled: the provider chain will return "
+            "a structured error and the decision policy will degrade to "
+            "REVIEW. No VLM narrative will be available.")
+    if not state.get("gemma") and state.get("qwen3_vl"):
+        warnings.append(
+            "Gemma fallback disabled: a Qwen3-VL failure will surface as "
+            "an error with no VLM fallback.")
+    return warnings
+
+
+@router.get("/model-controls")
+def get_model_controls() -> dict:
+    """Return current enable/disable state + per-stage metadata."""
+    from app.config import load_config
+
+    cfg = load_config()
+    state: dict[str, bool] = {}
+    items: list[dict] = []
+    for spec in MODEL_CONTROL_SPECS:
+        enabled = _current_model_enabled(cfg, spec["id"])
+        state[spec["id"]] = enabled
+        items.append({
+            "id": spec["id"],
+            "config_key": f"models.{spec['config_key']}.enabled",
+            "label": spec["label"],
+            "role": spec["role"],
+            "dependencies": list(spec["dependencies"]),
+            "independent": bool(spec["independent"]),
+            "caption": spec["caption"],
+            "enabled": enabled,
+        })
+    return {
+        "models": items,
+        "state": state,
+        "warnings": _model_control_warnings(state),
+        "applies_to": ("next case or reprocess; in-flight analyses "
+                        "keep the config snapshot they started with"),
+    }
+
+
+def _validate_model_control_update(payload: dict, current: dict) -> dict:
+    """Merge ``payload`` with ``current`` state, validate, return the
+    new state dict. Raises ``HTTPException(400)`` on any rejection.
+
+    Rejection rules (mirrored in the UI's pre-submit checks):
+
+      * unknown keys are rejected
+      * non-boolean values are rejected
+      * at least one independent source must remain enabled
+        (falcon OR qwen3_vl OR gemma)
+      * sam2=true requires falcon=true
+      * ocr=true requires falcon=true
+    """
+    if not isinstance(payload, dict) or not payload:
+        raise HTTPException(status_code=400,
+                            detail={"error": "payload must be a non-empty "
+                                              "object of model_id -> bool"})
+    unknown = set(payload) - ALLOWED_MODEL_CONTROL_KEYS
+    if unknown:
+        raise HTTPException(status_code=400, detail={
+            "error": (f"unknown keys: {sorted(unknown)}; allowed: "
+                      f"{sorted(ALLOWED_MODEL_CONTROL_KEYS)}")})
+    new_state = dict(current)
+    for k, v in payload.items():
+        if not isinstance(v, bool):
+            raise HTTPException(status_code=400, detail={
+                "error": f"value for {k!r} must be a boolean (got "
+                          f"{type(v).__name__})"})
+        new_state[k] = v
+    if not (new_state.get("falcon") or new_state.get("qwen3_vl")
+            or new_state.get("gemma")):
+        raise HTTPException(status_code=400, detail={
+            "error": "at least one independent source must remain "
+                      "enabled: falcon, qwen3_vl, or gemma"})
+    if new_state.get("sam2") and not new_state.get("falcon"):
+        raise HTTPException(status_code=400, detail={
+            "error": ("sam2 cannot be enabled while falcon is disabled "
+                      "(SAM 2 consumes Falcon boxes; no useful "
+                      "standalone mode)")})
+    if new_state.get("ocr") and not new_state.get("falcon"):
+        raise HTTPException(status_code=400, detail={
+            "error": ("ocr cannot be enabled while falcon is disabled "
+                      "(OCR runs on Falcon receipt/document "
+                      "detections)")})
+    return new_state
+
+
+@router.patch("/model-controls")
+def update_model_controls(
+        payload: dict = Body(...),
+        request: Request = None,
+        x_phazex_admin_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Persist enable/disable flags for the five gated stages.
+
+    Changes apply to the NEXT case or reprocess only — an in-flight
+    ``analyze_case`` keeps the config snapshot it loaded at start.
+    NO external process is started, stopped, or restarted; this
+    endpoint is config-level gating only.
+    """
+    _check_admin_token(x_phazex_admin_token)
+
+    from pathlib import Path
+    import yaml as _yaml
+
+    from app import audit
+    from app.config import DEFAULT_CONFIG_PATH, load_config
+    from db.session import get_sessionmaker
+
+    cfg = load_config()
+    current_state = {s["id"]: _current_model_enabled(cfg, s["id"])
+                     for s in MODEL_CONTROL_SPECS}
+    new_state = _validate_model_control_update(payload, current_state)
+
+    raw_path = Path(DEFAULT_CONFIG_PATH)
+    data = _yaml.safe_load(raw_path.read_text()) or {}
+    models_block = data.setdefault("models", {})
+    for spec in MODEL_CONTROL_SPECS:
+        entry = models_block.setdefault(spec["config_key"], {})
+        # If the entry has no ``name`` yet (e.g. a fresh config), keep
+        # whatever is already there — the operator's PATCH should never
+        # delete unrelated keys.
+        entry["enabled"] = bool(new_state[spec["id"]])
+    raw_path.write_text(_yaml.safe_dump(data, sort_keys=False))
+
+    # Audit ONLY the model enable flags. Secrets and unrelated config
+    # never appear in the audit row.
+    SM = get_sessionmaker()
+    with SM() as s:
+        audit.record(
+            s, action="admin.model_controls_update",
+            entity_type="config", entity_id="model_controls",
+            actor_type="admin_api",
+            before=dict(current_state),
+            after=dict(new_state),
+            ip=(request.client.host if request and request.client else None),
+            user_agent=(request.headers.get("user-agent")
+                         if request else None),
+        )
+        s.commit()
+
+    # Return the fresh state so the UI can re-render without a second
+    # roundtrip. ``applies_to`` reminds the operator this is config-only
+    # gating — no process was started or stopped, no memory freed.
+    return get_model_controls()

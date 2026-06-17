@@ -45,37 +45,51 @@ DEFAULT_FALCON_QUERY = (
 )
 
 
-def run_perception(session, case, window) -> dict:
+def run_perception(session, case, window, *, cfg=None) -> dict:
     """Default production runner. Reads the window MP4 from disk,
-    samples frames, and drives the perception pipeline."""
+    samples frames, and drives the perception pipeline.
+
+    ``cfg`` is the AppConfig snapshot the caller (case_runner) already
+    loaded for this case. Passing it through avoids a second
+    ``load_config()`` call that could pick up a mid-case ``config.yaml``
+    edit. When omitted the snapshot is taken here.
+    """
     from app.config import load_config, resolve_model_path
 
-    cfg = load_config()
+    if cfg is None:
+        cfg = load_config()
     falcon_cfg = cfg.models.get("falcon")
+    falcon_enabled = bool(falcon_cfg.enabled) if falcon_cfg else True
     falcon_path = None
-    if falcon_cfg:
+    if falcon_enabled and falcon_cfg:
         try:
             falcon_path = resolve_model_path(falcon_cfg)
         except Exception:
             falcon_path = None
-    sam2_cfg = cfg.raw.get("models", {}).get("sam2") or {}
+    sam2_raw_entry = cfg.raw.get("models", {}).get("sam2") or {}
+    sam2_model_cfg = cfg.models.get("sam2")
+    sam2_enabled = bool(sam2_model_cfg.enabled) if sam2_model_cfg else \
+        bool(sam2_raw_entry.get("enabled", True))
     sam2_path = None
-    if sam2_cfg:
+    if sam2_enabled and sam2_raw_entry:
         from app.config import ModelConfig
         sam2_path = resolve_model_path(
-            ModelConfig(name=sam2_cfg.get("name",
-                                          "facebook/sam2-hiera-large"),
-                        enabled=True, extra=sam2_cfg),
+            ModelConfig(name=sam2_raw_entry.get(
+                "name", "facebook/sam2-hiera-large"),
+                        enabled=True, extra=sam2_raw_entry),
             production_mode=False,
         )
 
-    ocr_cfg = cfg.raw.get("models", {}).get("falcon_ocr") or {}
+    ocr_raw_entry = cfg.raw.get("models", {}).get("falcon_ocr") or {}
+    ocr_model_cfg = cfg.models.get("falcon_ocr")
+    ocr_enabled = bool(ocr_model_cfg.enabled) if ocr_model_cfg else \
+        bool(ocr_raw_entry.get("enabled", False))
     ocr_path = None
-    if ocr_cfg:
+    if ocr_enabled and ocr_raw_entry:
         from app.config import ModelConfig
         ocr_path = resolve_model_path(
-            ModelConfig(name=ocr_cfg.get("name", "tiiuae/Falcon-OCR"),
-                        enabled=True, extra=ocr_cfg),
+            ModelConfig(name=ocr_raw_entry.get("name", "tiiuae/Falcon-OCR"),
+                        enabled=True, extra=ocr_raw_entry),
             production_mode=False,
         )
 
@@ -85,18 +99,30 @@ def run_perception(session, case, window) -> dict:
     # ``None`` when no usable assignment exists, in which case the
     # corresponding model keeps its full-frame behavior.
     from app.camera_rois import model_view
+    # When a model is disabled we DO NOT instantiate its client at all
+    # (per the operator contract: no weights load, no GPU touch). The
+    # ``*_enabled`` flags below tell ``run_perception_on_window`` to
+    # short-circuit and emit ``<stage>_disabled_by_config`` limitations
+    # only when there would otherwise have been work to do.
+    falcon_client = FalconClient(model_path=falcon_path) \
+        if falcon_enabled else None
+    sam2_client = Sam2Client(model_path=sam2_path) if sam2_enabled else None
+    ocr_engine = OcrEngine(model_path=ocr_path) if ocr_enabled else None
     return run_perception_on_window(
         window_path=window.path,
         window_start_ts=window_start_ts,
         fps=int(cfg.settings.get("gemma_video_fps", 25)),
         zones=_load_zones(cfg, case.camera_id),
-        falcon_client=FalconClient(model_path=falcon_path),
-        sam2_client=Sam2Client(model_path=sam2_path),
-        ocr_engine=OcrEngine(model_path=ocr_path),
+        falcon_client=falcon_client,
+        sam2_client=sam2_client,
+        ocr_engine=ocr_engine,
         sampling=SamplingPolicy(),
         falcon_roi_view=model_view(cfg, case.camera_id, "falcon"),
         sam2_roi_view=model_view(cfg, case.camera_id, "sam2"),
         ocr_roi_view=model_view(cfg, case.camera_id, "ocr"),
+        falcon_enabled=falcon_enabled,
+        sam2_enabled=sam2_enabled,
+        ocr_enabled=ocr_enabled,
     )
 
 
@@ -104,8 +130,8 @@ def run_perception_on_window(*,
                              window_path: Optional[str],
                              fps: int,
                              zones: list[Zone],
-                             falcon_client: FalconClient,
-                             sam2_client: Sam2Client,
+                             falcon_client: Optional[FalconClient],
+                             sam2_client: Optional[Sam2Client],
                              sampling: SamplingPolicy,
                              window_start_ts: Optional[datetime] = None,
                              ocr_engine: Optional[OcrEngine] = None,
@@ -113,6 +139,9 @@ def run_perception_on_window(*,
                              falcon_roi_view: Optional[dict] = None,
                              sam2_roi_view: Optional[dict] = None,
                              ocr_roi_view: Optional[dict] = None,
+                             falcon_enabled: bool = True,
+                             sam2_enabled: bool = True,
+                             ocr_enabled: bool = True,
                              ) -> dict:
     """Decode + run perception on a single video window. ``window_path``
     may be ``None`` in offline / synthetic test mode — in that case the
@@ -151,10 +180,28 @@ def run_perception_on_window(*,
             "timings_ms": timings,
         }
 
-    # Compute Falcon ROI crop (full-frame coords). Detection bboxes
-    # come back already offset to full-frame so every downstream
-    # consumer keeps the same coordinate space.
+    # ---- Falcon stage (independent perception detector) -------------
+    # ``falcon_enabled=False`` is a config-level gate: we never touch
+    # the detector, the limitation is tagged ``falcon_disabled_by_config``
+    # so downstream consumers (decision policy + reviewer UI) can tell
+    # this is an operator-chosen state, not a runtime failure.
+    # SAM 2 + OCR depend on Falcon detections, so when Falcon is off
+    # they are bypassed regardless of their own toggles (the API
+    # validation already rejects the combination, but defence in depth
+    # belongs here too).
     falcon_crop = _falcon_roi_crop(frames, falcon_roi_view, limitations)
+    if not falcon_enabled or falcon_client is None:
+        if not falcon_enabled:
+            limitations.append("falcon_disabled_by_config")
+        else:
+            limitations.append("falcon_unavailable")
+        timings["total_ms"] = _ms_since(t0)
+        return {
+            "detections": [], "tracks": [], "keyframes": [],
+            "ocr": [], "masks": [], "limitations": limitations,
+            "obstructed": False,
+            "timings_ms": timings,
+        }
     t_falcon = _time.perf_counter()
     try:
         try:
@@ -178,7 +225,8 @@ def run_perception_on_window(*,
                                      limitations=limitations)
 
     masks: list[Mask] = []
-    if sam_detections and sam2_client.has_capability():
+    if sam_detections and sam2_enabled \
+            and sam2_client is not None and sam2_client.has_capability():
         # Pick a representative frame near the middle of the window
         # for SAM 2; this matches the existing single-frame pipeline.
         mid_idx = frames[len(frames) // 2][0]
@@ -193,6 +241,11 @@ def run_perception_on_window(*,
                 limitations.append("sam2_unavailable")
         finally:
             timings["sam2_ms"] = _ms_since(t_sam)
+    elif sam_detections and not sam2_enabled:
+        # Operator-chosen config gate. NO ``sam2_unavailable`` because
+        # that implies a runtime failure; ``sam2_disabled_by_config``
+        # is the honest tag.
+        limitations.append("sam2_disabled_by_config")
     elif sam_detections:
         limitations.append("sam2_unavailable")
         # Honest omission: sam2_ms is left out when no inference ran.
@@ -207,13 +260,22 @@ def run_perception_on_window(*,
     ocr_input_detections = _filter_by_roi(detections, ocr_roi_view,
                                            limit_tag="ocr_roi_filter",
                                            limitations=limitations)
-    t_ocr = _time.perf_counter()
-    try:
-        ocr, ocr_limitations = run_ocr(ocr_engine, ocr_input_detections,
-                                        frames_for_ocr)
-    finally:
-        timings["ocr_ms"] = _ms_since(t_ocr)
-    limitations.extend(ocr_limitations)
+    if ocr_enabled:
+        t_ocr = _time.perf_counter()
+        try:
+            ocr, ocr_limitations = run_ocr(ocr_engine, ocr_input_detections,
+                                            frames_for_ocr)
+        finally:
+            timings["ocr_ms"] = _ms_since(t_ocr)
+        limitations.extend(ocr_limitations)
+    else:
+        # Honest gate: only flag when there were OCR candidates that
+        # would have been processed. No engine constructed, no work
+        # done, no ``ocr_ms`` recorded.
+        from .ocr import crops_for_ocr
+        ocr = []
+        if crops_for_ocr(ocr_input_detections):
+            limitations.append("ocr_disabled_by_config")
 
     t_kf = _time.perf_counter()
     keyframes = select_keyframes(tracks, detections)
