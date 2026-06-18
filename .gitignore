@@ -20,6 +20,9 @@ storage/
 *.pid
 *.log
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 *.db
 
 # OS / editor
