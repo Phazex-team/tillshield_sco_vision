@@ -1097,15 +1097,19 @@ async function openCase(caseId) {
   });
 
   const video = document.getElementById("video");
+  const videoWrap = document.getElementById("video-wrap");
   const noVideo = document.getElementById("no-video");
   const window_ = c.latest_window || null;
   if (window_ && window_.status === "SUCCEEDED" && window_.path) {
     video.src = `${API}/video/windows/${window_.id}/stream`;
-    video.hidden = false;
+    // Toggle the whole wrap (video + overlay canvas). The video carries
+    // an inline display:block which would override the `hidden` attribute,
+    // so visibility is controlled on the container instead.
+    videoWrap.style.display = "inline-block";
     noVideo.hidden = true;
   } else {
     video.removeAttribute("src");
-    video.hidden = true;
+    videoWrap.style.display = "none";
     noVideo.hidden = false;
     noVideo.textContent = window_?.failure_reason
       ? `window unavailable: ${window_.failure_reason}`
