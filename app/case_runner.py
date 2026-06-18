@@ -697,7 +697,9 @@ def _build_vlm_roi_extras(camera_id: str,
     if not sampled_frames:
         return None
     try:
-        from app.camera_rois import apply_margin, model_view
+        from app.camera_rois import (
+            apply_margin, model_view, scale_zones_to_frame,
+        )
         from reasoning.providers.qwen3_vl import DEFAULT_USER_PROMPT
     except Exception:
         log.exception("roi extras: imports failed")
@@ -745,6 +747,13 @@ def _build_vlm_roi_extras(camera_id: str,
     if sample is None:
         return None
     src_w, src_h = sample.size
+    # Scale zones from their saved source dimensions onto the actual
+    # decoded frame size. Operators who calibrated on a high-res
+    # snapshot can still produce correct crops when the manifest
+    # frames are smaller (e.g. mp4_evidence_width=640).
+    scaled_zones = scale_zones_to_frame(zones, int(src_w), int(src_h))
+    if not scaled_zones:
+        return None
 
     # Pick source frames to clip from: first + middle keep the manifest
     # compact while still covering more than a single instant.
@@ -758,7 +767,7 @@ def _build_vlm_roi_extras(camera_id: str,
         if src_img is None:
             continue
         src_frame_id = src.get("frame_id") or f"frame_{src_idx:06d}"
-        for z in zones:
+        for z in scaled_zones:
             x1, y1, x2, y2 = apply_margin(
                 (int(z["x"]), int(z["y"]),
                  int(z["x"]) + int(z["w"]), int(z["y"]) + int(z["h"])),

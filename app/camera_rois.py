@@ -95,7 +95,7 @@ def describe_camera_rois(cam: dict) -> dict:
         if not isinstance(z, dict):
             continue
         try:
-            zones[str(zid)] = {
+            entry: dict = {
                 "id": str(zid),
                 "label": str(z.get("label") or zid),
                 "purpose": str(z.get("purpose") or ""),
@@ -108,6 +108,20 @@ def describe_camera_rois(cam: dict) -> dict:
             # Skip malformed zone — the original storage is left
             # untouched, but we don't expose half-baked data.
             continue
+        # Optional source-frame dimensions. When present the runtime
+        # scales the zone box from (source_width, source_height) onto
+        # the actual decoded frame size — see ``scale_zone_to_frame``.
+        for key in ("source_width", "source_height"):
+            v = z.get(key)
+            if v is None:
+                continue
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                continue
+            if iv > 0:
+                entry[key] = iv
+        zones[str(zid)] = entry
     return {
         "camera_id": cid,
         "name": cam.get("name") or cid,
@@ -228,6 +242,77 @@ def detection_inside_rois(bbox_xyxy: list[float],
     return False
 
 
+def scale_zone_to_frame(zone: dict,
+                        frame_w: int,
+                        frame_h: int) -> Optional[dict]:
+    """Return a NEW zone dict scaled from its ``source_width/source_height``
+    onto the actual ``frame_w/frame_h``.
+
+    When the zone has no source dimensions OR they already match the
+    actual frame, the box is returned unchanged (a shallow copy) — this
+    preserves the legacy behavior of every ROI saved before this field
+    existed.
+
+    After scaling the box is clamped to the frame bounds and a
+    degenerate (zero/negative-area) result returns ``None`` so callers
+    can skip it instead of producing an empty crop / always-False
+    centre test.
+    """
+    if zone is None:
+        return None
+    try:
+        x = int(zone["x"]); y = int(zone["y"])
+        w = int(zone["w"]); h = int(zone["h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    sw = zone.get("source_width")
+    sh = zone.get("source_height")
+    if sw and sh:
+        try:
+            sw_i = int(sw); sh_i = int(sh)
+        except (TypeError, ValueError):
+            sw_i = sh_i = 0
+        if sw_i > 0 and sh_i > 0 and (sw_i != frame_w or sh_i != frame_h):
+            sx = float(frame_w) / float(sw_i)
+            sy = float(frame_h) / float(sh_i)
+            x = int(round(x * sx))
+            y = int(round(y * sy))
+            w = int(round(w * sx))
+            h = int(round(h * sy))
+    # Clamp to frame bounds + collapse to non-negative origin.
+    x = max(0, min(int(frame_w), x))
+    y = max(0, min(int(frame_h), y))
+    if x + w > frame_w:
+        w = frame_w - x
+    if y + h > frame_h:
+        h = frame_h - y
+    if w <= 0 or h <= 0:
+        return None
+    out = dict(zone)
+    out["x"] = x
+    out["y"] = y
+    out["w"] = w
+    out["h"] = h
+    # Stamp the actual frame dimensions so downstream code can carry
+    # them forward without re-deriving from a different snapshot.
+    out["source_width"] = int(frame_w)
+    out["source_height"] = int(frame_h)
+    return out
+
+
+def scale_zones_to_frame(zones: list[dict],
+                         frame_w: int,
+                         frame_h: int) -> list[dict]:
+    """Scale every zone in ``zones`` to the actual frame size, dropping
+    any zone that collapses to zero/negative area after clamping."""
+    out: list[dict] = []
+    for z in zones or []:
+        scaled = scale_zone_to_frame(z, frame_w, frame_h)
+        if scaled is not None:
+            out.append(scaled)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Validation (PATCH payload)
 # ---------------------------------------------------------------------------
@@ -265,6 +350,29 @@ def _validate_zone(zid: str, z: dict) -> dict:
             raise RoiValidationError(
                 f"roi {zid!r}.{key} must be >= 0 (got {iv})")
         if key in ("w", "h") and iv <= 0:
+            raise RoiValidationError(
+                f"roi {zid!r}.{key} must be > 0 (got {iv})")
+        out[key] = iv
+    # Optional source-frame dimensions. They must be supplied together
+    # and both must be positive integers. Partial dimensions are rejected
+    # because they silently disable scaling while making the UI look
+    # calibrated.
+    has_sw = "source_width" in z
+    has_sh = "source_height" in z
+    if has_sw != has_sh:
+        raise RoiValidationError(
+            f"roi {zid!r} must include both source_width and "
+            "source_height, or neither")
+    for key in ("source_width", "source_height"):
+        if key not in z:
+            continue
+        try:
+            iv = int(z[key])
+        except (TypeError, ValueError):
+            raise RoiValidationError(
+                f"roi {zid!r}.{key} must be a positive integer "
+                f"(got {z[key]!r})")
+        if iv <= 0:
             raise RoiValidationError(
                 f"roi {zid!r}.{key} must be > 0 (got {iv})")
         out[key] = iv

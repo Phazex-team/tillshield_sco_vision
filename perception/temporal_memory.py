@@ -20,6 +20,8 @@ class Zone:
     y: int
     w: int
     h: int
+    source_width: Optional[int] = None
+    source_height: Optional[int] = None
 
     def contains(self, bbox_xyxy: list[float]) -> bool:
         cx = 0.5 * (bbox_xyxy[0] + bbox_xyxy[2])

@@ -5,6 +5,7 @@ tests pin the contract that no accusation language sneaks back in.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -161,9 +162,15 @@ def test_review_ui_has_camera_rois_tab():
     # The 5 supported models each show up in the model assignment block.
     for m in ("falcon", "sam2", "ocr", "qwen3_vl", "gemma"):
         assert m in src
-    # We explicitly state that visual calibration is not available
-    # rather than faking it.
-    assert "Visual calibration" in src and "unavailable" in src
+    # Visual ROI calibration is now wired: the Load frame button
+    # fetches the dedicated snapshot endpoint and the canvas overlay
+    # is real. Pin the new contract: the visual editor + numeric
+    # editor co-exist (the numeric table is still present), and the
+    # UI explicitly says edits apply only to the next case.
+    assert 'id="roi-load-frame"' in src
+    assert 'id="roi-canvas"' in src
+    assert "Saves apply to the next case or reprocess" in (
+        re.sub(r"\s+", " ", src))
 
 
 def test_review_ui_no_start_stop_external_processes():

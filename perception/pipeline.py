@@ -180,6 +180,16 @@ def run_perception_on_window(*,
             "timings_ms": timings,
         }
 
+    # Actual decoded frame size for ROI scaling. The recorder writes fixed
+    # dimensions per segment, so the first sampled frame is authoritative
+    # for this window.
+    _frame_size: Optional[tuple[int, int]] = None
+    try:
+        _frame_size = (int(frames[0][2].size[0]),
+                       int(frames[0][2].size[1]))
+    except Exception:
+        _frame_size = None
+
     # ---- Falcon stage (independent perception detector) -------------
     # ``falcon_enabled=False`` is a config-level gate: we never touch
     # the detector, the limitation is tagged ``falcon_disabled_by_config``
@@ -220,9 +230,12 @@ def run_perception_on_window(*,
 
     # SAM 2 ROI filter (filter-only by detection centre — we never crop
     # the image because SAM 2 needs full context for accurate masks).
+    # ``frame_size`` lets the filter scale zones from the saved source
+    # dimensions onto the actual decoded frame size.
     sam_detections = _filter_by_roi(detections, sam2_roi_view,
                                      limit_tag="sam2_roi_filter",
-                                     limitations=limitations)
+                                     limitations=limitations,
+                                     frame_size=_frame_size)
 
     masks: list[Mask] = []
     if sam_detections and sam2_enabled \
@@ -254,12 +267,16 @@ def run_perception_on_window(*,
     tracker = Tracker()
     tracker.update(detections)
     tracks = tracker.export()
-    tracks = annotate_tracks(tracks, detections, zones=zones)
+    tracks = annotate_tracks(
+        tracks, detections,
+        zones=_scale_temporal_zones(zones, _frame_size, limitations),
+    )
     timings["tracker_ms"] = _ms_since(t_tracker)
 
     ocr_input_detections = _filter_by_roi(detections, ocr_roi_view,
                                            limit_tag="ocr_roi_filter",
-                                           limitations=limitations)
+                                           limitations=limitations,
+                                           frame_size=_frame_size)
     if ocr_enabled:
         t_ocr = _time.perf_counter()
         try:
@@ -358,17 +375,68 @@ def _load_zones(cfg, camera_id: str) -> list[Zone]:
                 # ``z`` may carry the new ``label``/``purpose`` siblings
                 # — only the spatial keys matter for decision-policy
                 # zone semantics, so we extract them tolerantly.
+                sw = z.get("source_width")
+                sh = z.get("source_height")
+                src_w = src_h = None
+                if sw is not None and sh is not None:
+                    src_w = int(sw)
+                    src_h = int(sh)
+                    if src_w <= 0 or src_h <= 0:
+                        src_w = src_h = None
                 zones.append(Zone(name=name, x=int(z["x"]), y=int(z["y"]),
-                                  w=int(z["w"]), h=int(z["h"])))
+                                  w=int(z["w"]), h=int(z["h"]),
+                                  source_width=src_w,
+                                  source_height=src_h))
             except (KeyError, TypeError, ValueError):
                 continue
     return zones
+
+
+def _scale_temporal_zones(zones: list[Zone],
+                          frame_size: Optional[tuple[int, int]],
+                          limitations) -> list[Zone]:
+    """Scale canonical track/event zones onto the actual decoded frame.
+
+    Falcon/SAM/OCR/VLM model views already scale their assigned ROI
+    descriptors. This helper keeps the legacy temporal-memory zone events
+    aligned too, so a visually calibrated ``counter_zone`` still produces
+    ``entered_counter_zone`` and ``handover_candidate`` on resized
+    analysis frames.
+    """
+    if not zones or frame_size is None:
+        return zones
+    from app.camera_rois import scale_zone_to_frame
+
+    frame_w, frame_h = int(frame_size[0]), int(frame_size[1])
+    out: list[Zone] = []
+    for z in zones:
+        body = {"x": z.x, "y": z.y, "w": z.w, "h": z.h}
+        if z.source_width is not None and z.source_height is not None:
+            body["source_width"] = z.source_width
+            body["source_height"] = z.source_height
+        scaled = scale_zone_to_frame(body, frame_w, frame_h)
+        if scaled is None:
+            continue
+        out.append(Zone(
+            name=z.name,
+            x=int(scaled["x"]), y=int(scaled["y"]),
+            w=int(scaled["w"]), h=int(scaled["h"]),
+            source_width=int(scaled.get("source_width") or frame_w),
+            source_height=int(scaled.get("source_height") or frame_h),
+        ))
+    if zones and not out:
+        limitations.append("track_zones_collapsed_after_scale")
+    return out
 
 
 def _falcon_roi_crop(frames, view, limitations) -> Optional[tuple[int, int, int, int]]:
     """Build the per-window Falcon crop bbox from the model view, or
     return ``None`` when no usable assignment exists.
 
+    Zones are scaled from their saved ``source_width/source_height``
+    onto the actual decoded frame size before union/margin/clipping —
+    so an operator who calibrated on a 1920x1080 snapshot still gets
+    the right crop when the recorder writes 640x360 segments.
     The crop is expanded by ``margin_pct`` and clipped to the actual
     frame size (frames are assumed to share dimensions across a single
     window, which is true for the recorder's segments)."""
@@ -376,10 +444,6 @@ def _falcon_roi_crop(frames, view, limitations) -> Optional[tuple[int, int, int,
         return None
     zones = view.get("resolved_zones") or []
     if not zones:
-        return None
-    from app.camera_rois import apply_margin, union_bbox
-    bbox = union_bbox(zones)
-    if bbox is None:
         return None
     if not frames:
         return None
@@ -389,6 +453,14 @@ def _falcon_roi_crop(frames, view, limitations) -> Optional[tuple[int, int, int,
     except Exception:
         limitations.append("falcon_roi_crop_image_size_unavailable")
         return None
+    from app.camera_rois import apply_margin, scale_zones_to_frame, union_bbox
+    scaled = scale_zones_to_frame(zones, int(w), int(h))
+    if not scaled:
+        limitations.append("falcon_roi_crop_zones_collapsed_after_scale")
+        return None
+    bbox = union_bbox(scaled)
+    if bbox is None:
+        return None
     cropped = apply_margin(bbox, float(view.get("margin_pct") or 0.0),
                             int(w), int(h))
     limitations.append(
@@ -396,18 +468,32 @@ def _falcon_roi_crop(frames, view, limitations) -> Optional[tuple[int, int, int,
     return cropped
 
 
-def _filter_by_roi(detections, view, *, limit_tag: str, limitations) -> list:
+def _filter_by_roi(detections, view, *, limit_tag: str, limitations,
+                    frame_size: Optional[tuple[int, int]] = None) -> list:
     """Return only detections whose centre falls inside any resolved
     ROI for ``view``. When the view is missing/empty, the detections
     are returned unchanged (back-compat). The number of filtered-out
     detections is recorded as a limitation so the reviewer can see
-    when ROI gating dropped evidence."""
+    when ROI gating dropped evidence.
+
+    ``frame_size`` (when supplied as ``(w, h)``) lets the filter
+    scale zones from their saved source dimensions onto the actual
+    decoded frame size before the centre-in-rect check. When omitted
+    the legacy raw-pixel zones are used."""
     if not view or not detections:
         return detections
     zones = view.get("resolved_zones") or []
     if not zones:
         return detections
-    from app.camera_rois import detection_inside_rois
+    from app.camera_rois import detection_inside_rois, scale_zones_to_frame
+    if frame_size is not None:
+        zones = scale_zones_to_frame(zones, int(frame_size[0]),
+                                       int(frame_size[1]))
+        if not zones:
+            limitations.append(
+                f"{limit_tag}: zones collapsed after scale; "
+                "keeping all detections")
+            return detections
     kept = [d for d in detections
             if detection_inside_rois(list(d.bbox_xyxy), zones)]
     dropped = len(detections) - len(kept)

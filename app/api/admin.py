@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 
 log = logging.getLogger(__name__)
@@ -283,6 +283,119 @@ def get_camera_rois(camera_id: str) -> dict:
             return describe_camera_rois(cam)
     raise HTTPException(status_code=404,
                         detail=f"camera {camera_id!r} not configured")
+
+
+@router.get("/camera-rois/{camera_id}/snapshot")
+def get_camera_roi_snapshot(
+        camera_id: str,
+        response: Response,
+        x_phazex_admin_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Return a single representative frame from ``camera_id`` so the
+    operator can draw ROIs on a real image.
+
+    Hard contract:
+      * Admin-token gated via the existing ``_check_admin_token``.
+      * The endpoint accepts ONLY ``camera_id`` — never a URL or file
+        path from the client.
+      * The response NEVER contains ``rtsp_url`` (or any other secret).
+      * ``Cache-Control: no-store`` so a browser-cached frame can't
+        outlive the segment it came from.
+
+    Source: the newest ``VideoSegment`` row for this camera. We open
+    that MP4 with OpenCV, grab a representative middle frame, encode
+    it JPEG → data URL, and return JSON ``{image_url, width, height,
+    source: "latest_segment", captured_at, segment_id}``.
+
+    Live RTSP fallback is intentionally NOT implemented: OpenCV's
+    RTSP open + read has no reliable timeout knob from Python, so a
+    misconfigured camera would block the endpoint indefinitely. When
+    no local segment exists the endpoint returns 404 with a short
+    detail saying the live-RTSP path is unavailable; the operator
+    can keep editing numerically with the existing table.
+    """
+    _check_admin_token(x_phazex_admin_token)
+    response.headers["Cache-Control"] = "no-store"
+
+    def _snapshot_error(status_code: int, detail: str) -> None:
+        raise HTTPException(
+            status_code=status_code,
+            detail=detail,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    from app.config import load_config
+    from sqlalchemy import select
+    from db.models import VideoSegment
+    from db.session import get_sessionmaker
+
+    cfg = load_config()
+    if not any(c.get("id") == camera_id for c in cfg.cameras):
+        _snapshot_error(404, f"camera {camera_id!r} not configured")
+
+    SM = get_sessionmaker()
+    with SM() as s:
+        seg = s.execute(
+            select(VideoSegment)
+            .where(VideoSegment.camera_id == camera_id)
+            .order_by(VideoSegment.start_at.desc())
+        ).scalars().first()
+    if seg is None or not seg.path:
+        _snapshot_error(
+            404,
+            ("no local segment available for camera "
+             f"{camera_id!r}; live RTSP snapshot is not "
+             "implemented (no reliable timeout)"))
+
+    import os
+    if not os.path.exists(seg.path):
+        _snapshot_error(
+            404,
+            f"latest segment for {camera_id!r} no longer on "
+            "disk; retention may have cleared it")
+
+    try:
+        import cv2  # type: ignore
+    except Exception as exc:
+        _snapshot_error(503, f"cv2 unavailable: {type(exc).__name__}")
+
+    cap = cv2.VideoCapture(seg.path)
+    if not cap.isOpened():
+        _snapshot_error(503, "decoder could not open the latest segment")
+    try:
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if total <= 0:
+            _snapshot_error(503, "latest segment reports zero frames")
+        cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, total // 2))
+        ok, frame_bgr = cap.read()
+        if not ok or frame_bgr is None:
+            # Fall back to the very first frame if the mid-frame seek
+            # missed (some codecs misreport frame count).
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame_bgr = cap.read()
+        if not ok or frame_bgr is None:
+            _snapshot_error(
+                503, "decoder returned no frame from the latest segment")
+        height, width = frame_bgr.shape[:2]
+        ok, buf = cv2.imencode(".jpg", frame_bgr,
+                                [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not ok:
+            _snapshot_error(503, "jpeg encode failed for snapshot")
+    finally:
+        cap.release()
+
+    import base64
+    b64 = base64.b64encode(bytes(buf)).decode("ascii")
+    return {
+        "camera_id": camera_id,
+        "source": "latest_segment",
+        "image_url": f"data:image/jpeg;base64,{b64}",
+        "width": int(width),
+        "height": int(height),
+        # Only stable identifiers — never the on-disk path or RTSP URL.
+        "segment_id": seg.id,
+        "captured_at": seg.start_at.isoformat() if seg.start_at else None,
+    }
 
 
 @router.patch("/camera-rois/{camera_id}")

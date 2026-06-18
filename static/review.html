@@ -368,18 +368,25 @@
     <section class="panel">
       <h2>Camera ROIs &amp; model views</h2>
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
-        Numeric ROI editor. Each ROI is a labeled <code>(x, y, w, h)</code>
-        in source-frame pixels. Per-model assignments control how the
-        active pipeline crops or filters evidence:
-        <strong>Falcon</strong> crops to the union and translates
-        detection boxes back to full frame; <strong>SAM 2</strong> and
-        <strong>OCR</strong> filter detections whose centre falls inside
-        the assigned union; <strong>Qwen3-VL</strong> /
-        <strong>Gemma</strong> receive labeled crops plus an optional
+        Numeric ROI editor with optional visual calibration. Each ROI is
+        a labeled <code>(x, y, w, h)</code> in source-frame pixels. Per-model
+        assignments control how the active pipeline crops or filters
+        evidence: <strong>Falcon</strong> crops to the union and
+        translates detection boxes back to full frame;
+        <strong>SAM 2</strong> and <strong>OCR</strong> filter detections
+        whose centre falls inside the assigned union; <strong>Qwen3-VL</strong>
+        / <strong>Gemma</strong> receive labeled crops plus an optional
         full-frame overview, with the caption injected into the user
-        prompt. Visual calibration <em>unavailable</em> &mdash; this UI
-        has no live frame source. Edit numbers manually using the
-        recorded snapshot dimensions you trust.
+        prompt.
+      </p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
+        <strong>Saves apply to the next case or reprocess.</strong>
+        Analyses already in flight keep the config snapshot they
+        started with. No app or Docker rebuild is required for ROI
+        changes. RTSP URLs and other camera source settings are NOT
+        controlled here — they live in <code>config.yaml</code> and
+        the segment recorder must be restarted/reloaded for source
+        URL changes to take effect.
       </p>
       <div class="row" style="margin-bottom:12px">
         <label class="field">Camera
@@ -389,13 +396,30 @@
           <input id="roi-admin-token" type="password" placeholder="X-PhazeX-Admin-Token (optional if unset)" style="width:280px"/>
         </label>
         <button id="roi-reload">Reload from server</button>
+        <button id="roi-load-frame">Load frame</button>
       </div>
+
+      <div id="roi-snapshot-meta" style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        no frame loaded yet
+      </div>
+      <div id="roi-canvas-wrap" style="position:relative;display:none;margin-bottom:12px">
+        <canvas id="roi-canvas" style="max-width:100%;border:1px solid var(--border);border-radius:5px;background:#000;cursor:crosshair"></canvas>
+      </div>
+      <p id="roi-canvas-hint" style="font-size:11px;color:var(--muted);margin:0 0 12px 0" hidden>
+        Select a row in the Zones table, then click and drag on the
+        loaded frame to set that ROI's <code>(x, y, w, h)</code>.
+        Coordinates are recorded against the snapshot's reported
+        <em>source</em> dimensions, NOT the displayed pixels — the
+        runtime rescales onto the actual recorded frame size at case
+        time. Numeric editing below is always available.
+      </p>
 
       <h3 style="font-size:13px;margin:0 0 8px 0">Zones (canonical ROI registry)</h3>
       <table id="roi-zone-table" style="margin-bottom:12px">
         <thead><tr>
           <th>id</th><th>label</th><th>purpose</th>
-          <th>x</th><th>y</th><th>w</th><th>h</th><th></th>
+          <th>x</th><th>y</th><th>w</th><th>h</th>
+          <th>source_w</th><th>source_h</th><th></th>
         </tr></thead>
         <tbody></tbody>
       </table>
@@ -1276,8 +1300,12 @@ function loadSelectedRoi() {
   const cam = _roiCache[id];
   if (!cam) return;
   _roiState = JSON.parse(JSON.stringify(cam));
+  _roiSelectedId = null;
   renderRoiZones();
   renderRoiModels();
+  _bindRoiCanvasDrag();
+  _bindRoiRowSelection();
+  _redrawRoiCanvas();
   const ss = document.getElementById("roi-save-status");
   ss.className = "save-status"; ss.textContent = "";
 }
@@ -1295,11 +1323,13 @@ function renderRoiZones() {
       <td><input data-rk="y" data-rid="${escapeHtml(zid)}" type="number" value="${z.y ?? 0}" style="width:70px"/></td>
       <td><input data-rk="w" data-rid="${escapeHtml(zid)}" type="number" value="${z.w ?? 0}" style="width:70px"/></td>
       <td><input data-rk="h" data-rid="${escapeHtml(zid)}" type="number" value="${z.h ?? 0}" style="width:70px"/></td>
+      <td><input data-rk="source_width" data-rid="${escapeHtml(zid)}" type="number" value="${z.source_width ?? ""}" placeholder="optional" style="width:80px"/></td>
+      <td><input data-rk="source_height" data-rid="${escapeHtml(zid)}" type="number" value="${z.source_height ?? ""}" placeholder="optional" style="width:80px"/></td>
       <td><button class="danger" data-roi-delete="${escapeHtml(zid)}">delete</button></td>`;
     tbody.appendChild(tr);
   }
   if (!Object.keys(zones).length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">no ROIs defined yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">no ROIs defined yet</td></tr>';
   }
   for (const inp of tbody.querySelectorAll("input")) {
     inp.oninput = () => {
@@ -1308,9 +1338,17 @@ function renderRoiZones() {
       if (!_roiState.zones[zid]) _roiState.zones[zid] = {};
       if (["x","y","w","h"].includes(key)) {
         _roiState.zones[zid][key] = Number(inp.value);
+      } else if (["source_width","source_height"].includes(key)) {
+        const v = inp.value.trim();
+        if (v === "") {
+          delete _roiState.zones[zid][key];
+        } else {
+          _roiState.zones[zid][key] = Number(v);
+        }
       } else {
         _roiState.zones[zid][key] = inp.value;
       }
+      _redrawRoiCanvas();
     };
   }
   for (const btn of tbody.querySelectorAll("[data-roi-delete]")) {
@@ -1437,17 +1475,223 @@ document.getElementById("roi-add-zone").onclick = () => {
   renderRoiModels();
 };
 
+// ---- Visual ROI calibration ----
+// Selected ROI id (kept in JS state) — used by the canvas drag handler
+// to know which zone's (x, y, w, h, source_width, source_height) should
+// be updated. ``null`` means "draw to create a new ROI is not supported
+// here — pick a row first" (the table's Add ROI button still works).
+let _roiSelectedId = null;
+let _roiSnapshot = null;     // {image_url, width, height, source, ...}
+let _roiCanvasDrag = null;   // {startX, startY, currentX, currentY}
+
+function _renderRoiSnapshotMeta() {
+  const el = document.getElementById("roi-snapshot-meta");
+  if (!el) return;
+  if (!_roiSnapshot) {
+    el.textContent = "no frame loaded yet";
+    return;
+  }
+  const bits = [
+    `source=${_roiSnapshot.source || "?"}`,
+    `${_roiSnapshot.width}×${_roiSnapshot.height}`,
+  ];
+  if (_roiSnapshot.captured_at) bits.push(`captured_at=${_roiSnapshot.captured_at}`);
+  if (_roiSnapshot.segment_id) bits.push(`segment_id=${_roiSnapshot.segment_id}`);
+  el.textContent = bits.join("  ·  ");
+}
+function _redrawRoiCanvas() {
+  const canvas = document.getElementById("roi-canvas");
+  if (!canvas || !_roiSnapshot || !canvas._roiBaseImage) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(canvas._roiBaseImage, 0, 0, canvas.width, canvas.height);
+  // Draw every saved zone in the snapshot's pixel space.
+  const zones = (_roiState && _roiState.zones) || {};
+  const sw = _roiSnapshot.width, sh = _roiSnapshot.height;
+  for (const [zid, z] of Object.entries(zones)) {
+    // If this zone has source dims that DIFFER from the snapshot,
+    // scale onto the snapshot's pixel grid so what we draw matches
+    // what was saved.
+    let x = Number(z.x) || 0, y = Number(z.y) || 0;
+    let w = Number(z.w) || 0, h = Number(z.h) || 0;
+    if (z.source_width > 0 && z.source_height > 0
+        && (z.source_width !== sw || z.source_height !== sh)) {
+      const fx = sw / z.source_width, fy = sh / z.source_height;
+      x = Math.round(x * fx); y = Math.round(y * fy);
+      w = Math.round(w * fx); h = Math.round(h * fy);
+    }
+    const selected = (zid === _roiSelectedId);
+    ctx.lineWidth = selected ? 3 : 2;
+    ctx.strokeStyle = selected ? "#5b8def" : "#3ddc84";
+    ctx.fillStyle = "rgba(91,141,239,0.10)";
+    ctx.strokeRect(x, y, w, h);
+    if (selected) ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = selected ? "#5b8def" : "#3ddc84";
+    ctx.font = "12px ui-monospace, monospace";
+    ctx.fillText(`${zid}`, x + 4, Math.max(12, y + 14));
+  }
+  // Active drag overlay (operator drawing right now).
+  if (_roiCanvasDrag) {
+    const {startX, startY, currentX, currentY} = _roiCanvasDrag;
+    const x = Math.min(startX, currentX), y = Math.min(startY, currentY);
+    const w = Math.abs(currentX - startX), h = Math.abs(currentY - startY);
+    ctx.strokeStyle = "#ffb020"; ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+  }
+}
+function _drawRoiSnapshot(snapshot) {
+  _roiSnapshot = snapshot;
+  _renderRoiSnapshotMeta();
+  const wrap = document.getElementById("roi-canvas-wrap");
+  const canvas = document.getElementById("roi-canvas");
+  const hint = document.getElementById("roi-canvas-hint");
+  if (!snapshot || !snapshot.image_url) {
+    wrap.style.display = "none";
+    if (hint) hint.hidden = true;
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = snapshot.width;
+    canvas.height = snapshot.height;
+    canvas._roiBaseImage = img;
+    wrap.style.display = "block";
+    if (hint) hint.hidden = false;
+    _redrawRoiCanvas();
+  };
+  img.onerror = () => {
+    const ss = document.getElementById("roi-save-status");
+    ss.className = "save-status err";
+    ss.textContent = "snapshot decoded as non-image; numeric editing still works.";
+    wrap.style.display = "none";
+    if (hint) hint.hidden = true;
+  };
+  img.src = snapshot.image_url;
+}
+async function loadRoiSnapshot() {
+  const id = _roiSelectedCameraId();
+  if (!id) return;
+  const ss = document.getElementById("roi-save-status");
+  ss.className = "save-status"; ss.textContent = "loading frame…";
+  try {
+    const headers = {};
+    const tok = document.getElementById("roi-admin-token").value.trim();
+    if (tok) headers["X-PhazeX-Admin-Token"] = tok;
+    const r = await fetch(
+      `${API}/admin/camera-rois/${encodeURIComponent(id)}/snapshot`,
+      {headers});
+    if (!r.ok) {
+      const txt = await r.text();
+      let payload = null;
+      try { payload = JSON.parse(txt); } catch (_) {}
+      ss.className = "save-status err";
+      ss.textContent = `snapshot failed (${r.status}): ` +
+        (payload?.detail || txt.slice(0, 400)) +
+        " · numeric editing below still works.";
+      return;
+    }
+    const body = await r.json();
+    _drawRoiSnapshot(body);
+    ss.className = "save-status ok"; ss.textContent = "frame loaded.";
+  } catch (e) {
+    ss.className = "save-status err";
+    ss.textContent =
+      `snapshot network error: ${e} · numeric editing still works.`;
+  }
+}
+function _bindRoiCanvasDrag() {
+  const canvas = document.getElementById("roi-canvas");
+  if (!canvas || canvas._roiDragBound) return;
+  canvas._roiDragBound = true;
+  const ptToCanvas = (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return [
+      Math.max(0, Math.min(canvas.width, Math.round((ev.clientX - rect.left) * sx))),
+      Math.max(0, Math.min(canvas.height, Math.round((ev.clientY - rect.top) * sy))),
+    ];
+  };
+  canvas.addEventListener("pointerdown", (ev) => {
+    if (!_roiSnapshot || !_roiSelectedId) return;
+    canvas.setPointerCapture(ev.pointerId);
+    const [x, y] = ptToCanvas(ev);
+    _roiCanvasDrag = {startX: x, startY: y, currentX: x, currentY: y};
+    _redrawRoiCanvas();
+  });
+  canvas.addEventListener("pointermove", (ev) => {
+    if (!_roiCanvasDrag) return;
+    const [x, y] = ptToCanvas(ev);
+    _roiCanvasDrag.currentX = x;
+    _roiCanvasDrag.currentY = y;
+    _redrawRoiCanvas();
+  });
+  canvas.addEventListener("pointerup", (ev) => {
+    if (!_roiCanvasDrag || !_roiSelectedId || !_roiSnapshot) {
+      _roiCanvasDrag = null;
+      return;
+    }
+    const {startX, startY, currentX, currentY} = _roiCanvasDrag;
+    _roiCanvasDrag = null;
+    const x = Math.min(startX, currentX), y = Math.min(startY, currentY);
+    const w = Math.abs(currentX - startX), h = Math.abs(currentY - startY);
+    if (w < 2 || h < 2) { _redrawRoiCanvas(); return; }
+    const zone = _roiState.zones[_roiSelectedId] || (
+      _roiState.zones[_roiSelectedId] = {});
+    zone.x = x; zone.y = y; zone.w = w; zone.h = h;
+    // Stamp the snapshot's source dimensions so the runtime knows how
+    // to rescale onto the actual recorder frame size.
+    zone.source_width = _roiSnapshot.width;
+    zone.source_height = _roiSnapshot.height;
+    renderRoiZones();
+    renderRoiModels();
+    _redrawRoiCanvas();
+    const ss = document.getElementById("roi-save-status");
+    ss.className = "save-status";
+    ss.textContent = `set ${_roiSelectedId} = (${x},${y},${w},${h}) ` +
+      `at source=${_roiSnapshot.width}x${_roiSnapshot.height}; ` +
+      "Save to persist.";
+  });
+}
+function _bindRoiRowSelection() {
+  const tbody = document.querySelector("#roi-zone-table tbody");
+  if (!tbody) return;
+  tbody.addEventListener("click", (ev) => {
+    const tr = ev.target.closest("tr");
+    if (!tr) return;
+    const idCell = tr.querySelector("code");
+    if (!idCell) return;
+    _roiSelectedId = idCell.textContent.trim();
+    for (const r of tbody.querySelectorAll("tr")) {
+      r.style.background = "";
+    }
+    tr.style.background = "rgba(91,141,239,0.10)";
+    _redrawRoiCanvas();
+  });
+}
+
+document.getElementById("roi-load-frame").onclick = loadRoiSnapshot;
+
 document.getElementById("roi-save").onclick = async () => {
   const id = _roiSelectedCameraId();
   if (!id || !_roiState) return;
   // Build the payload — strip computed/server-only keys.
   const zones = {};
   for (const [zid, z] of Object.entries(_roiState.zones || {})) {
-    zones[zid] = {
+    const entry = {
       label: z.label ?? "", purpose: z.purpose ?? "",
       x: Number(z.x) || 0, y: Number(z.y) || 0,
       w: Number(z.w) || 0, h: Number(z.h) || 0,
     };
+    // Optional source-frame dimensions. Only included when both are
+    // positive — the backend rejects partial / non-positive values.
+    if (Number(z.source_width) > 0 && Number(z.source_height) > 0) {
+      entry.source_width = Number(z.source_width);
+      entry.source_height = Number(z.source_height);
+    }
+    zones[zid] = entry;
   }
   const model_roi_views = {};
   for (const [mid, v] of Object.entries(_roiState.model_roi_views || {})) {
