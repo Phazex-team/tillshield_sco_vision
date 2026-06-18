@@ -1053,14 +1053,36 @@ document.getElementById("submit-action").onclick = async () => {
 
 document.getElementById("reprocess-btn").onclick = async () => {
   if (!currentCase) return;
-  const r = await fetch(`${API}/cases/${currentCase}/reprocess`,
+  const caseId = currentCase;
+  const btn = document.getElementById("reprocess-btn");
+  const r = await fetch(`${API}/cases/${caseId}/reprocess`,
                         { method: "POST" });
-  if (r.ok) {
-    refreshCases();
-    openCase(currentCase);
-  } else {
+  if (!r.ok) {
     alert(`reprocess failed: ${r.status} ${await r.text()}`);
+    return;
   }
+  // Reprocess is now a background job (202). Reflect REPROCESSING
+  // immediately, then poll for the terminal status without blocking.
+  refreshCases();
+  if (currentCase === caseId) openCase(caseId);
+  btn.disabled = true;
+  const origLabel = btn.textContent;
+  btn.textContent = "Reprocessing…";
+  const started = Date.now();
+  const poll = setInterval(async () => {
+    try {
+      const cr = await fetch(`${API}/cases/${caseId}`);
+      const c = await cr.json();
+      const done = c.status !== "REPROCESSING";
+      if (done || Date.now() - started > 600000) {  // 10 min safety cap
+        clearInterval(poll);
+        btn.disabled = false;
+        btn.textContent = origLabel;
+        refreshCases();
+        if (currentCase === caseId) openCase(caseId);
+      }
+    } catch (_) { /* keep polling */ }
+  }, 4000);
 };
 
 document.getElementById("refresh").onclick = () => {

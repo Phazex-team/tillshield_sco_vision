@@ -100,7 +100,11 @@ def test_delayed_pos_uses_event_time_not_ingest_time(client, tmp_path):
     assert r.status_code == 200
     case = client.get("/api/v1/cases").json()["items"][0]
     rr = client.post(f"/api/v1/cases/{case['id']}/reprocess")
-    assert rr.json()["outcome"] == "INVALID_VIDEO"
+    assert rr.status_code == 202
+    from app.api.cases import _drain_reprocess_pool
+    _drain_reprocess_pool()
+    closed = client.get(f"/api/v1/cases/{case['id']}").json()
+    assert closed["outcome"] == "INVALID_VIDEO"
 
 
 def test_idempotent_pos_does_not_double_open(client):
@@ -135,7 +139,10 @@ def test_perception_pipeline_emits_structures_after_reprocess_with_segments(
     case = client.get("/api/v1/cases").json()["items"][0]
     r = client.post(f"/api/v1/cases/{case['id']}/reprocess")
     assert r.status_code in (200, 202)
-    assert r.json()["outcome"] in (
+    from app.api.cases import _drain_reprocess_pool
+    _drain_reprocess_pool()
+    closed = client.get(f"/api/v1/cases/{case['id']}").json()
+    assert closed["outcome"] in (
         "VERIFIED", "REVIEW", "HIGH_RISK_REVIEW", "INVALID_VIDEO")
 
 
@@ -164,7 +171,9 @@ def test_reviewer_action_is_audited_and_closes_case(client):
 def test_evidence_package_is_versioned_and_hashed(client, tmp_path):
     client.post("/api/v1/pos/returns/event", json=_pos_event())
     case_id = client.get("/api/v1/cases").json()["items"][0]["id"]
+    from app.api.cases import _drain_reprocess_pool
     client.post(f"/api/v1/cases/{case_id}/reprocess")
+    _drain_reprocess_pool()
     pkg = client.get(f"/api/v1/cases/{case_id}/evidence-package").json()
     assert pkg["audit"]["package_sha256"]
     pkg_dir = (Path(tmp_path) / "storage" / "cases"
@@ -173,5 +182,6 @@ def test_evidence_package_is_versioned_and_hashed(client, tmp_path):
     assert files, "package file should be written"
     # A second reprocess writes a NEW file, not overwrites.
     client.post(f"/api/v1/cases/{case_id}/reprocess")
+    _drain_reprocess_pool()
     files2 = list(pkg_dir.iterdir())
     assert len(files2) > len(files)

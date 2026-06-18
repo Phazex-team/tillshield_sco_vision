@@ -154,7 +154,9 @@ def test_case_reprocess_invalid_video_when_no_segments(client):
     case_id = cases[0]["id"]
     r = client.post(f"/api/v1/cases/{case_id}/reprocess")
     assert r.status_code in (200, 202)
-    body = r.json()
+    from app.api.cases import _drain_reprocess_pool
+    _drain_reprocess_pool()
+    body = client.get(f"/api/v1/cases/{case_id}").json()
     assert body["outcome"] == "INVALID_VIDEO"
     assert "no overlapping" in body.get("invalid_reason", "").lower()
 
@@ -165,6 +167,8 @@ def test_case_evidence_package_404_then_present(client):
     r = client.get(f"/api/v1/cases/{case_id}/evidence-package")
     assert r.status_code == 404
     client.post(f"/api/v1/cases/{case_id}/reprocess")
+    from app.api.cases import _drain_reprocess_pool
+    _drain_reprocess_pool()
     r2 = client.get(f"/api/v1/cases/{case_id}/evidence-package")
     assert r2.status_code == 200
     body = r2.json()

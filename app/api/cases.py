@@ -1,6 +1,9 @@
 """Case query + reprocess endpoints."""
 from __future__ import annotations
 
+import atexit
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -9,7 +12,57 @@ from sqlalchemy import select
 from app.case_runner import analyze_case  # module-level so tests can monkeypatch
 
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/cases", tags=["cases"])
+
+# Reprocess runs ``analyze_case`` (NVR clip export + ffmpeg + perception +
+# VLM) which can take minutes, so it must NOT block the request. A single
+# worker serialises analyses — concurrent reprocess requests queue rather
+# than contending for the GPU / model servers.
+_REPROCESS_POOL = ThreadPoolExecutor(max_workers=1,
+                                     thread_name_prefix="reprocess")
+atexit.register(lambda: _REPROCESS_POOL.shutdown(wait=False))
+
+
+def _run_reprocess(case_id: str, prior: dict) -> None:
+    """Background worker: run the full analysis in its own session. On an
+    unexpected failure the case is restored to its pre-reprocess state (so
+    it is never left stuck in REPROCESSING) and the failure is audited."""
+    from app import audit
+    from db.models import Case
+    from db.session import get_sessionmaker
+
+    SM = get_sessionmaker()
+    try:
+        with SM() as s:
+            analyze_case(s, case_id)
+    except Exception as exc:  # noqa: BLE001 — must not crash the worker
+        log.exception("background reprocess failed for case %s", case_id)
+        try:
+            with SM() as s:
+                case = s.get(Case, case_id)
+                if case is not None and case.status == "REPROCESSING":
+                    case.status = prior.get("status") or "CLOSED"
+                    case.outcome = prior.get("outcome")
+                    case.invalid_reason = f"reprocess_failed: {exc}"[:480]
+                    audit.record(s, action="case.reprocess_failed",
+                                 entity_type="case", entity_id=case_id,
+                                 actor_type="api",
+                                 before={"status": "REPROCESSING"},
+                                 after={"status": case.status,
+                                        "error": str(exc)})
+                    s.commit()
+        except Exception:
+            log.exception("failed to record reprocess failure for %s",
+                          case_id)
+
+
+def _drain_reprocess_pool() -> None:
+    """Block until all queued reprocess jobs have finished. Single worker
+    + FIFO means a sentinel that completes guarantees prior jobs are done.
+    Used by tests and any caller that needs the result synchronously."""
+    _REPROCESS_POOL.submit(lambda: None).result()
 
 
 def _serialise_case(case, pos_event=None, latest_window=None) -> dict:
@@ -123,7 +176,12 @@ def get_case(case_id: str) -> dict:
 
 @router.post("/{case_id}/reprocess", status_code=202)
 def reprocess(case_id: str) -> dict:
-    """Reset + immediately re-run analysis for ``case_id``. Audited."""
+    """Reset the case and queue a re-analysis as a BACKGROUND job.
+
+    Returns 202 immediately with ``status="REPROCESSING"``. The analysis
+    (NVR clip export, perception, VLM, decision) runs on a single-worker
+    pool; poll ``GET /cases/{id}`` for the final status/outcome. Audited.
+    """
     from app import audit
     from db.models import Case
     from db.session import get_sessionmaker
@@ -150,11 +208,8 @@ def reprocess(case_id: str) -> dict:
         )
         s.commit()
 
-    # Run analysis in a fresh session so audit + decision land together.
-    with SM() as s:
-        try:
-            result = analyze_case(s, case_id)
-        except Exception as exc:
-            raise HTTPException(status_code=500,
-                                detail=f"analyze failed: {exc}")
-        return {"case_id": case_id, **result}
+    # Hand the (slow) analysis off to the background worker and return.
+    _REPROCESS_POOL.submit(_run_reprocess, case_id, before)
+    return {"case_id": case_id, "status": "REPROCESSING",
+            "detail": "reprocess started; poll GET /cases/{id} "
+                      "for the outcome"}

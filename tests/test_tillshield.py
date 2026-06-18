@@ -170,7 +170,10 @@ def test_tillshield_timezone_aware_date_preserved(client):
     # INVALID_VIDEO failure_reason mentioning the original timestamp.
     case_id = client.get("/api/v1/cases").json()["items"][0]["id"]
     rr = client.post(f"/api/v1/cases/{case_id}/reprocess")
-    body = rr.json()
+    assert rr.status_code == 202
+    from app.api.cases import _drain_reprocess_pool
+    _drain_reprocess_pool()
+    body = client.get(f"/api/v1/cases/{case_id}").json()
     # Without segments the case becomes INVALID_VIDEO and the reason
     # references the requested window centred on transaction_date.
     assert body["outcome"] == "INVALID_VIDEO"
