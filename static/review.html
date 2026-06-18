@@ -311,9 +311,35 @@
       <h3 style="font-size:13px;margin:18px 0 6px 0">Cameras &amp; segment freshness</h3>
       <table id="ops-cameras">
         <thead><tr><th>Camera</th><th>Latest segment at</th>
-          <th>Age (s)</th><th>Pill</th><th>Detail</th></tr></thead>
+          <th>Age (s)</th><th>Pill</th><th>Detail</th>
+          <th>Preview</th></tr></thead>
         <tbody></tbody>
       </table>
+
+      <!-- On-demand single-frame preview from the most recent local
+           segment. Read-only. No live streaming, no inference. -->
+      <section id="camera-preview-panel" class="panel"
+               style="background:#0e131a;border:1px solid var(--border);margin-top:14px;display:none">
+        <h3 style="margin:0 0 8px 0;font-size:13px">
+          Camera preview
+          <button id="camera-preview-close" style="float:right;font-size:11px">Close</button>
+        </h3>
+        <div id="camera-preview-meta" style="font-size:12px;color:var(--muted);margin-bottom:8px">—</div>
+        <div id="camera-preview-empty" class="empty" hidden>No recent recorded frame available.</div>
+        <img id="camera-preview-img" alt="camera preview" style="max-width:100%;border:1px solid var(--border);border-radius:4px;background:#000;display:none"/>
+        <div class="row" style="margin-top:10px;align-items:center">
+          <button id="camera-preview-refresh">Refresh</button>
+          <label class="field" style="margin-left:6px">
+            <input type="checkbox" id="camera-preview-autorefresh"/>
+            auto-refresh (every 5s)
+          </label>
+          <span style="color:var(--muted);font-size:11px">
+            Preview only &mdash; no model inference.
+          </span>
+        </div>
+        <div class="save-status" id="camera-preview-status"></div>
+      </section>
+
       <h3 style="font-size:13px;margin:18px 0 6px 0">Warnings (non-blocking)</h3>
       <ul class="warning-list" id="ops-warnings"></ul>
       <div class="empty" id="ops-error" hidden></div>
@@ -1051,16 +1077,26 @@ async function refreshOps() {
     tbody.innerHTML = "";
     for (const cam of (s.cameras || [])) {
       const tr = document.createElement("tr");
+      const camId = cam.id || "";
       tr.innerHTML = `
-        <td>${escapeHtml(cam.id || "—")}<br><span style="color:var(--muted);font-size:11px">${escapeHtml(cam.name || "")}</span></td>
+        <td>${escapeHtml(camId || "—")}<br><span style="color:var(--muted);font-size:11px">${escapeHtml(cam.name || "")}</span></td>
         <td>${escapeHtml(cam.latest_segment_at || "—")}</td>
         <td>${cam.latest_segment_age_seconds ?? "—"}</td>
         <td>${pillEl(cam.pill || "UNKNOWN")}</td>
-        <td><span style="color:var(--muted)">${escapeHtml(cam.detail || cam.error || "")}</span></td>`;
+        <td><span style="color:var(--muted)">${escapeHtml(cam.detail || cam.error || "")}</span></td>
+        <td>${camId
+          ? `<button data-camera-preview="${escapeHtml(camId)}">Preview</button>`
+          : "—"}</td>`;
       tbody.appendChild(tr);
     }
     if (!s.cameras || s.cameras.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No cameras configured.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">No cameras configured.</td></tr>';
+    }
+    // Bind per-row Preview buttons. Event delegation isn't used because
+    // the table is re-rendered every refresh and inline ``data-`` lookup
+    // keeps the handler trivial to audit.
+    for (const btn of tbody.querySelectorAll("[data-camera-preview]")) {
+      btn.onclick = () => openCameraPreview(btn.dataset.cameraPreview);
     }
 
     const wl = document.getElementById("ops-warnings");
@@ -1080,6 +1116,107 @@ async function refreshOps() {
   }
 }
 document.getElementById("ops-refresh").onclick = refreshOps;
+
+// ---- Camera preview (Pipeline tab, read-only, on-demand) ----
+// Single-frame preview from the most recent locally recorded segment.
+// This is NOT a live RTSP stream, NOT inference, and NOT a process
+// control. It calls the dedicated backend endpoint and renders the
+// returned data URL. Auto-refresh is OFF by default; when toggled on
+// the polling interval is hard-coded to 5 seconds.
+const CAMERA_PREVIEW_INTERVAL_MS = 5000;
+let _cameraPreviewId = null;
+let _cameraPreviewTimer = null;
+
+function _setCameraPreviewMeta(text, isError) {
+  const el = document.getElementById("camera-preview-status");
+  el.className = "save-status" + (isError ? " err" : "");
+  el.textContent = text || "";
+}
+
+async function loadCameraPreviewFrame(camId) {
+  if (!camId) return;
+  const metaEl = document.getElementById("camera-preview-meta");
+  const img = document.getElementById("camera-preview-img");
+  const empty = document.getElementById("camera-preview-empty");
+  try {
+    const r = await fetch(
+      `${API}/video/cameras/${encodeURIComponent(camId)}/preview-frame`);
+    if (!r.ok) {
+      let txt = await r.text();
+      let detail = txt;
+      try { detail = JSON.parse(txt).detail || txt; } catch (_) {}
+      img.style.display = "none";
+      img.removeAttribute("src");
+      empty.hidden = false;
+      empty.textContent = (r.status === 404 || r.status === 410)
+        ? "No recent recorded frame available."
+        : `preview unavailable (${r.status}): ${String(detail).slice(0, 200)}`;
+      metaEl.textContent = `camera ${camId}`;
+      _setCameraPreviewMeta("");
+      return;
+    }
+    const body = await r.json();
+    img.src = body.image_url;
+    img.style.display = "block";
+    empty.hidden = true;
+    metaEl.textContent =
+      `camera=${body.camera_id}  ·  source=${body.source}  ·  ` +
+      `${body.width}×${body.height}  ·  ` +
+      `captured_at=${body.captured_at || "—"}  ·  ` +
+      `segment_id=${body.segment_id || "—"}`;
+    _setCameraPreviewMeta("");
+  } catch (e) {
+    img.style.display = "none";
+    empty.hidden = false;
+    empty.textContent = "No recent recorded frame available.";
+    _setCameraPreviewMeta(`preview network error: ${e}`, true);
+  }
+}
+
+function _stopCameraPreviewTimer() {
+  if (_cameraPreviewTimer !== null) {
+    clearInterval(_cameraPreviewTimer);
+    _cameraPreviewTimer = null;
+  }
+}
+
+function _restartCameraPreviewTimer() {
+  _stopCameraPreviewTimer();
+  const auto = document.getElementById("camera-preview-autorefresh");
+  if (!_cameraPreviewId || !auto || !auto.checked) return;
+  // Hard floor 5s — never poll faster.
+  const interval = Math.max(CAMERA_PREVIEW_INTERVAL_MS, 5000);
+  _cameraPreviewTimer = setInterval(
+    () => loadCameraPreviewFrame(_cameraPreviewId), interval);
+}
+
+function openCameraPreview(camId) {
+  if (!camId) return;
+  _cameraPreviewId = camId;
+  const panel = document.getElementById("camera-preview-panel");
+  panel.style.display = "block";
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+  loadCameraPreviewFrame(camId);
+  _restartCameraPreviewTimer();
+}
+
+function closeCameraPreview() {
+  _cameraPreviewId = null;
+  _stopCameraPreviewTimer();
+  const panel = document.getElementById("camera-preview-panel");
+  if (panel) panel.style.display = "none";
+  const img = document.getElementById("camera-preview-img");
+  if (img) { img.removeAttribute("src"); img.style.display = "none"; }
+  const auto = document.getElementById("camera-preview-autorefresh");
+  if (auto) auto.checked = false;
+}
+
+document.getElementById("camera-preview-refresh").onclick = () => {
+  if (_cameraPreviewId) loadCameraPreviewFrame(_cameraPreviewId);
+};
+document.getElementById("camera-preview-close").onclick = closeCameraPreview;
+document.getElementById("camera-preview-autorefresh").onchange =
+  _restartCameraPreviewTimer;
 
 // ===================== PROMPTS TAB =====================
 let _promptCache = {};  // camera_id -> row
