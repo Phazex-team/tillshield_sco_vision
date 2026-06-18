@@ -49,7 +49,7 @@ def analyze_case(session: Session,
                  perception_runner: Optional[Callable] = None,
                  vlm_runner: Optional[Callable] = None,
                  prompt_version: str = "return_review_v1",
-                 manifest_max_frames: int = 12,
+                 manifest_max_frames: int = 24,
                  cfg=None) -> dict:
     """Run the full analysis for ``case_id`` and persist results.
 
