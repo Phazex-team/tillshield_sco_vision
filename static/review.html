@@ -177,6 +177,7 @@
 <nav class="tabs" id="tabs">
   <button data-tab="cases" class="active">Cases</button>
   <button data-tab="pipeline">Pipeline</button>
+  <button data-tab="cameras">Cameras</button>
   <button data-tab="prompts">Prompts</button>
   <button data-tab="rois">Camera ROIs</button>
   <button data-tab="storage">Storage</button>
@@ -343,6 +344,49 @@
       <h3 style="font-size:13px;margin:18px 0 6px 0">Warnings (non-blocking)</h3>
       <ul class="warning-list" id="ops-warnings"></ul>
       <div class="empty" id="ops-error" hidden></div>
+    </section>
+  </section>
+
+  <!-- ===================== CAMERAS TAB ===================== -->
+  <section class="tab-pane" id="tab-cameras">
+    <section class="panel">
+      <h2>Camera source settings</h2>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
+        Set a camera's <strong>RTSP URL</strong> and the
+        <strong>POS workstation ID</strong> that maps to it. Saves go
+        through <code>PATCH /api/v1/admin/cameras/{camera_id}</code>,
+        persist to <code>config.yaml</code>, and are audited.
+        <strong>Restart/reload the segment recorder for an RTSP URL
+        change to take effect.</strong>
+      </p>
+      <div class="row" style="margin-bottom:12px">
+        <label class="field">Camera
+          <select id="cam-select"></select>
+        </label>
+        <label class="field">Admin token
+          <input id="cam-admin-token" type="password" placeholder="X-PhazeX-Admin-Token (optional if unset)" style="width:280px"/>
+        </label>
+        <button id="cam-reload">Reload from server</button>
+      </div>
+      <div class="prompt-area">
+        <label>
+          <span style="font-size:12px;color:var(--muted)">Camera name</span>
+          <input id="cam-name" type="text" style="width:100%"/>
+        </label>
+        <label>
+          <span style="font-size:12px;color:var(--muted)">RTSP URL</span>
+          <input id="cam-rtsp" type="text" style="width:100%" placeholder="rtsp://user:pass@host:554/..."/>
+          <span id="cam-rtsp-note" style="font-size:11px;color:var(--muted)"></span>
+        </label>
+        <label>
+          <span style="font-size:12px;color:var(--muted)">POS workstation ID (maps this workstation to this camera; blank clears)</span>
+          <input id="cam-workstation" type="text" style="width:240px" placeholder="e.g. 52"/>
+        </label>
+      </div>
+      <div class="row" style="margin-top:12px;justify-content:flex-end">
+        <button id="cam-save" class="primary">Save camera settings</button>
+      </div>
+      <div class="save-status" id="cam-save-status"></div>
     </section>
   </section>
 
@@ -563,6 +607,7 @@ function activateTab(name) {
     p.classList.toggle("active", p.id === `tab-${name}`);
   }
   if (name === "pipeline") refreshOps();
+  if (name === "cameras") refreshCameras();
   if (name === "prompts") refreshPrompts();
   if (name === "rois") refreshRois();
   if (name === "storage") refreshStorage();
@@ -1219,6 +1264,81 @@ document.getElementById("camera-preview-autorefresh").onchange =
   _restartCameraPreviewTimer;
 
 // ===================== PROMPTS TAB =====================
+// ---- Camera source settings (RTSP URL + POS workstation) ----
+let _cameraCache = {};  // camera_id -> row
+async function refreshCameras() {
+  const ss = document.getElementById("cam-save-status");
+  try {
+    const r = await fetch(`${API}/admin/cameras`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const body = await r.json();
+    const sel = document.getElementById("cam-select");
+    const before = sel.value;
+    sel.innerHTML = "";
+    _cameraCache = {};
+    for (const row of (body.items || [])) {
+      _cameraCache[row.camera_id] = row;
+      const opt = document.createElement("option");
+      opt.value = row.camera_id;
+      opt.textContent = `${row.camera_id} — ${row.name || ""}`;
+      sel.appendChild(opt);
+    }
+    if (before && _cameraCache[before]) sel.value = before;
+    loadSelectedCamera();
+  } catch (e) {
+    if (ss) { ss.className = "save-status"; ss.textContent = `load failed: ${e}`; }
+  }
+}
+function loadSelectedCamera() {
+  const id = document.getElementById("cam-select").value;
+  const row = _cameraCache[id];
+  if (!row) return;
+  document.getElementById("cam-name").value = row.name || "";
+  document.getElementById("cam-rtsp").value = row.rtsp_url || "";
+  document.getElementById("cam-workstation").value = row.workstation_id || "";
+  const note = document.getElementById("cam-rtsp-note");
+  note.textContent = row.rtsp_url_is_env_ref
+    ? "current URL comes from a ${ENV} reference in config.yaml — saving replaces it with this literal value."
+    : "";
+  const ss = document.getElementById("cam-save-status");
+  ss.className = "save-status"; ss.textContent = "";
+}
+document.getElementById("cam-reload").onclick = refreshCameras;
+document.getElementById("cam-select").onchange = loadSelectedCamera;
+document.getElementById("cam-save").onclick = async () => {
+  const id = document.getElementById("cam-select").value;
+  if (!id) return;
+  const body = {
+    name: document.getElementById("cam-name").value || null,
+    rtsp_url: document.getElementById("cam-rtsp").value || null,
+    // Always send workstation_id (incl. "") so clearing it works.
+    workstation_id: document.getElementById("cam-workstation").value.trim(),
+  };
+  const headers = { "Content-Type": "application/json" };
+  const tok = document.getElementById("cam-admin-token").value.trim();
+  if (tok) headers["X-PhazeX-Admin-Token"] = tok;
+  const ss = document.getElementById("cam-save-status");
+  ss.className = "save-status"; ss.textContent = "saving…";
+  try {
+    const r = await fetch(`${API}/admin/cameras/${encodeURIComponent(id)}`, {
+      method: "PATCH", headers, body: JSON.stringify(body),
+    });
+    const txt = await r.text();
+    let payload = null;
+    try { payload = JSON.parse(txt); } catch (_) { /* keep raw text */ }
+    if (r.ok) {
+      ss.className = "save-status ok";
+      ss.textContent = `saved: ${JSON.stringify(payload?.updated_fields || [])} — ${payload?.note || ""}`;
+      refreshCameras();
+    } else {
+      ss.className = "save-status";
+      ss.textContent = `save failed: ${r.status} ${typeof payload?.detail === "string" ? payload.detail : txt}`;
+    }
+  } catch (e) {
+    ss.className = "save-status"; ss.textContent = `save failed: ${e}`;
+  }
+};
+
 let _promptCache = {};  // camera_id -> row
 async function refreshPrompts() {
   try {

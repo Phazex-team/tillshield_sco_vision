@@ -53,14 +53,19 @@ export VLLM_PORT="${VLLM_PORT:-8001}"
 export VLLM_URL="${VLLM_URL:-http://localhost:${VLLM_PORT}}"
 
 echo "[start] launching app on :$APP_PORT (logs -> $APP_LOG)"
-nohup python app.py >>"$APP_LOG" 2>&1 &
+# The product is the modular FastAPI app (app.main, served via
+# scripts/run_app.py) — it mounts the v1 API routers and the
+# static/review.html operator console. The legacy monolith app.py is
+# kept only for reference and must NOT be used to serve: it has none of
+# the v1 routers (cases, admin/cameras, ops, etc.).
+nohup python scripts/run_app.py --host 127.0.0.1 --port "$APP_PORT" >>"$APP_LOG" 2>&1 &
 APP_PID=$!
 echo "$APP_PID" > "$APP_PID_FILE"
 echo "[start] app PID=$APP_PID"
 
-# Quick sanity wait.
+# Quick sanity wait. The modular app's health route is /api/v1/health.
 for i in $(seq 1 30); do
-  if curl -sf -o /dev/null --max-time 2 "http://127.0.0.1:${APP_PORT}/health"; then
+  if curl -sf -o /dev/null --max-time 2 "http://127.0.0.1:${APP_PORT}/api/v1/health"; then
     echo "[start] app healthy on :$APP_PORT (after ${i}s)"
     echo "[start] open http://localhost:$APP_PORT"
     exit 0

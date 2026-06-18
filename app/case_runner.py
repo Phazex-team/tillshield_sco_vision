@@ -124,6 +124,12 @@ def analyze_case(session: Session,
     )
     session.add(window)
     session.flush()
+    # Release the SQLite write lock before the slow NVR/ffmpeg/model
+    # phases below. Holding one transaction open for the whole run
+    # serialises all other writers (the POS poller, a second reprocess)
+    # and surfaces as "database is locked". expire_on_commit=False keeps
+    # ``window``/``case`` usable after each commit.
+    session.commit()
 
     # ----- 1b. NVR on-demand retrieval (preferred-but-NONBLOCKING) ----
     # Try to pull the historical window from the NVR for this tx. This
@@ -146,6 +152,7 @@ def analyze_case(session: Session,
                         "invalid_reason": plan.invalid_reason,
                         "acquisition_source": window.acquisition_source,
                         "nvr": window.nvr_metadata})
+    session.commit()  # release lock before window build (ffmpeg)
 
     out_path = (storage_root / "cases" / f"case_id={case.id}" / "window"
                 / f"window_{window.id}.mp4")
@@ -198,6 +205,8 @@ def analyze_case(session: Session,
     window.actual_start_at = build.actual_start_at
     window.actual_end_at = build.actual_end_at
     window.status = "SUCCEEDED"
+    session.flush()
+    session.commit()  # release lock before perception (GPU) + VLM
 
     # ----- 3. Perception ---------------------------------------------
     perception_result = None
@@ -238,6 +247,9 @@ def analyze_case(session: Session,
                                perception=perception_result)
         except Exception:
             log.exception("perception persist failed (continuing)")
+    # Release the lock before keyframe extraction (ffmpeg) and the VLM
+    # inference, which are the longest phases of the run.
+    session.commit()
 
     # ----- 4. Build the evidence manifest with REAL frames -----------
     window_start_naive = build.actual_start_at or plan.requested_start

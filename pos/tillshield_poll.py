@@ -356,7 +356,11 @@ def poll_once(session: Session,
             st.last_error = f"fetch failed: {exc}"
             log.warning("tillshield poll: workstation %s fetch failed: %s",
                         ws, exc)
-            session.flush()
+            # Commit (not just flush) so the SQLite write lock is released
+            # immediately rather than held for the whole poll cycle —
+            # otherwise the background poller starves interactive writes
+            # (reprocess, config edits) and they hit "database is locked".
+            session.commit()
             continue
 
         rows = sorted(rows, key=lambda r: (_txn_dt(r) or now))
@@ -405,7 +409,12 @@ def poll_once(session: Session,
         st.last_txn_id = cursor_id
         st.last_error = None
         st.last_success_at = now
-        session.flush()
+        # Commit per workstation so the SQLite write lock is released
+        # between workstations instead of being held for the entire poll
+        # cycle. This keeps the background poller from starving
+        # interactive writes (reprocess, config edits) which otherwise
+        # fail with "database is locked".
+        session.commit()
 
     log.info(
         "tillshield poll: workstations=%d rows=%d inserted=%d cases=%d "

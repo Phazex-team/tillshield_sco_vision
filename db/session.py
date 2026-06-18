@@ -28,16 +28,40 @@ def get_engine() -> Engine:
         return _ENGINE
     cfg = load_config()
     url = cfg.database_url
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    connect_args = (
+        # ``timeout`` is the sqlite3 driver-level busy timeout (seconds):
+        # a writer waits up to this long for a competing lock to clear
+        # instead of failing immediately with "database is locked". The
+        # app runs a background poller thread (TillShield) writing
+        # concurrently with request handlers, so this is required.
+        {"check_same_thread": False, "timeout": 30}
+        if url.startswith("sqlite") else {}
+    )
     _ENGINE = create_engine(url, future=True, connect_args=connect_args)
     if url.startswith("sqlite"):
         @event.listens_for(_ENGINE, "connect")
-        def _enable_fk(dbapi_conn, _conn_record):  # noqa: ANN001
+        def _sqlite_pragmas(dbapi_conn, _conn_record):  # noqa: ANN001
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA foreign_keys=ON")
+            # WAL lets readers and a single writer proceed concurrently
+            # and is the single biggest fix for "database is locked"
+            # under poller-thread + request-handler write contention.
+            cur.execute("PRAGMA journal_mode=WAL")
+            # Belt-and-braces busy timeout at the SQLite level (ms), in
+            # addition to the driver ``timeout`` above.
+            cur.execute("PRAGMA busy_timeout=30000")
+            # Safe to relax durability under WAL; big throughput win for
+            # the poller's many small commits.
+            cur.execute("PRAGMA synchronous=NORMAL")
             cur.close()
+    # ``expire_on_commit=False`` keeps ORM instances usable after a
+    # commit. ``analyze_case`` commits at several checkpoints mid-run so
+    # the SQLite write lock is not held across slow NVR/ffmpeg/model
+    # work; without this, every attribute access after such a commit
+    # would re-query and the long analysis would still serialise reads.
     _SESSION_FACTORY = sessionmaker(bind=_ENGINE, autoflush=False,
-                                    autocommit=False, future=True)
+                                    autocommit=False, future=True,
+                                    expire_on_commit=False)
     return _ENGINE
 
 

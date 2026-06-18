@@ -262,6 +262,173 @@ def update_prompts(camera_id: str,
 
 
 # ---------------------------------------------------------------------------
+# Camera source settings (RTSP URL + POS workstation mapping)
+# ---------------------------------------------------------------------------
+#
+# RTSP URLs and the POS workstation->camera map both live in
+# ``config.yaml``. There was previously no way to set them without
+# hand-editing the file. These endpoints let an operator (a) point a
+# camera at a new RTSP URL and (b) attach the POS workstation id that
+# correlates to that camera, persisting both to ``config.yaml`` with an
+# audit trail. Changes to the RTSP URL take effect for the next
+# recorder reload / case; in-flight analysis keeps its snapshot.
+
+
+class CameraSettings(BaseModel):
+    name: Optional[str] = None
+    rtsp_url: Optional[str] = None
+    # POS workstation id that maps to this camera (TillShield
+    # ``workstation_camera_map``). Pass "" to clear this camera's
+    # mapping; omit to leave it unchanged.
+    workstation_id: Optional[str] = None
+
+
+def _tillshield_block(raw: dict) -> dict:
+    return ((raw.get("integrations") or {}).get("tillshield") or {})
+
+
+def _workstation_for_camera(raw: dict, camera_id: str) -> Optional[str]:
+    """Reverse-lookup: the first workstation id mapped to ``camera_id``."""
+    ws_map = _tillshield_block(raw).get("workstation_camera_map") or {}
+    for ws, cam in ws_map.items():
+        if cam == camera_id:
+            return str(ws)
+    return None
+
+
+@router.get("/cameras")
+def list_camera_settings() -> dict:
+    """Return each camera's source settings (RTSP URL + mapped POS
+    workstation). Unlike ``GET /admin/config`` this is NOT redacted —
+    it is the editing surface, gated by the same admin token on write.
+
+    ``rtsp_url`` is the *effective* value (``${VAR}`` already expanded).
+    ``rtsp_url_is_env_ref`` is true when the raw ``config.yaml`` value is
+    an env reference, so the UI can warn that saving replaces it with a
+    literal URL.
+    """
+    from pathlib import Path
+
+    import yaml as _yaml
+
+    from app.config import DEFAULT_CONFIG_PATH, load_config
+
+    cfg = load_config()
+    raw_disk = _yaml.safe_load(Path(DEFAULT_CONFIG_PATH).read_text()) or {}
+    raw_by_id = {c.get("id"): c for c in (raw_disk.get("cameras") or [])}
+
+    items = []
+    for cam in cfg.cameras:
+        cam_id = cam.get("id")
+        raw_url = str((raw_by_id.get(cam_id) or {}).get("rtsp_url") or "")
+        items.append({
+            "camera_id": cam_id,
+            "name": cam.get("name") or cam_id,
+            "rtsp_url": cam.get("rtsp_url") or "",
+            "rtsp_url_is_env_ref": "${" in raw_url,
+            "workstation_id": _workstation_for_camera(cfg.raw, cam_id),
+        })
+    return {"items": items}
+
+
+@router.patch("/cameras/{camera_id}")
+def update_camera_settings(
+    camera_id: str,
+    settings: CameraSettings,
+    request: Request,
+    x_phazex_admin_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Persist a camera's RTSP URL / name and POS workstation mapping
+    into ``config.yaml``. Token-gated and audited.
+
+    ``workstation_id``: a non-empty value maps that POS workstation to
+    this camera (replacing any prior workstation that pointed here) and
+    adds it to ``allowed_workstation_ids``. ``""`` clears this camera's
+    mapping. Omitting the field leaves the mapping unchanged.
+    """
+    _check_admin_token(x_phazex_admin_token)
+
+    from pathlib import Path
+
+    import yaml as _yaml
+
+    from app import audit
+    from app.config import DEFAULT_CONFIG_PATH
+    from db.session import get_sessionmaker
+
+    raw_path = Path(DEFAULT_CONFIG_PATH)
+    data = _yaml.safe_load(raw_path.read_text()) or {}
+    cameras = data.get("cameras") or []
+    target = next((c for c in cameras if c.get("id") == camera_id), None)
+    if target is None:
+        raise HTTPException(status_code=404,
+                            detail=f"camera {camera_id!r} not in config.yaml")
+
+    before = {
+        "name": target.get("name"),
+        "rtsp_url": target.get("rtsp_url"),
+        "workstation_id": _workstation_for_camera(data, camera_id),
+    }
+    updated_fields: list[str] = []
+
+    if settings.name is not None:
+        target["name"] = settings.name
+        updated_fields.append("name")
+
+    if settings.rtsp_url is not None:
+        new_url = settings.rtsp_url.strip()
+        if not new_url:
+            raise HTTPException(status_code=400,
+                                detail="rtsp_url must not be empty")
+        target["rtsp_url"] = new_url
+        updated_fields.append("rtsp_url")
+
+    if settings.workstation_id is not None:
+        integrations = data.setdefault("integrations", {})
+        ts = integrations.setdefault("tillshield", {})
+        ws_map = ts.setdefault("workstation_camera_map", {})
+        allowed = ts.setdefault("allowed_workstation_ids", [])
+        # Drop any workstation currently pointing at this camera so a
+        # camera maps to exactly one workstation id.
+        for ws in [w for w, cam in ws_map.items() if cam == camera_id]:
+            ws_map.pop(ws, None)
+        new_ws = settings.workstation_id.strip()
+        if new_ws:
+            ws_map[new_ws] = camera_id
+            if new_ws not in [str(x) for x in allowed]:
+                allowed.append(new_ws)
+        updated_fields.append("workstation_id")
+
+    if not updated_fields:
+        raise HTTPException(status_code=400, detail="no fields to update")
+
+    raw_path.write_text(_yaml.safe_dump(data, sort_keys=False))
+
+    after = {
+        "name": target.get("name"),
+        "rtsp_url": target.get("rtsp_url"),
+        "workstation_id": _workstation_for_camera(data, camera_id),
+    }
+    SM = get_sessionmaker()
+    with SM() as s:
+        audit.record(
+            s, action="admin.camera_settings_update",
+            entity_type="camera", entity_id=camera_id,
+            actor_type="admin_api",
+            before=before, after=after,
+            ip=(request.client.host if request.client else None),
+            user_agent=request.headers.get("user-agent"),
+        )
+        s.commit()
+
+    return {"camera_id": camera_id,
+            "updated_fields": updated_fields,
+            "settings": after,
+            "note": ("config.yaml updated; restart/reload the segment "
+                     "recorder for an rtsp_url change to take effect.")}
+
+
+# ---------------------------------------------------------------------------
 # Camera ROIs (per-camera ROI registry + per-model view assignments)
 # ---------------------------------------------------------------------------
 
