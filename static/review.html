@@ -234,6 +234,28 @@
       <h2>Case Detail
         <button id="close-detail" style="float:right;font-size:12px">Close</button>
       </h2>
+
+      <!-- Human-readable summary: the core findings up top, before the
+           detailed evidence dumps below. -->
+      <section id="case-summary" style="background:#0e1620;border:1px solid var(--border);border-radius:6px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Summary</div>
+        <div id="summary-outcome" style="font-size:15px;font-weight:600;margin-bottom:10px">—</div>
+        <div class="summary-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+          <div>
+            <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">VLM verdict</div>
+            <div id="summary-vlm" style="font-size:12px;line-height:1.5">—</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Perception (Falcon)</div>
+            <div id="summary-falcon" style="font-size:12px;line-height:1.5">—</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Evidence</div>
+            <div id="summary-evidence" style="font-size:12px;line-height:1.5">—</div>
+          </div>
+        </div>
+      </section>
+
       <div class="detail-grid">
         <div>
           <h3 style="font-size:13px;margin:0 0 8px 0">POS Event</h3>
@@ -824,6 +846,94 @@ function kvSet(el, obj) {
   }
 }
 
+// ---- Human-readable case summary (top of detail panel) ----
+function _vlmOut(run) {
+  if (!run) return {};
+  let out = run.output_json || run.output || {};
+  if (typeof out === "string") { try { out = JSON.parse(out); } catch (_) { out = {}; } }
+  return out || {};
+}
+function renderCaseSummary(pkg, c, window_) {
+  const per = (pkg && pkg.perception) || {};
+
+  // Outcome line.
+  const outcome = (c && c.outcome) || (pkg && pkg.case && pkg.case.outcome) || "—";
+  const risk = (c && c.risk_score != null) ? c.risk_score
+             : (pkg && pkg.case ? pkg.case.risk_score : null);
+  const reasons = ((c && c.risk_reasons) || []).join(" · ")
+               || (c && c.invalid_reason) || "";
+  document.getElementById("summary-outcome").innerHTML =
+    `<span class="pill ${escapeHtml(outcome)}">${escapeHtml(outcome)}</span> ` +
+    (risk != null ? `risk ${Number(risk).toFixed(2)} ` : "") +
+    (reasons ? `<span style="font-weight:400;color:var(--muted)">— ${escapeHtml(reasons)}</span>` : "");
+
+  // VLM verdict.
+  const runs = (pkg && pkg.reasoning) || [];
+  const run = runs.length ? runs[runs.length - 1] : null;
+  let vlmHtml = '<span class="pill UNKNOWN">no VLM run</span>';
+  if (run) {
+    const out = _vlmOut(run);
+    const attempts = out._chain_attempts || [];
+    const ran = run.status === "SUCCEEDED" &&
+                (out.narrative || out.handover_occurred !== undefined);
+    if (!ran && attempts.length && attempts.every(a => /=err|err:/i.test(a))) {
+      vlmHtml = '<span class="pill ERROR">VLM did not run</span> all providers errored';
+    } else {
+      const ho = out.handover_occurred;
+      const items = (out.item_count != null) ? out.item_count
+        : (Array.isArray(out.items_handed_over) ? out.items_handed_over.length : null);
+      vlmHtml =
+        `provider <strong>${escapeHtml(run.provider || "?")}</strong> · ` +
+        `handover: <strong>${ho === true ? "YES" : ho === false ? "NO" : "?"}</strong> · ` +
+        `items: <strong>${items != null ? items : "?"}</strong>` +
+        (out.confidence ? ` · conf ${escapeHtml(String(out.confidence))}` : "") +
+        (out.narrative ? `<div style="margin-top:5px;color:var(--muted)">“${escapeHtml(out.narrative)}”</div>` : "");
+    }
+  }
+  document.getElementById("summary-vlm").innerHTML = vlmHtml;
+
+  // Falcon perception — dedupe tracks by tracker_id, break down by label.
+  const dets = per.detections || [];
+  const seen = {}, byLabel = {};
+  for (const t of (per.tracks || [])) {
+    const id = t.tracker_id || t.id;
+    if (id && seen[id]) continue;
+    if (id) seen[id] = 1;
+    const lab = t.label || "other";
+    byLabel[lab] = (byLabel[lab] || 0) + 1;
+  }
+  const trackTotal = Object.keys(seen).length || (per.tracks || []).length;
+  const breakdown = Object.entries(byLabel).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${v} ${escapeHtml(k)}`).join(" · ");
+  document.getElementById("summary-falcon").innerHTML =
+    `<strong>${dets.length}</strong> detections · <strong>${trackTotal}</strong> tracks` +
+    (breakdown ? `<div style="margin-top:5px;color:var(--muted)">${breakdown}</div>` : "") +
+    `<div style="margin-top:3px;color:var(--muted)">${(per.keyframes || []).length} keyframes` +
+    `${(per.ocr || []).length ? " · " + per.ocr.length + " OCR" : ""}</div>`;
+
+  // Evidence: source + frames sent to the VLM + window span.
+  let frames = null;
+  if (run) {
+    const out = _vlmOut(run);
+    frames = (out._num_frames != null) ? out._num_frames
+           : (run.input_manifest ? run.input_manifest.frame_count : null);
+  }
+  const src = window_ && window_.acquisition_source;
+  const srcLabel = ({ nvr_clip_retrieved: "NVR historical clip",
+                      local_segments_used: "local recorded segments" })[src] || src || "—";
+  let span = "";
+  if (window_ && window_.actual_start_at) {
+    const dur = (window_.actual_end_at)
+      ? Math.round((Date.parse(window_.actual_end_at) - Date.parse(window_.actual_start_at)) / 1000)
+      : null;
+    span = `<div style="margin-top:3px;color:var(--muted)">window ${escapeHtml(window_.actual_start_at.replace("T", " "))}${dur != null ? " (" + dur + "s)" : ""}</div>`;
+  }
+  document.getElementById("summary-evidence").innerHTML =
+    `${escapeHtml(srcLabel)}` +
+    (frames != null ? `<div style="margin-top:5px;color:var(--muted)">${frames} frames sent to VLM</div>` : "") +
+    span;
+}
+
 // ---- Detection box overlay on the window video ----
 // Draws perception detection boxes (bbox_xyxy, full-frame px) over the
 // window <video>, picking the frame nearest the current playback time.
@@ -1004,6 +1114,7 @@ async function openCase(caseId) {
 
   renderEvidenceSource(window_);
   setupDetectionOverlay(pkg, window_);
+  renderCaseSummary(pkg, c, window_);
 
   const kfs = document.getElementById("keyframes");
   kfs.innerHTML = "";
