@@ -243,7 +243,14 @@
         </div>
         <div>
           <h3 style="font-size:13px;margin:0 0 8px 0">Video Window</h3>
-          <video id="video" controls preload="metadata" hidden></video>
+          <div id="video-wrap" style="position:relative;display:inline-block;max-width:100%;line-height:0">
+            <video id="video" controls preload="metadata" hidden style="max-width:100%;display:block"></video>
+            <canvas id="video-overlay" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>
+          </div>
+          <label id="boxes-toggle-wrap" style="font-size:11px;color:var(--muted);display:none;margin-top:4px;line-height:normal">
+            <input type="checkbox" id="boxes-toggle" checked/> show detection boxes
+            (<span id="boxes-count">0</span> detections)
+          </label>
           <div class="empty" id="no-video">No window available yet.</div>
           <h3 style="font-size:13px;margin:14px 0 6px 0">Evidence source</h3>
           <div id="evidence-source" style="font-size:12px"></div>
@@ -817,6 +824,125 @@ function kvSet(el, obj) {
   }
 }
 
+// ---- Detection box overlay on the window video ----
+// Draws perception detection boxes (bbox_xyxy, full-frame px) over the
+// window <video>, picking the frame nearest the current playback time.
+let _overlay = { frames: [], raf: null };
+
+function _videoEls() {
+  return {
+    video: document.getElementById("video"),
+    canvas: document.getElementById("video-overlay"),
+    toggleWrap: document.getElementById("boxes-toggle-wrap"),
+    toggle: document.getElementById("boxes-toggle"),
+    count: document.getElementById("boxes-count"),
+  };
+}
+
+function setupDetectionOverlay(pkg, window_) {
+  const { video, canvas, toggleWrap, count } = _videoEls();
+  if (_overlay.raf) { cancelAnimationFrame(_overlay.raf); _overlay.raf = null; }
+  _overlay.frames = [];
+  const ctx = canvas.getContext("2d");
+  if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const dets = (pkg && pkg.perception && pkg.perception.detections) || [];
+  const hasVideo = window_ && window_.status === "SUCCEEDED" && window_.path;
+  if (!hasVideo || dets.length === 0) {
+    toggleWrap.style.display = "none";
+    return;
+  }
+
+  // Anchor video t=0 to the window start; fall back to earliest detection.
+  let startMs = window_.actual_start_at ? Date.parse(window_.actual_start_at) : NaN;
+  if (isNaN(startMs)) {
+    const ts = dets.map(d => Date.parse(d.frame_ts)).filter(x => !isNaN(x));
+    startMs = ts.length ? Math.min(...ts) : 0;
+  }
+  // Group detections by frame timestamp -> seconds from window start.
+  const byT = new Map();
+  for (const d of dets) {
+    if (!Array.isArray(d.bbox_xyxy)) continue;
+    const ms = Date.parse(d.frame_ts);
+    if (isNaN(ms)) continue;
+    const t = Math.max(0, (ms - startMs) / 1000);
+    const key = t.toFixed(3);
+    if (!byT.has(key)) byT.set(key, { t, boxes: [] });
+    byT.get(key).boxes.push({ bbox: d.bbox_xyxy, label: d.label, score: d.score });
+  }
+  _overlay.frames = [...byT.values()].sort((a, b) => a.t - b.t);
+  count.textContent = String(dets.length);
+  toggleWrap.style.display = "block";
+
+  sizeOverlay();
+  video.onloadedmetadata = () => { sizeOverlay(); drawOverlay(); };
+  video.onseeked = drawOverlay;
+  video.onpause = drawOverlay;
+  video.ontimeupdate = drawOverlay;
+  video.onplay = _overlayLoop;
+  document.getElementById("boxes-toggle").onchange = drawOverlay;
+  if (!_overlay._resizeBound) {
+    window.addEventListener("resize", () => { sizeOverlay(); drawOverlay(); });
+    _overlay._resizeBound = true;
+  }
+  drawOverlay();
+}
+
+function sizeOverlay() {
+  const { video, canvas } = _videoEls();
+  const w = video.clientWidth || video.videoWidth || 0;
+  const h = video.clientHeight || video.videoHeight || 0;
+  canvas.width = w; canvas.height = h;
+  canvas.style.width = w + "px"; canvas.style.height = h + "px";
+}
+
+function _nearestFrame(t) {
+  const f = _overlay.frames;
+  if (!f.length) return null;
+  let best = f[0], bestD = Math.abs(f[0].t - t);
+  for (let i = 1; i < f.length; i++) {
+    const d = Math.abs(f[i].t - t);
+    if (d < bestD) { best = f[i]; bestD = d; }
+  }
+  return bestD <= 0.5 ? best : null;  // only draw when a frame is near
+}
+
+function drawOverlay() {
+  const { video, canvas, toggle } = _videoEls();
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!toggle.checked || video.hidden || !video.videoWidth) return;
+  const sx = (video.clientWidth || video.videoWidth) / video.videoWidth;
+  const sy = (video.clientHeight || video.videoHeight) / video.videoHeight;
+  const frame = _nearestFrame(video.currentTime);
+  if (!frame) return;
+  ctx.lineWidth = 2;
+  ctx.font = "12px ui-monospace, monospace";
+  for (const b of frame.boxes) {
+    if (!Array.isArray(b.bbox) || b.bbox.length < 4) continue;
+    const [x1, y1, x2, y2] = b.bbox;
+    const x = x1 * sx, y = y1 * sy, w = (x2 - x1) * sx, h = (y2 - y1) * sy;
+    const isItem = (b.label || "").toLowerCase().includes("item");
+    ctx.strokeStyle = isItem ? "#3ddc84" : "#5b8def";
+    ctx.strokeRect(x, y, w, h);
+    const tag = `${b.label || "obj"}${b.score != null ? " " + Number(b.score).toFixed(2) : ""}`;
+    const tw = ctx.measureText(tag).width + 6;
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(x, Math.max(0, y - 14), tw, 14);
+    ctx.fillStyle = isItem ? "#3ddc84" : "#9ec1ff";
+    ctx.fillText(tag, x + 3, Math.max(10, y - 3));
+  }
+}
+
+function _overlayLoop() {
+  drawOverlay();
+  const { video } = _videoEls();
+  if (!video.paused && !video.ended) {
+    _overlay.raf = requestAnimationFrame(_overlayLoop);
+  }
+}
+
 async function openCase(caseId) {
   currentCase = caseId;
   // Fetch case detail + immutable evidence package + the DB-backed
@@ -877,6 +1003,7 @@ async function openCase(caseId) {
   }
 
   renderEvidenceSource(window_);
+  setupDetectionOverlay(pkg, window_);
 
   const kfs = document.getElementById("keyframes");
   kfs.innerHTML = "";
