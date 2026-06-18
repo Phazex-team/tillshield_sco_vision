@@ -32,6 +32,7 @@ async def _lifespan(app: FastAPI):
     start the poller is isolated — the API/UI still serve.
     """
     worker = None
+    analyzer = None
     try:
         from app.config import load_config
         from pos.tillshield_poll import PollWorker, load_poll_config
@@ -43,12 +44,29 @@ async def _lifespan(app: FastAPI):
             log.info("tillshield poller disabled (poll_enabled=false)")
     except Exception:
         log.exception("tillshield poller failed to start; API still serving")
+
+    # Auto-analyzer: drain OPEN cases into the reprocess pool so POS-opened
+    # cases get a video window + perception + VLM verdict without a manual
+    # reprocess. Isolated — failure here never blocks boot.
+    try:
+        from app.auto_analyzer import AutoAnalyzer, load_auto_analyze_config
+        from app.config import load_config
+        enabled, interval, batch = load_auto_analyze_config(load_config())
+        if enabled:
+            analyzer = AutoAnalyzer(interval=interval, batch=batch)
+            analyzer.start()
+        else:
+            log.info("auto-analyzer disabled (auto_analyze_enabled=false)")
+    except Exception:
+        log.exception("auto-analyzer failed to start; API still serving")
+
     try:
         yield
     finally:
-        if worker is not None:
-            with contextlib.suppress(Exception):
-                worker.stop()
+        for svc in (worker, analyzer):
+            if svc is not None:
+                with contextlib.suppress(Exception):
+                    svc.stop()
 
 
 def create_app() -> FastAPI:
