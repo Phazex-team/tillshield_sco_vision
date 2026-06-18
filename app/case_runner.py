@@ -131,18 +131,56 @@ def analyze_case(session: Session,
     # ``window``/``case`` usable after each commit.
     session.commit()
 
-    # ----- 1b. NVR on-demand retrieval (preferred-but-NONBLOCKING) ----
-    # Try to pull the historical window from the NVR for this tx. This
-    # only annotates metadata + (if export is enabled and succeeds)
-    # provides the exact clip; otherwise the local recorder/segment path
-    # below is used. Never raises.
-    _t = time.perf_counter()
-    try:
-        nvr_clip = _try_nvr_window(case, pos.pos_event_at, window,
-                                    storage_root, cfg=cfg)
-    finally:
-        timings["nvr_acquisition_ms"] = _ms_since(_t)
+    out_path = (storage_root / "cases" / f"case_id={case.id}" / "window"
+                / f"window_{window.id}.mp4")
 
+    # ----- 2. Acquire the window MP4: LOCAL segments first, NVR fallback.
+    # Local recorded segments are extracted with ffmpeg from files already
+    # on disk (near-instant). The NVR path streams playback-by-time at
+    # ~real-time and is slow, so it is used ONLY when local coverage is
+    # missing — e.g. the event is older than the local retention window,
+    # the recorder was not capturing this camera at that time, or the
+    # local files were purged. No DB write is held across these slow
+    # phases (we committed the PENDING window above), so other writers
+    # (the POS poller, a second reprocess) are never blocked.
+    build = None
+    local_fail_reason = None
+
+    # 2a. Local recorded segments (fast).
+    _t = time.perf_counter()
+    if plan.is_valid:
+        segments = (session.query(VideoSegment)
+                    .filter(VideoSegment.id.in_(plan.matched_segment_ids))
+                    .order_by(VideoSegment.start_at.asc()).all())
+        local_build = build_window(
+            segments=segments,
+            requested_start=plan.requested_start,
+            requested_end=plan.requested_end,
+            out_path=out_path,
+        )
+        if local_build.ok:
+            build = local_build
+            window.acquisition_source = "local_segments_used"
+        else:
+            local_fail_reason = local_build.failure_reason
+            log.warning("local window build failed (%s); falling back to NVR",
+                        local_build.failure_reason)
+    timings["window_build_ms"] = _ms_since(_t)
+
+    # 2b. NVR on-demand retrieval (slow) — only when local did not produce
+    # a clip. Never raises; annotates window.nvr_metadata either way.
+    if build is None:
+        _t = time.perf_counter()
+        try:
+            nvr_clip = _try_nvr_window(case, pos.pos_event_at, window,
+                                        storage_root, cfg=cfg)
+        finally:
+            timings["nvr_acquisition_ms"] = _ms_since(_t)
+        if nvr_clip:
+            build = _adopt_clip(nvr_clip, plan)
+            window.acquisition_source = "nvr_clip_retrieved"
+
+    # Audit the resolution AFTER the attempt so the source is accurate.
     audit.record(session, action="case.window_resolved",
                  entity_type="case", entity_id=case.id,
                  actor_type="analyzer",
@@ -152,53 +190,16 @@ def analyze_case(session: Session,
                         "invalid_reason": plan.invalid_reason,
                         "acquisition_source": window.acquisition_source,
                         "nvr": window.nvr_metadata})
-    session.commit()  # release lock before window build (ffmpeg)
 
-    out_path = (storage_root / "cases" / f"case_id={case.id}" / "window"
-                / f"window_{window.id}.mp4")
-
-    # ----- 2. Acquire the window MP4: NVR clip first, else local ------
-    _t = time.perf_counter()
-    if nvr_clip:
-        try:
-            build = _adopt_clip(nvr_clip, plan)
-        finally:
-            timings["window_build_ms"] = _ms_since(_t)
-        window.acquisition_source = "nvr_clip_retrieved"
-    else:
-        # Fall back to the existing local recorded-segment path.
-        if not plan.is_valid:
-            window.status = "FAILED"
-            window.failure_reason = plan.invalid_reason
-            # Leave the NVR state (e.g. nvr_recording_found_no_export) so
-            # operators can see footage exists on the NVR even when local
-            # segments are missing; only default it when NVR was off.
-            if not window.acquisition_source:
-                window.acquisition_source = "local_no_segments"
-            timings["window_build_ms"] = _ms_since(_t)
-            return _close_invalid(session, case, plan.invalid_reason)
-        segments = (session.query(VideoSegment)
-                    .filter(VideoSegment.id.in_(plan.matched_segment_ids))
-                    .order_by(VideoSegment.start_at.asc()).all())
-        try:
-            build = build_window(
-                segments=segments,
-                requested_start=plan.requested_start,
-                requested_end=plan.requested_end,
-                out_path=out_path,
-            )
-        finally:
-            timings["window_build_ms"] = _ms_since(_t)
-        if not build.ok:
-            window.status = "FAILED"
-            window.failure_reason = build.failure_reason
-            audit.record(session, action="case.window_build_failed",
-                         entity_type="case", entity_id=case.id,
-                         actor_type="analyzer",
-                         after={"window_id": window.id,
-                                "failure_reason": build.failure_reason})
-            return _close_invalid(session, case, build.failure_reason)
-        window.acquisition_source = "local_segments_used"
+    if build is None:
+        # Neither local segments nor an NVR clip yielded a usable window.
+        window.status = "FAILED"
+        reason = (plan.invalid_reason or local_fail_reason
+                  or "no local segments and no NVR clip")
+        window.failure_reason = reason
+        if not window.acquisition_source:
+            window.acquisition_source = "local_no_segments"
+        return _close_invalid(session, case, reason)
 
     window.path = build.out_path
     window.sha256 = build.sha256
