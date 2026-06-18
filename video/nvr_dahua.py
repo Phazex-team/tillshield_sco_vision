@@ -308,9 +308,15 @@ def export_clip(cfg: NvrConfig,
         except Exception:
             ffmpeg = "ffmpeg"
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # Transcode to H.264 (yuv420p) rather than stream-copy: the Dahua
+    # cameras stream HEVC/H.265, which browsers do NOT reliably play in an
+    # HTML5 <video> (the reviewer saw a black player). libx264 + yuv420p +
+    # faststart is the broadly-compatible combination. Audio is dropped
+    # (CCTV has none and it avoids container/codec edge cases).
     cmd = [ffmpeg, "-y", "-rtsp_transport", "tcp",
            "-i", url, "-t", str(duration + 5),
-           "-c", "copy", "-movflags", "+faststart", out_path]
+           "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+           "-an", "-movflags", "+faststart", out_path]
     # Dahua playback can stream BELOW real-time, so allow up to ~3x the
     # window length, hard-capped at 15 min wall so a case never hangs.
     timeout = min(max(duration * 3, duration + 120), 900)

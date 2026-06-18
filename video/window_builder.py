@@ -119,12 +119,19 @@ def build_window(*,
     trimmed_used = False
     last_stderr = ""
     try:
+        # Transcode to H.264 (yuv420p) rather than stream-copy: recorder
+        # segments are mp4v (MPEG-4 part 2), which browsers do not reliably
+        # play in an HTML5 <video>. libx264 + yuv420p + faststart is the
+        # broadly-compatible combination for the reviewer page. cv2 (used
+        # by perception + keyframe extraction) reads H.264 fine.
+        _enc = ["-c:v", "libx264", "-preset", "veryfast",
+                "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart"]
         if will_trim:
-            # Trim + stream-copy in a single pass.
+            # Trim + re-encode in a single pass.
             cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
                    "-i", list_path,
                    "-ss", f"{trim_lo:.3f}", "-to", f"{trim_hi:.3f}",
-                   "-c", "copy", str(out_path)]
+                   *_enc, str(out_path)]
             rc, stderr = _run(cmd)
             if rc == 0:
                 trimmed_used = True
@@ -133,7 +140,7 @@ def build_window(*,
         if not trimmed_used:
             # Concat-only fallback (may include pre/post-roll).
             cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                   "-i", list_path, "-c", "copy", str(out_path)]
+                   "-i", list_path, *_enc, str(out_path)]
             rc, stderr = _run(cmd)
             if rc != 0:
                 return WindowBuildResult(
