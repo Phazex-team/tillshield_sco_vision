@@ -22,6 +22,18 @@ from fastapi.staticfiles import StaticFiles
 log = logging.getLogger(__name__)
 
 
+class _NoCacheStaticFiles(StaticFiles):
+    """Serve static files with ``Cache-Control: no-cache`` so the browser
+    always revalidates (cheap 304 via ETag when unchanged) instead of
+    serving a stale review.html/JS after a deploy. Fixes the recurring
+    'I don't see my changes without a hard reload' trap."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Start/stop the TillShield POS-agent poller alongside the app.
@@ -115,8 +127,8 @@ def create_app() -> FastAPI:
     # Legacy dashboard static files (review-safe; see static/index.html).
     static_dir = Path(__file__).resolve().parents[1] / "static"
     if static_dir.is_dir():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True),
-                  name="static")
+        app.mount("/", _NoCacheStaticFiles(directory=str(static_dir),
+                                           html=True), name="static")
 
     return app
 
