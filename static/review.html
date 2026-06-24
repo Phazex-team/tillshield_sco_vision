@@ -501,16 +501,26 @@
       <div id="roi-snapshot-meta" style="font-size:12px;color:var(--muted);margin-bottom:8px">
         no frame loaded yet
       </div>
-      <div id="roi-canvas-wrap" style="position:relative;display:none;margin-bottom:12px">
+      <div id="roi-canvas-wrap" style="position:relative;display:none;margin-bottom:8px">
         <canvas id="roi-canvas" style="max-width:100%;border:1px solid var(--border);border-radius:5px;background:#000;cursor:crosshair"></canvas>
       </div>
+      <div id="roi-draw-tools" style="display:none;margin-bottom:10px;align-items:center;gap:10px" class="row">
+        <label class="field" style="margin:0">
+          <input type="checkbox" id="roi-poly-mode"/> polygon mode
+          (click to add points)
+        </label>
+        <button id="roi-poly-finish" style="font-size:12px">Finish polygon</button>
+        <button id="roi-poly-clear" style="font-size:12px">Clear points</button>
+      </div>
       <p id="roi-canvas-hint" style="font-size:11px;color:var(--muted);margin:0 0 12px 0" hidden>
-        Select a row in the Zones table, then click and drag on the
-        loaded frame to set that ROI's <code>(x, y, w, h)</code>.
-        Coordinates are recorded against the snapshot's reported
-        <em>source</em> dimensions, NOT the displayed pixels — the
-        runtime rescales onto the actual recorded frame size at case
-        time. Numeric editing below is always available.
+        Select a row in the Zones table, then draw on the loaded frame.
+        <strong>Rectangle</strong> (default): click-drag a box.
+        <strong>Polygon mode</strong> (used by Falcon/SAM2/OCR detection
+        filtering): click to drop points around the area, then
+        <em>Finish polygon</em> (needs ≥ 3 points). Coordinates are
+        recorded against the snapshot's <em>source</em> dimensions; the
+        runtime rescales onto the actual frame at case time. Numeric
+        editing below is always available.
       </p>
 
       <h3 style="font-size:13px;margin:0 0 8px 0">Zones (canonical ROI registry)</h3>
@@ -2055,8 +2065,32 @@ function _redrawRoiCanvas() {
     ctx.lineWidth = selected ? 3 : 2;
     ctx.strokeStyle = selected ? "#5b8def" : "#3ddc84";
     ctx.fillStyle = "rgba(91,141,239,0.10)";
-    ctx.strokeRect(x, y, w, h);
-    if (selected) ctx.fillRect(x, y, w, h);
+    const poly = Array.isArray(z.points) && z.points.length >= 2
+      ? z.points : null;
+    if (poly) {
+      // Scale polygon points onto the snapshot grid (same factor as box).
+      let fx = 1, fy = 1;
+      if (z.source_width > 0 && z.source_height > 0
+          && (z.source_width !== sw || z.source_height !== sh)) {
+        fx = sw / z.source_width; fy = sh / z.source_height;
+      }
+      ctx.beginPath();
+      poly.forEach((p, i) => {
+        const px = Math.round(p[0] * fx), py = Math.round(p[1] * fy);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      if (z.points.length >= 3) ctx.closePath();
+      ctx.stroke();
+      if (selected && z.points.length >= 3) ctx.fill();
+      // Vertex handles.
+      ctx.fillStyle = selected ? "#5b8def" : "#3ddc84";
+      for (const p of poly) {
+        ctx.fillRect(Math.round(p[0]*fx) - 3, Math.round(p[1]*fy) - 3, 6, 6);
+      }
+    } else {
+      ctx.strokeRect(x, y, w, h);
+      if (selected) ctx.fillRect(x, y, w, h);
+    }
     ctx.fillStyle = selected ? "#5b8def" : "#3ddc84";
     ctx.font = "12px ui-monospace, monospace";
     ctx.fillText(`${zid}`, x + 4, Math.max(12, y + 14));
@@ -2090,6 +2124,8 @@ function _drawRoiSnapshot(snapshot) {
     canvas._roiBaseImage = img;
     wrap.style.display = "block";
     if (hint) hint.hidden = false;
+    const tools = document.getElementById("roi-draw-tools");
+    if (tools) tools.style.display = "flex";
     _redrawRoiCanvas();
   };
   img.onerror = () => {
@@ -2147,8 +2183,9 @@ function _bindRoiCanvasDrag() {
   };
   canvas.addEventListener("pointerdown", (ev) => {
     if (!_roiSnapshot || !_roiSelectedId) return;
-    canvas.setPointerCapture(ev.pointerId);
     const [x, y] = ptToCanvas(ev);
+    if (_roiPolyMode) { _addPolyPoint(x, y); return; }
+    canvas.setPointerCapture(ev.pointerId);
     _roiCanvasDrag = {startX: x, startY: y, currentX: x, currentY: y};
     _redrawRoiCanvas();
   });
@@ -2203,6 +2240,64 @@ function _bindRoiRowSelection() {
   });
 }
 
+// ---- Polygon drawing (Falcon/SAM2/OCR detection filtering) ----
+let _roiPolyMode = false;
+function _updatePolyBBox(zone) {
+  const pts = zone.points || [];
+  if (!pts.length) return;
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  zone.x = Math.min(...xs); zone.y = Math.min(...ys);
+  zone.w = Math.max(...xs) - zone.x; zone.h = Math.max(...ys) - zone.y;
+}
+function _addPolyPoint(x, y) {
+  const zone = _roiState.zones[_roiSelectedId] ||
+    (_roiState.zones[_roiSelectedId] = {});
+  if (!Array.isArray(zone.points)) zone.points = [];
+  zone.points.push([x, y]);
+  zone.source_width = _roiSnapshot.width;
+  zone.source_height = _roiSnapshot.height;
+  _updatePolyBBox(zone);
+  renderRoiZones();
+  _redrawRoiCanvas();
+  const ss = document.getElementById("roi-save-status");
+  ss.className = "save-status";
+  ss.textContent = `${_roiSelectedId}: ${zone.points.length} point(s) — ` +
+    (zone.points.length >= 3 ? "Finish polygon, then Save." :
+     "add at least 3 points.");
+}
+document.getElementById("roi-poly-mode").onchange = (ev) => {
+  _roiPolyMode = ev.target.checked;
+  const c = document.getElementById("roi-canvas");
+  if (c) c.style.cursor = _roiPolyMode ? "copy" : "crosshair";
+};
+document.getElementById("roi-poly-finish").onclick = () => {
+  const ss = document.getElementById("roi-save-status");
+  const zone = _roiState && _roiState.zones[_roiSelectedId];
+  if (!zone || !Array.isArray(zone.points) || zone.points.length < 3) {
+    ss.className = "save-status err";
+    ss.textContent = "polygon needs at least 3 points.";
+    return;
+  }
+  _roiPolyMode = false;
+  document.getElementById("roi-poly-mode").checked = false;
+  _updatePolyBBox(zone);
+  renderRoiZones();
+  _redrawRoiCanvas();
+  ss.className = "save-status";
+  ss.textContent = `${_roiSelectedId}: polygon with ${zone.points.length} ` +
+    "points set — Save to persist.";
+};
+document.getElementById("roi-poly-clear").onclick = () => {
+  const zone = _roiState && _roiState.zones[_roiSelectedId];
+  if (!zone) return;
+  delete zone.points;
+  renderRoiZones();
+  _redrawRoiCanvas();
+  const ss = document.getElementById("roi-save-status");
+  ss.className = "save-status";
+  ss.textContent = `${_roiSelectedId}: points cleared (rectangle mode).`;
+};
+
 document.getElementById("roi-load-frame").onclick = loadRoiSnapshot;
 
 document.getElementById("roi-save").onclick = async () => {
@@ -2221,6 +2316,11 @@ document.getElementById("roi-save").onclick = async () => {
     if (Number(z.source_width) > 0 && Number(z.source_height) > 0) {
       entry.source_width = Number(z.source_width);
       entry.source_height = Number(z.source_height);
+    }
+    // Optional polygon (>= 3 points). The backend recomputes x/y/w/h as
+    // its bounding box, so detection filtering uses point-in-polygon.
+    if (Array.isArray(z.points) && z.points.length >= 3) {
+      entry.points = z.points.map(p => [Number(p[0]) || 0, Number(p[1]) || 0]);
     }
     zones[zid] = entry;
   }

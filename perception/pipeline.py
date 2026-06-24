@@ -383,10 +383,14 @@ def _load_zones(cfg, camera_id: str) -> list[Zone]:
                     src_h = int(sh)
                     if src_w <= 0 or src_h <= 0:
                         src_w = src_h = None
+                pts = z.get("points")
+                poly = (pts if isinstance(pts, list) and len(pts) >= 3
+                        else None)
                 zones.append(Zone(name=name, x=int(z["x"]), y=int(z["y"]),
                                   w=int(z["w"]), h=int(z["h"]),
                                   source_width=src_w,
-                                  source_height=src_h))
+                                  source_height=src_h,
+                                  points=poly))
             except (KeyError, TypeError, ValueError):
                 continue
     return zones
@@ -414,15 +418,19 @@ def _scale_temporal_zones(zones: list[Zone],
         if z.source_width is not None and z.source_height is not None:
             body["source_width"] = z.source_width
             body["source_height"] = z.source_height
+        if isinstance(z.points, list) and len(z.points) >= 3:
+            body["points"] = z.points
         scaled = scale_zone_to_frame(body, frame_w, frame_h)
         if scaled is None:
             continue
+        sp = scaled.get("points")
         out.append(Zone(
             name=z.name,
             x=int(scaled["x"]), y=int(scaled["y"]),
             w=int(scaled["w"]), h=int(scaled["h"]),
             source_width=int(scaled.get("source_width") or frame_w),
             source_height=int(scaled.get("source_height") or frame_h),
+            points=(sp if isinstance(sp, list) and len(sp) >= 3 else None),
         ))
     if zones and not out:
         limitations.append("track_zones_collapsed_after_scale")

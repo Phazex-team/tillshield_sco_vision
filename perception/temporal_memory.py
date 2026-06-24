@@ -22,10 +22,16 @@ class Zone:
     h: int
     source_width: Optional[int] = None
     source_height: Optional[int] = None
+    # Optional polygon vertices ([[x, y], ...], source-frame px). When
+    # set, ``contains`` uses point-in-polygon; otherwise the rectangle.
+    points: Optional[list] = None
 
     def contains(self, bbox_xyxy: list[float]) -> bool:
         cx = 0.5 * (bbox_xyxy[0] + bbox_xyxy[2])
         cy = 0.5 * (bbox_xyxy[1] + bbox_xyxy[3])
+        if isinstance(self.points, list) and len(self.points) >= 3:
+            from app.camera_rois import point_in_polygon
+            return point_in_polygon(cx, cy, self.points)
         return (self.x <= cx <= self.x + self.w
                 and self.y <= cy <= self.y + self.h)
 

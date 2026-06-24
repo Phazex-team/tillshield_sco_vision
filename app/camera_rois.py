@@ -121,6 +121,20 @@ def describe_camera_rois(cam: dict) -> dict:
                 continue
             if iv > 0:
                 entry[key] = iv
+        # Optional polygon. When present the runtime filters detections by
+        # point-in-polygon instead of the {x,y,w,h} rectangle (which is
+        # kept as the polygon's bounding box for the rectangular crop).
+        pts = z.get("points")
+        if isinstance(pts, list) and len(pts) >= 3:
+            clean = []
+            for pt in pts:
+                try:
+                    clean.append([int(pt[0]), int(pt[1])])
+                except (TypeError, ValueError, IndexError):
+                    clean = []
+                    break
+            if len(clean) >= 3:
+                entry["points"] = clean
         zones[str(zid)] = entry
     return {
         "camera_id": cid,
@@ -224,22 +238,50 @@ def apply_margin(bbox: tuple[int, int, int, int],
             min(image_h, y2 + my))
 
 
+def point_in_polygon(px: float, py: float, points: list) -> bool:
+    """Ray-casting point-in-polygon test. ``points`` is a list of
+    ``[x, y]`` vertices (>= 3). Points on an edge count as inside."""
+    n = len(points or [])
+    if n < 3:
+        return False
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = float(points[i][0]), float(points[i][1])
+        xj, yj = float(points[j][0]), float(points[j][1])
+        if ((yi > py) != (yj > py)) and \
+           (px < (xj - xi) * (py - yi) / ((yj - yi) or 1e-9) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _zone_contains_centre(z: dict, cx: float, cy: float) -> bool:
+    """Centre-in-zone test. Uses point-in-polygon when the zone carries a
+    ``points`` polygon; otherwise the legacy rectangle (x, y, w, h)."""
+    pts = z.get("points")
+    if isinstance(pts, list) and len(pts) >= 3:
+        return point_in_polygon(cx, cy, pts)
+    try:
+        zx, zy = int(z["x"]), int(z["y"])
+        zw, zh = int(z["w"]), int(z["h"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return zx <= cx <= zx + zw and zy <= cy <= zy + zh
+
+
 def detection_inside_rois(bbox_xyxy: list[float],
                           zones: list[dict]) -> bool:
     """True iff the detection's centre falls inside any of ``zones``.
     Centre semantics mirror ``perception.temporal_memory.Zone.contains``
     so the ROI filter agrees with the existing decision-policy zone
-    geometry."""
+    geometry. Polygon zones (``points``) are supported; rectangle zones
+    fall back to the {x, y, w, h} box."""
     if not zones or not bbox_xyxy or len(bbox_xyxy) < 4:
         return False
     cx = 0.5 * (float(bbox_xyxy[0]) + float(bbox_xyxy[2]))
     cy = 0.5 * (float(bbox_xyxy[1]) + float(bbox_xyxy[3]))
-    for z in zones:
-        zx, zy = int(z["x"]), int(z["y"])
-        zw, zh = int(z["w"]), int(z["h"])
-        if zx <= cx <= zx + zw and zy <= cy <= zy + zh:
-            return True
-    return False
+    return any(_zone_contains_centre(z, cx, cy) for z in zones)
 
 
 def scale_zone_to_frame(zone: dict,
@@ -265,6 +307,9 @@ def scale_zone_to_frame(zone: dict,
         w = int(zone["w"]); h = int(zone["h"])
     except (KeyError, TypeError, ValueError):
         return None
+    pts = zone.get("points")
+    scaled_pts = (list(pts) if isinstance(pts, list) and len(pts) >= 3
+                  else None)
     sw = zone.get("source_width")
     sh = zone.get("source_height")
     if sw and sh:
@@ -279,6 +324,9 @@ def scale_zone_to_frame(zone: dict,
             y = int(round(y * sy))
             w = int(round(w * sx))
             h = int(round(h * sy))
+            if scaled_pts is not None:
+                scaled_pts = [[int(round(p[0] * sx)), int(round(p[1] * sy))]
+                              for p in scaled_pts]
     # Clamp to frame bounds + collapse to non-negative origin.
     x = max(0, min(int(frame_w), x))
     y = max(0, min(int(frame_h), y))
@@ -293,6 +341,8 @@ def scale_zone_to_frame(zone: dict,
     out["y"] = y
     out["w"] = w
     out["h"] = h
+    if scaled_pts is not None:
+        out["points"] = scaled_pts
     # Stamp the actual frame dimensions so downstream code can carry
     # them forward without re-deriving from a different snapshot.
     out["source_width"] = int(frame_w)
@@ -376,6 +426,33 @@ def _validate_zone(zid: str, z: dict) -> dict:
             raise RoiValidationError(
                 f"roi {zid!r}.{key} must be > 0 (got {iv})")
         out[key] = iv
+    # Optional polygon. When supplied it must be >= 3 [x, y] integer
+    # vertices; the {x,y,w,h} box is recomputed as its bounding rect so
+    # the rectangular Falcon crop + the stored box stay consistent.
+    pts = z.get("points")
+    if pts is not None:
+        if not isinstance(pts, list) or len(pts) < 3:
+            raise RoiValidationError(
+                f"roi {zid!r}.points must be a list of >= 3 [x, y] points")
+        clean: list = []
+        for p in pts:
+            try:
+                px, py = int(p[0]), int(p[1])
+            except (TypeError, ValueError, IndexError):
+                raise RoiValidationError(
+                    f"roi {zid!r}.points entries must be [x, y] integers")
+            if px < 0 or py < 0:
+                raise RoiValidationError(
+                    f"roi {zid!r}.points coordinates must be >= 0")
+            clean.append([px, py])
+        out["points"] = clean
+        xs = [p[0] for p in clean]
+        ys = [p[1] for p in clean]
+        out["x"], out["y"] = min(xs), min(ys)
+        out["w"], out["h"] = max(xs) - min(xs), max(ys) - min(ys)
+        if out["w"] <= 0 or out["h"] <= 0:
+            raise RoiValidationError(
+                f"roi {zid!r}.points must enclose a non-zero area")
     return out
 
 
