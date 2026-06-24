@@ -52,7 +52,11 @@ class GemmaVideoReasoner:
                  model_name: str,
                  max_tokens: int = 768,
                  temperature: float = 0.1,
-                 max_video_frames: int = 60,
+                 # Safety ceiling on frames sent to the model. Raised from
+                 # 60 so the ~1 fps manifest budget (≈150 for a 2.5-min
+                 # window) is not silently clipped. The real budget is set
+                 # by case_runner's manifest_max_frames.
+                 max_video_frames: int = 300,
                  video_fps: int = 1,
                  vllm_url: str = "",
                  request_timeout_sec: float = 120.0,

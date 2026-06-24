@@ -49,7 +49,7 @@ def analyze_case(session: Session,
                  perception_runner: Optional[Callable] = None,
                  vlm_runner: Optional[Callable] = None,
                  prompt_version: str = "return_review_v1",
-                 manifest_max_frames: int = 24,
+                 manifest_max_frames: Optional[int] = None,
                  cfg=None) -> dict:
     """Run the full analysis for ``case_id`` and persist results.
 
@@ -254,6 +254,18 @@ def analyze_case(session: Session,
 
     # ----- 4. Build the evidence manifest with REAL frames -----------
     window_start_naive = build.actual_start_at or plan.requested_start
+    # VLM frame budget: ~1 fps across the built window (the window is
+    # tightly centered on the transaction, so 1 fps is dense). Bounded to
+    # [24, 240] for safety. An explicit ``manifest_max_frames`` (e.g. from
+    # tests) overrides this auto behaviour.
+    if manifest_max_frames is None:
+        if build.actual_start_at and build.actual_end_at:
+            _win_secs = (build.actual_end_at
+                         - build.actual_start_at).total_seconds()
+        else:
+            _win_secs = (plan.requested_end
+                         - plan.requested_start).total_seconds()
+        manifest_max_frames = max(24, min(240, int(round(_win_secs or 0))))
     _t = time.perf_counter()
     try:
         sampled_frames = _extract_keyframe_data_urls(

@@ -19,7 +19,10 @@ from typing import Iterable
 
 @dataclass
 class SamplingPolicy:
-    base_fps: float = 1.0
+    # base_fps=5 matches the recorder's 5 fps, so Falcon processes EVERY
+    # recorded frame across the whole window (no quiet-region gaps), not
+    # just 1 fps. Bursts stay at/above this around motion/handover.
+    base_fps: float = 5.0
     burst_fps: float = 5.0
     handover_fps: float = 10.0
     burst_pre_sec: float = 3.0
