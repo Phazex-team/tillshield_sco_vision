@@ -165,12 +165,28 @@ def get_case(case_id: str) -> dict:
         if case is None:
             raise HTTPException(status_code=404, detail="case not found")
         pos = s.get(PosEvent, case.pos_event_id) if case.pos_event_id else None
-        # The most recent SUCCEEDED window is the one a reviewer should
-        # be able to scrub. If none succeeded, we still return the row
-        # so the UI can show the failure_reason inline.
-        latest = (s.query(VideoWindow)
-                  .filter(VideoWindow.case_id == case.id)
-                  .order_by(VideoWindow.id.desc()).first())
+        # Show the window the MOST RECENT analysis actually used. Window
+        # ids are UUIDs (not time-orderable), so a reprocessed case has
+        # several windows and id.desc() returned a random/stale one. The
+        # latest VlmRun records its window_id in input_manifest — that's
+        # the clip behind the current verdict.
+        from db.models import VlmRun
+        latest = None
+        run = (s.query(VlmRun)
+               .filter(VlmRun.case_id == case.id)
+               .order_by(VlmRun.started_at.desc()).first())
+        if run and isinstance(run.input_manifest, dict):
+            wid = run.input_manifest.get("window_id")
+            if wid:
+                latest = s.get(VideoWindow, wid)
+        if latest is None:
+            # No analysis yet (or no window_id) — any window for the case,
+            # preferring a SUCCEEDED one, so the UI can still show status.
+            latest = (s.query(VideoWindow)
+                      .filter(VideoWindow.case_id == case.id,
+                              VideoWindow.status == "SUCCEEDED").first()
+                      or s.query(VideoWindow)
+                      .filter(VideoWindow.case_id == case.id).first())
         return _serialise_case(case, pos, latest)
 
 
