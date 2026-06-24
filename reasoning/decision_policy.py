@@ -42,6 +42,11 @@ class EvidenceSummary:
     camera_gap: bool = False
     vlm_confidence: str = "low"          # high / medium / low
     vlm_outcome_hint: str = ""           # advisory only
+    # The VLM's affirmative handover judgement. Required (in addition to a
+    # physical item track reaching the counter) to reach VERIFIED, so that
+    # counter clutter Falcon labels "item" cannot clear a refund where no
+    # actual handover happened (e.g. a staff-only refund).
+    vlm_handover: bool = False
     contradictions: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -84,11 +89,21 @@ def decide(summary: EvidenceSummary) -> PolicyDecision:
         return PolicyDecision(OUTCOME_HIGH_RISK_REVIEW, 0.85, reasons)
 
     if summary.physical_item_track and summary.item_reaches_counter \
+            and summary.vlm_handover \
             and not summary.obstructed and not summary.camera_gap \
             and not low_confidence:
-        reasons.append("item track appears from customer side and reaches "
-                       "counter/staff with sufficient VLM confidence")
+        reasons.append("item track reaches counter/staff AND the VLM "
+                       "confirms a handover, with sufficient confidence")
         return PolicyDecision(OUTCOME_VERIFIED, 0.1, reasons)
+
+    # A physical item track reached the counter but the VLM did NOT confirm
+    # an actual handover — this is the staff-only-refund / counter-clutter
+    # case. Do not clear it; route to human review.
+    if summary.physical_item_track and summary.item_reaches_counter \
+            and not summary.vlm_handover:
+        reasons.append("item track present but VLM reports no handover "
+                       "(possible no-return refund); routing to review")
+        return PolicyDecision(OUTCOME_REVIEW, 0.5, reasons)
 
     if summary.obstructed or summary.camera_gap:
         reasons.append("scene obstructed or camera gap; cannot resolve")
@@ -216,6 +231,8 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
     notes = [str(s)[:240] for s in limitations] if isinstance(limitations,
                                                               list) else []
 
+    vlm_handover = bool(parsed.get("handover_occurred", False))
+
     return EvidenceSummary(
         footage_valid=footage_valid,
         physical_item_track=physical_item_track,
@@ -228,6 +245,7 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
             "VERIFIED" if (physical_item_track and receipt_visible)
             else "REVIEW"
         ),
+        vlm_handover=vlm_handover,
         contradictions=contradictions,
         notes=notes,
     )

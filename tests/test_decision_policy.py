@@ -49,11 +49,13 @@ def test_invalid_video_short_circuits():
 
 
 def test_verified_requires_high_or_medium_confidence_and_clean_track():
-    # All ingredients present, high confidence -> VERIFIED.
+    # All ingredients present (incl. VLM-confirmed handover), high
+    # confidence -> VERIFIED.
     d = decide(EvidenceSummary(
         footage_valid=True,
         physical_item_track=True,
         item_reaches_counter=True,
+        vlm_handover=True,
         vlm_confidence="high",
     ))
     assert d.outcome == OUTCOME_VERIFIED
@@ -63,9 +65,23 @@ def test_verified_requires_high_or_medium_confidence_and_clean_track():
         footage_valid=True,
         physical_item_track=True,
         item_reaches_counter=True,
+        vlm_handover=True,
         vlm_confidence="low",
     ))
     assert d2.outcome == OUTCOME_REVIEW
+
+
+def test_item_track_without_vlm_handover_stays_review():
+    # Counter clutter / staff-only refund: an item track reaches the
+    # counter but the VLM reports NO handover -> must NOT be VERIFIED.
+    d = decide(EvidenceSummary(
+        footage_valid=True,
+        physical_item_track=True,
+        item_reaches_counter=True,
+        vlm_handover=False,
+        vlm_confidence="high",
+    ))
+    assert d.outcome == OUTCOME_REVIEW
 
 
 def test_receipt_only_clean_window_is_high_risk_review():
