@@ -1021,6 +1021,14 @@ function drawOverlay() {
   const { video, canvas, toggle } = _videoEls();
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
+  // Keep the canvas backing store matched to the video's displayed size.
+  // When the video loads from cache, onloadedmetadata may not fire, so the
+  // canvas can be left mis-sized and boxes draw outside the visible area.
+  // Re-sync here (cheap) whenever the displayed size has changed.
+  if (video.clientWidth && (canvas.width !== video.clientWidth ||
+                            canvas.height !== video.clientHeight)) {
+    sizeOverlay();
+  }
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!toggle.checked || video.hidden || !video.videoWidth) return;
   const sx = (video.clientWidth || video.videoWidth) / video.videoWidth;
