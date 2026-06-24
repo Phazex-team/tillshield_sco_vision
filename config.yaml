@@ -65,7 +65,7 @@ cameras:
     playback_channel: 15
     subtype: 0
     timezone: Asia/Dubai
-    pre_roll_sec: 120
+    pre_roll_sec: 90
     post_roll_sec: 60
     max_window_sec: 900
     prefer_on_demand_for_pos: true
