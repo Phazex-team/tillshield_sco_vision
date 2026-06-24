@@ -269,17 +269,26 @@ class SegmentRecorder:
             max_workers=1, thread_name_prefix=f"seg-final-{self.cfg.camera_id}")
         fourcc = cv2.VideoWriter_fourcc(*self.cfg.codec)
         target = self.cfg.segment_duration_sec
+        # Write at most ``cfg.fps`` frames per REAL second so the segment
+        # plays back in real time. The RTSP stream delivers far more frames
+        # than cfg.fps; writing every one at cfg.fps produced ~5x slow
+        # motion, which broke the window<->POS-time alignment (the analysed
+        # clip didn't actually cover the transaction). ``interval`` is the
+        # minimum real gap between written frames.
+        interval = 1.0 / float(self.cfg.fps or 5)
 
         writer = None
         out_path: Optional[Path] = None
         seg_start: Optional[datetime] = None
         last_ts: Optional[datetime] = None
+        last_write_ts: Optional[datetime] = None
         frame_count = 0
         low_disk_logged = False
 
         def _close_and_index() -> None:
             """Close the current writer and finalize it off-thread."""
-            nonlocal writer, out_path, seg_start, last_ts, frame_count
+            nonlocal writer, out_path, seg_start, last_ts, last_write_ts
+            nonlocal frame_count
             if writer is None:
                 return
             writer.release()
@@ -290,6 +299,7 @@ class SegmentRecorder:
             out_path = None
             seg_start = None
             last_ts = None
+            last_write_ts = None
             frame_count = 0
 
         try:
@@ -328,9 +338,16 @@ class SegmentRecorder:
                         continue
                     frame_count = 0
 
-                writer.write(frame)
-                frame_count += 1
-                last_ts = now
+                # Throttle to cfg.fps in real time. The first frame of a
+                # segment is always written; subsequent frames only when at
+                # least ``interval`` real seconds have passed. Skipped
+                # frames still count toward segment-rotation timing below.
+                if last_write_ts is None or \
+                        (now - last_write_ts).total_seconds() >= interval * 0.9:
+                    writer.write(frame)
+                    frame_count += 1
+                    last_write_ts = now
+                    last_ts = now
                 if (now - seg_start).total_seconds() >= target:
                     _close_and_index()  # starts next segment on next frame
                 if self._stop_event.is_set():
