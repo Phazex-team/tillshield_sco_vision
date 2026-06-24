@@ -321,6 +321,7 @@
       </div>
       <div class="row" style="margin-top:12px;justify-content:flex-end">
         <button id="reprocess-btn" class="danger">Request reprocess</button>
+        <button id="retime-btn" title="Re-time slow-motion segments to real time, then reprocess (for clips recorded before the recorder fix)">Retime + reprocess</button>
         <button id="submit-action" class="primary" disabled>
           Submit reviewer decision</button>
       </div>
@@ -1311,39 +1312,42 @@ document.getElementById("submit-action").onclick = async () => {
   }
 };
 
-document.getElementById("reprocess-btn").onclick = async () => {
+// Shared trigger for the (background) reprocess + retime-reprocess buttons.
+async function triggerReprocess(path, btn, busyLabel) {
   if (!currentCase) return;
   const caseId = currentCase;
-  const btn = document.getElementById("reprocess-btn");
-  const r = await fetch(`${API}/cases/${caseId}/reprocess`,
-                        { method: "POST" });
+  const r = await fetch(`${API}/cases/${caseId}/${path}`, { method: "POST" });
   if (!r.ok) {
-    alert(`reprocess failed: ${r.status} ${await r.text()}`);
+    alert(`${path} failed: ${r.status} ${await r.text()}`);
     return;
   }
-  // Reprocess is now a background job (202). Reflect REPROCESSING
-  // immediately, then poll for the terminal status without blocking.
   refreshCases();
   if (currentCase === caseId) openCase(caseId);
-  btn.disabled = true;
+  const reBtn = document.getElementById("reprocess-btn");
+  const rtBtn = document.getElementById("retime-btn");
   const origLabel = btn.textContent;
-  btn.textContent = "Reprocessing…";
+  reBtn.disabled = true; rtBtn.disabled = true;
+  btn.textContent = busyLabel;
   const started = Date.now();
   const poll = setInterval(async () => {
     try {
-      const cr = await fetch(`${API}/cases/${caseId}`);
-      const c = await cr.json();
-      const done = c.status !== "REPROCESSING";
-      if (done || Date.now() - started > 600000) {  // 10 min safety cap
+      const c = await (await fetch(`${API}/cases/${caseId}`)).json();
+      if (c.status !== "REPROCESSING" || Date.now() - started > 900000) {
         clearInterval(poll);
-        btn.disabled = false;
+        reBtn.disabled = false; rtBtn.disabled = false;
         btn.textContent = origLabel;
         refreshCases();
         if (currentCase === caseId) openCase(caseId);
       }
     } catch (_) { /* keep polling */ }
   }, 4000);
-};
+}
+document.getElementById("reprocess-btn").onclick = () =>
+  triggerReprocess("reprocess", document.getElementById("reprocess-btn"),
+                   "Reprocessing…");
+document.getElementById("retime-btn").onclick = () =>
+  triggerReprocess("retime-reprocess", document.getElementById("retime-btn"),
+                   "Retiming…");
 
 document.getElementById("refresh").onclick = () => {
   refreshMemory(); refreshCases();

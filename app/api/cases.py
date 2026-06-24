@@ -174,14 +174,9 @@ def get_case(case_id: str) -> dict:
         return _serialise_case(case, pos, latest)
 
 
-@router.post("/{case_id}/reprocess", status_code=202)
-def reprocess(case_id: str) -> dict:
-    """Reset the case and queue a re-analysis as a BACKGROUND job.
-
-    Returns 202 immediately with ``status="REPROCESSING"``. The analysis
-    (NVR clip export, perception, VLM, decision) runs on a single-worker
-    pool; poll ``GET /cases/{id}`` for the final status/outcome. Audited.
-    """
+def _claim_for_reprocess(case_id: str) -> dict:
+    """Set the case to REPROCESSING (audited) and return its prior state.
+    Raises 404 if the case is missing. Does NOT submit the analysis."""
     from app import audit
     from db.models import Case
     from db.session import get_sessionmaker
@@ -207,9 +202,49 @@ def reprocess(case_id: str) -> dict:
             after={"status": case.status},
         )
         s.commit()
+    return before
 
-    # Hand the (slow) analysis off to the background worker and return.
+
+def _run_retime_then_reprocess(case_id: str, prior: dict) -> None:
+    """Background worker: re-time the case's slow-motion segments to real
+    time, then run the normal analysis. Retime failure is non-fatal — the
+    reprocess still runs on whatever segments exist."""
+    try:
+        from video.retime import retime_segments_for_case
+        summary = retime_segments_for_case(case_id)
+        log.info("retime for case %s: considered=%s retimed=%s",
+                 case_id, summary.get("segments_considered"),
+                 summary.get("retimed"))
+    except Exception:
+        log.exception("retime failed for case %s (continuing to reprocess)",
+                      case_id)
+    _run_reprocess(case_id, prior)
+
+
+@router.post("/{case_id}/reprocess", status_code=202)
+def reprocess(case_id: str) -> dict:
+    """Reset the case and queue a re-analysis as a BACKGROUND job.
+
+    Returns 202 immediately with ``status="REPROCESSING"``. The analysis
+    (NVR clip export, perception, VLM, decision) runs on a single-worker
+    pool; poll ``GET /cases/{id}`` for the final status/outcome. Audited.
+    """
+    before = _claim_for_reprocess(case_id)
     _REPROCESS_POOL.submit(_run_reprocess, case_id, before)
     return {"case_id": case_id, "status": "REPROCESSING",
             "detail": "reprocess started; poll GET /cases/{id} "
                       "for the outcome"}
+
+
+@router.post("/{case_id}/retime-reprocess", status_code=202)
+def retime_and_reprocess(case_id: str) -> dict:
+    """Re-time the case's slow-motion CCTV segments to real time, THEN
+    reprocess. For cases recorded before the recorder fps fix, whose clip
+    plays too slow and doesn't cover the transaction. Real-time / already
+    correct segments are left untouched. Background job; poll GET
+    /cases/{id}."""
+    before = _claim_for_reprocess(case_id)
+    _REPROCESS_POOL.submit(_run_retime_then_reprocess, case_id, before)
+    return {"case_id": case_id, "status": "REPROCESSING",
+            "detail": "retiming segments, then reprocessing; "
+                      "poll GET /cases/{id} for the outcome"}
