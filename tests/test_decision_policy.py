@@ -55,6 +55,7 @@ def test_verified_requires_high_or_medium_confidence_and_clean_track():
         footage_valid=True,
         physical_item_track=True,
         item_reaches_counter=True,
+        customer_present=True,
         vlm_handover=True,
         vlm_confidence="high",
     ))
@@ -65,6 +66,7 @@ def test_verified_requires_high_or_medium_confidence_and_clean_track():
         footage_valid=True,
         physical_item_track=True,
         item_reaches_counter=True,
+        customer_present=True,
         vlm_handover=True,
         vlm_confidence="low",
     ))
@@ -78,7 +80,22 @@ def test_item_track_without_vlm_handover_stays_review():
         footage_valid=True,
         physical_item_track=True,
         item_reaches_counter=True,
+        customer_present=True,
         vlm_handover=False,
+        vlm_confidence="high",
+    ))
+    assert d.outcome == OUTCOME_REVIEW
+
+
+def test_item_track_without_customer_present_stays_review():
+    # No person tracked on the customer side (staff-only / hallucinated
+    # customer): even with item track + handover -> must NOT be VERIFIED.
+    d = decide(EvidenceSummary(
+        footage_valid=True,
+        physical_item_track=True,
+        item_reaches_counter=True,
+        customer_present=False,
+        vlm_handover=True,
         vlm_confidence="high",
     ))
     assert d.outcome == OUTCOME_REVIEW
@@ -157,7 +174,9 @@ def test_legacy_vlm_payload_adapter_needs_track_evidence_to_verify():
     summary_no_track = summary_from_vlm(parsed, footage_valid=True)
     assert decide(summary_no_track).outcome == OUTCOME_REVIEW
 
-    # With independent perception evidence, the policy may verify.
+    # With independent perception evidence — an item track reaching the
+    # counter AND a customer tracked on the customer side — the policy may
+    # verify.
     perception = {
         "tracks": [{
             "tracker_id": "track_0001",
@@ -165,6 +184,13 @@ def test_legacy_vlm_payload_adapter_needs_track_evidence_to_verify():
             "physical_item_candidate": True,
             "zones": ["counter_zone"],
             "events": ["entered_counter_zone", "handover_candidate"],
+            "confidence": 0.9,
+        }, {
+            "tracker_id": "track_0002",
+            "label": "person",
+            "physical_item_candidate": False,
+            "zones": ["customer_zone"],
+            "events": ["entered_customer_zone"],
             "confidence": 0.9,
         }]
     }

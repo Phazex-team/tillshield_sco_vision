@@ -117,6 +117,17 @@ def test_analyze_case_verified_with_real_perception_track(tmp_path,
                 "physical_item_candidate": True,
                 "receipt_candidate": False,
                 "confidence": 0.9,
+            }, {
+                "track_id": "track_0002",
+                "label": "person",
+                "first_seen_ts": base.isoformat(),
+                "last_seen_ts": base.isoformat(),
+                "detections": [0],
+                "zones": ["customer_zone"],
+                "events": ["entered_customer_zone"],
+                "physical_item_candidate": False,
+                "receipt_candidate": False,
+                "confidence": 0.9,
             }],
             "keyframes": [{"frame_id": "frame_000000", "frame_idx": 0,
                             "ts": base.isoformat(),
@@ -207,6 +218,13 @@ def test_runtime_track_shape_accepted_by_policy():
         "zones": ["counter_zone"],
         "events": ["entered_counter_zone", "handover_candidate"],
         "confidence": 0.9,
+    }, {
+        "track_id": "track_0002",
+        "label": "person",
+        "physical_item_candidate": False,
+        "zones": ["customer_zone"],
+        "events": ["entered_customer_zone"],
+        "confidence": 0.9,
     }]}
     summary = summary_from_vlm(
         {"handover_occurred": True,
@@ -218,6 +236,7 @@ def test_runtime_track_shape_accepted_by_policy():
     )
     assert summary.physical_item_track is True
     assert summary.item_reaches_counter is True
+    assert summary.customer_present is True
     assert decide(summary).outcome == OUTCOME_VERIFIED
 
 
@@ -232,6 +251,13 @@ def test_persisted_track_shape_still_accepted():
         "physical_item_candidate": True,
         "zones": ["counter_zone"],
         "events": ["handover_candidate"],
+        "confidence": 0.9,
+    }, {
+        "tracker_id": "track_0003",
+        "label": "person",
+        "physical_item_candidate": False,
+        "zones": ["customer_zone"],
+        "events": ["entered_customer_zone"],
         "confidence": 0.9,
     }]}
     summary = summary_from_vlm(

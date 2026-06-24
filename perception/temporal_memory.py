@@ -25,6 +25,10 @@ def is_staff_zone(name: str) -> bool:
     return "staff" in (name or "").lower()
 
 
+def is_customer_zone(name: str) -> bool:
+    return "customer" in (name or "").lower()
+
+
 def is_handover_zone(name: str) -> bool:
     return is_counter_zone(name) or is_staff_zone(name)
 

@@ -47,6 +47,10 @@ class EvidenceSummary:
     # counter clutter Falcon labels "item" cannot clear a refund where no
     # actual handover happened (e.g. a staff-only refund).
     vlm_handover: bool = False
+    # A real PERSON track on the customer side (customer-zone). Required for
+    # VERIFIED so a refund with no customer present (staff-only, or a VLM
+    # that hallucinated a customer) can never be cleared as a return.
+    customer_present: bool = False
     contradictions: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -89,20 +93,26 @@ def decide(summary: EvidenceSummary) -> PolicyDecision:
         return PolicyDecision(OUTCOME_HIGH_RISK_REVIEW, 0.85, reasons)
 
     if summary.physical_item_track and summary.item_reaches_counter \
-            and summary.vlm_handover \
+            and summary.customer_present and summary.vlm_handover \
             and not summary.obstructed and not summary.camera_gap \
             and not low_confidence:
-        reasons.append("item track reaches counter/staff AND the VLM "
-                       "confirms a handover, with sufficient confidence")
+        reasons.append("customer present + item track reaches counter/staff "
+                       "+ VLM-confirmed handover, with sufficient confidence")
         return PolicyDecision(OUTCOME_VERIFIED, 0.1, reasons)
 
-    # A physical item track reached the counter but the VLM did NOT confirm
-    # an actual handover — this is the staff-only-refund / counter-clutter
-    # case. Do not clear it; route to human review.
+    # An item track reached the counter but a required positive signal is
+    # missing — no customer on the customer side, or the VLM reports no
+    # handover. This is the staff-only-refund / counter-clutter /
+    # hallucinated-customer case. Do not clear it; route to human review.
     if summary.physical_item_track and summary.item_reaches_counter \
-            and not summary.vlm_handover:
-        reasons.append("item track present but VLM reports no handover "
-                       "(possible no-return refund); routing to review")
+            and not (summary.customer_present and summary.vlm_handover):
+        missing = []
+        if not summary.customer_present:
+            missing.append("no customer tracked on the customer side")
+        if not summary.vlm_handover:
+            missing.append("VLM reports no handover")
+        reasons.append("item track present but " + " and ".join(missing)
+                       + " (possible no-return refund); routing to review")
         return PolicyDecision(OUTCOME_REVIEW, 0.5, reasons)
 
     if summary.obstructed or summary.camera_gap:
@@ -201,7 +211,7 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
     # zones like ``counter_zone_vlm`` satisfy the gate, not only the
     # literal ``counter_zone``. ``entered_<zone>`` events are emitted with
     # the actual zone name, so accept any such event for a handover zone.
-    from perception.temporal_memory import is_handover_zone
+    from perception.temporal_memory import is_customer_zone, is_handover_zone
     item_reaches_counter = any(
         bool(t.get("physical_item_candidate"))
         and any(is_handover_zone(z) for z in (t.get("zones") or []))
@@ -209,6 +219,15 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
              or any(e.startswith("entered_")
                     and is_handover_zone(e[len("entered_"):])
                     for e in (t.get("events") or [])))
+        for t in perception_tracks
+        if isinstance(t, dict)
+    )
+    # A real person on the customer side. Required for VERIFIED so a refund
+    # with no customer present cannot be cleared (needs Falcon to also watch
+    # the customer zone — assign it to the falcon ROI).
+    customer_present = any(
+        "person" in (t.get("label") or "").lower()
+        and any(is_customer_zone(z) for z in (t.get("zones") or []))
         for t in perception_tracks
         if isinstance(t, dict)
     )
@@ -246,6 +265,7 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
             else "REVIEW"
         ),
         vlm_handover=vlm_handover,
+        customer_present=customer_present,
         contradictions=contradictions,
         notes=notes,
     )
