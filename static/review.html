@@ -159,6 +159,16 @@
       .brand-logo { width: 24px; height: 30px; }
       header h1 { font-size: 16px; }
     }
+    /* Fullscreen the WHOLE wrap (video + canvas overlay) so detection boxes
+       stay drawn on top. Keep the video top-left so the absolutely-positioned
+       canvas at (0,0) still aligns with it; scale to fit the viewport. */
+    #video-wrap:fullscreen, #video-wrap:-webkit-full-screen { background: #000; }
+    #video-wrap:fullscreen video,
+    #video-wrap:-webkit-full-screen video { max-width: 100vw; max-height: 100vh; }
+    .video-expand-btn { font-size: 11px; margin-top: 4px; margin-left: 10px;
+      background: var(--panel, #1b1f27); color: var(--muted); border: 1px solid #333;
+      border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+    .video-expand-btn:hover { color: #fff; border-color: #555; }
   </style>
 </head>
 <body>
@@ -266,12 +276,13 @@
         <div>
           <h3 style="font-size:13px;margin:0 0 8px 0">Video Window</h3>
           <div id="video-wrap" style="position:relative;display:inline-block;max-width:100%;line-height:0">
-            <video id="video" controls preload="metadata" hidden style="max-width:100%;display:block"></video>
+            <video id="video" controls controlsList="nofullscreen" preload="metadata" hidden style="max-width:100%;display:block"></video>
             <canvas id="video-overlay" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>
           </div>
           <label id="boxes-toggle-wrap" style="font-size:11px;color:var(--muted);display:none;margin-top:4px;line-height:normal">
             <input type="checkbox" id="boxes-toggle" checked/> show detection boxes
             (<span id="boxes-count">0</span> detections)
+            <button type="button" id="video-expand" class="video-expand-btn" title="Expand (keeps detection boxes)">⛶ Expand</button>
           </label>
           <div class="empty" id="no-video">No window available yet.</div>
           <h3 style="font-size:13px;margin:14px 0 6px 0">Evidence source</h3>
@@ -986,8 +997,14 @@ function setupDetectionOverlay(pkg, window_) {
     if (!Array.isArray(d.bbox_xyxy)) continue;
     const ms = Date.parse(d.frame_ts);
     if (isNaN(ms)) continue;
-    const t = Math.max(0, (ms - startMs) / 1000);
-    const key = t.toFixed(3);
+    const t = (ms - startMs) / 1000;
+    // Skip detections from before the window video starts. Perception can
+    // run over a wider span than the rendered window (drift margin + 60s
+    // segment alignment); clamping those to 0 would pile stale boxes onto
+    // the first frame. Post-window detections (t > duration) simply never
+    // match currentTime, so they need no explicit filter.
+    if (t < -0.5) continue;
+    const key = Math.max(0, t).toFixed(3);
     if (!byT.has(key)) byT.set(key, { t, boxes: [] });
     byT.get(key).boxes.push({ bbox: d.bbox_xyxy, label: d.label, score: d.score });
   }
@@ -995,15 +1012,47 @@ function setupDetectionOverlay(pkg, window_) {
   count.textContent = String(dets.length);
   toggleWrap.style.display = "block";
 
+  // Restore the operator's saved preference (default ON). Persisted so the
+  // choice survives switching cases and full page reloads.
+  const boxToggle = document.getElementById("boxes-toggle");
+  try {
+    const saved = localStorage.getItem("showDetectionBoxes");
+    if (saved !== null) boxToggle.checked = saved === "1";
+  } catch (_) { /* localStorage unavailable; keep default */ }
+
   sizeOverlay();
   video.onloadedmetadata = () => { sizeOverlay(); drawOverlay(); };
   video.onseeked = drawOverlay;
   video.onpause = drawOverlay;
   video.ontimeupdate = drawOverlay;
   video.onplay = _overlayLoop;
-  document.getElementById("boxes-toggle").onchange = drawOverlay;
+  boxToggle.onchange = () => {
+    try { localStorage.setItem("showDetectionBoxes", boxToggle.checked ? "1" : "0"); }
+    catch (_) { /* ignore */ }
+    drawOverlay();
+  };
+  // Expand fullscreens the WRAP (video + canvas together), not the bare
+  // <video> — otherwise the native button fullscreens only the video and
+  // the overlay canvas is left behind in page flow (boxes disappear).
+  const expandBtn = document.getElementById("video-expand");
+  if (expandBtn) {
+    expandBtn.onclick = () => {
+      const w = document.getElementById("video-wrap");
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fsEl) {
+        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      } else {
+        (w.requestFullscreen || w.webkitRequestFullscreen).call(w);
+      }
+    };
+  }
   if (!_overlay._resizeBound) {
     window.addEventListener("resize", () => { sizeOverlay(); drawOverlay(); });
+    // On entering/leaving fullscreen the displayed video size changes; the
+    // rAF loop only runs while playing, so force a re-size + redraw here too.
+    const onFsChange = () => requestAnimationFrame(() => { sizeOverlay(); drawOverlay(); });
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
     _overlay._resizeBound = true;
   }
   drawOverlay();
@@ -1041,7 +1090,13 @@ function drawOverlay() {
     sizeOverlay();
   }
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!toggle.checked || video.hidden || !video.videoWidth) return;
+  // NB: do NOT gate on `video.hidden`. The <video> keeps its `hidden`
+  // attribute by design (inline display:block overrides it for visuals;
+  // real visibility is controlled on #video-wrap). Gating on the property
+  // here would short-circuit every draw and no box would ever appear.
+  const wrap = document.getElementById("video-wrap");
+  const wrapHidden = !wrap || wrap.style.display === "none";
+  if (!toggle.checked || wrapHidden || !video.videoWidth) return;
   const sx = (video.clientWidth || video.videoWidth) / video.videoWidth;
   const sy = (video.clientHeight || video.videoHeight) / video.videoHeight;
   const frame = _nearestFrame(video.currentTime);
