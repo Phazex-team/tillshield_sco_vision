@@ -64,16 +64,24 @@ def plan_window(session: Session,
                 camera_id: str,
                 pos_event_at: datetime,
                 *,
-                drift_margin_sec: int = DEFAULT_DRIFT_MARGIN_SEC) -> WindowPlan:
+                drift_margin_sec: int = DEFAULT_DRIFT_MARGIN_SEC,
+                pre_roll_sec: Optional[float] = None,
+                post_roll_sec: Optional[float] = None) -> WindowPlan:
     """Compute a video window for ``pos_event_at`` on ``camera_id``.
+
+    ``pre_roll_sec`` / ``post_roll_sec`` override the module defaults
+    (``PRE_ROLL_SEC`` / ``POST_ROLL_SEC``) when an operator widens the
+    window for a retime+reprocess. ``None`` falls back to the defaults.
 
     Caller decides what to do with the result:
       - ``plan.is_valid`` → submit to perception
       - otherwise         → mark case INVALID_VIDEO with ``invalid_reason``
     """
+    pre = PRE_ROLL_SEC if pre_roll_sec is None else max(0.0, float(pre_roll_sec))
+    post = POST_ROLL_SEC if post_roll_sec is None else max(0.0, float(post_roll_sec))
     pos_event_at = _naive_utc(pos_event_at)
-    requested_start = pos_event_at - timedelta(seconds=PRE_ROLL_SEC)
-    requested_end = pos_event_at + timedelta(seconds=POST_ROLL_SEC)
+    requested_start = pos_event_at - timedelta(seconds=pre)
+    requested_end = pos_event_at + timedelta(seconds=post)
     margin = timedelta(seconds=drift_margin_sec)
 
     rows = session.execute(

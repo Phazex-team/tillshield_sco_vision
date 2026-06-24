@@ -50,6 +50,8 @@ def analyze_case(session: Session,
                  vlm_runner: Optional[Callable] = None,
                  prompt_version: str = "return_review_v1",
                  manifest_max_frames: Optional[int] = None,
+                 pre_roll_sec: Optional[float] = None,
+                 post_roll_sec: Optional[float] = None,
                  cfg=None) -> dict:
     """Run the full analysis for ``case_id`` and persist results.
 
@@ -109,7 +111,9 @@ def analyze_case(session: Session,
     storage_root = _storage_root(cfg)
     _t = time.perf_counter()
     try:
-        plan = plan_window(session, case.camera_id, pos.pos_event_at)
+        plan = plan_window(session, case.camera_id, pos.pos_event_at,
+                           pre_roll_sec=pre_roll_sec,
+                           post_roll_sec=post_roll_sec)
     finally:
         timings["window_resolution_ms"] = _ms_since(_t)
     window = VideoWindow(
@@ -254,9 +258,12 @@ def analyze_case(session: Session,
 
     # ----- 4. Build the evidence manifest with REAL frames -----------
     window_start_naive = build.actual_start_at or plan.requested_start
-    # VLM frame budget: ~1 fps across the built window (the window is
-    # tightly centered on the transaction, so 1 fps is dense). Bounded to
-    # [24, 240] for safety. An explicit ``manifest_max_frames`` (e.g. from
+    # VLM frame budget: ~0.5 fps across the built window. The window is
+    # tightly centered on the transaction, so 0.5 fps still captures the
+    # handover clearly, while keeping gemma's activation footprint small
+    # enough to stay under the GPU hard limit (1 fps / ~150 frames pushed
+    # peak past 100G and got the VLM deferred, with no accuracy gain).
+    # Bounded to [24, 64]. An explicit ``manifest_max_frames`` (e.g. from
     # tests) overrides this auto behaviour.
     if manifest_max_frames is None:
         if build.actual_start_at and build.actual_end_at:
@@ -265,7 +272,7 @@ def analyze_case(session: Session,
         else:
             _win_secs = (plan.requested_end
                          - plan.requested_start).total_seconds()
-        manifest_max_frames = max(24, min(240, int(round(_win_secs or 0))))
+        manifest_max_frames = max(24, min(64, int(round((_win_secs or 0) / 2))))
     _t = time.perf_counter()
     try:
         sampled_frames = _extract_keyframe_data_urls(
@@ -422,6 +429,12 @@ def analyze_case(session: Session,
     case.decision_policy_version = decision.policy_version
     case.status = "CLOSED"
     case.closed_at = datetime.now(timezone.utc)
+    # Persist the track-derived customer_present (a real person on the
+    # customer side) onto the VLM run so the case grid can render a
+    # "Customer" column without recomputing from tracks. Re-assign a new
+    # dict — SQLAlchemy's JSON column does not detect in-place mutation.
+    run.output_json = {**(run.output_json or {}),
+                       "customer_present": bool(summary.customer_present)}
 
     # Finalise total + persist timings into the VlmRun row BEFORE the
     # package is written so the evidence package can read the same dict

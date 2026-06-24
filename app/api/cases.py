@@ -25,10 +25,14 @@ _REPROCESS_POOL = ThreadPoolExecutor(max_workers=1,
 atexit.register(lambda: _REPROCESS_POOL.shutdown(wait=False))
 
 
-def _run_reprocess(case_id: str, prior: dict) -> None:
+def _run_reprocess(case_id: str, prior: dict,
+                   pre_roll_sec=None, post_roll_sec=None) -> None:
     """Background worker: run the full analysis in its own session. On an
     unexpected failure the case is restored to its pre-reprocess state (so
-    it is never left stuck in REPROCESSING) and the failure is audited."""
+    it is never left stuck in REPROCESSING) and the failure is audited.
+
+    ``pre_roll_sec`` / ``post_roll_sec`` (when set) widen the analysis
+    window beyond the config defaults — used by retime+reprocess."""
     from app import audit
     from db.models import Case
     from db.session import get_sessionmaker
@@ -36,7 +40,9 @@ def _run_reprocess(case_id: str, prior: dict) -> None:
     SM = get_sessionmaker()
     try:
         with SM() as s:
-            analyze_case(s, case_id)
+            analyze_case(s, case_id,
+                         pre_roll_sec=pre_roll_sec,
+                         post_roll_sec=post_roll_sec)
     except Exception as exc:  # noqa: BLE001 — must not crash the worker
         log.exception("background reprocess failed for case %s", case_id)
         try:
@@ -65,7 +71,11 @@ def _drain_reprocess_pool() -> None:
     _REPROCESS_POOL.submit(lambda: None).result()
 
 
-def _serialise_case(case, pos_event=None, latest_window=None) -> dict:
+def _serialise_case(case, pos_event=None, latest_window=None,
+                    vlm_output=None) -> dict:
+    # Surface the two headline VLM observations (from the latest run) so the
+    # case grid can show them as columns without a per-row fetch.
+    vlm_output = vlm_output or {}
     return {
         "id": case.id,
         "pos_event_id": case.pos_event_id,
@@ -78,6 +88,9 @@ def _serialise_case(case, pos_event=None, latest_window=None) -> dict:
         "opened_at": case.opened_at.isoformat() if case.opened_at else None,
         "closed_at": case.closed_at.isoformat() if case.closed_at else None,
         "invalid_reason": case.invalid_reason,
+        "handover_occurred": vlm_output.get("handover_occurred"),
+        "item_presented": vlm_output.get("item_presented"),
+        "customer_present": vlm_output.get("customer_present"),
         "pos_event": _serialise_pos(pos_event) if pos_event else None,
         "latest_window": _serialise_window(latest_window)
             if latest_window else None,
@@ -125,7 +138,7 @@ def list_cases(
     outcome: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
 ) -> dict:
-    from db.models import Case, PosEvent
+    from db.models import Case, PosEvent, VlmRun
     from db.session import get_sessionmaker
 
     SM = get_sessionmaker()
@@ -138,6 +151,7 @@ def list_cases(
         q = q.order_by(Case.opened_at.desc()).limit(limit)
         cases = s.execute(q).scalars().all()
         pos_events = {}
+        vlm_outputs = {}
         if cases:
             ids = [c.pos_event_id for c in cases if c.pos_event_id]
             if ids:
@@ -145,9 +159,21 @@ def list_cases(
                     select(PosEvent).where(PosEvent.id.in_(ids))
                 ).scalars().all()
                 pos_events = {p.id: p for p in pe}
+            # Latest VlmRun per case (for the handover/item columns). One
+            # query ordered newest-first; keep the first row seen per case.
+            case_ids = [c.id for c in cases]
+            runs = s.execute(
+                select(VlmRun)
+                .where(VlmRun.case_id.in_(case_ids))
+                .order_by(VlmRun.started_at.desc())
+            ).scalars().all()
+            for run in runs:
+                if run.case_id not in vlm_outputs:
+                    vlm_outputs[run.case_id] = run.output_json or {}
         return {
             "items": [
-                _serialise_case(c, pos_events.get(c.pos_event_id))
+                _serialise_case(c, pos_events.get(c.pos_event_id),
+                                vlm_output=vlm_outputs.get(c.id))
                 for c in cases
             ],
             "count": len(cases),
@@ -221,20 +247,27 @@ def _claim_for_reprocess(case_id: str) -> dict:
     return before
 
 
-def _run_retime_then_reprocess(case_id: str, prior: dict) -> None:
+def _run_retime_then_reprocess(case_id: str, prior: dict,
+                               pre_roll_sec=None, post_roll_sec=None) -> None:
     """Background worker: re-time the case's slow-motion segments to real
     time, then run the normal analysis. Retime failure is non-fatal — the
-    reprocess still runs on whatever segments exist."""
+    reprocess still runs on whatever segments exist.
+
+    ``pre_roll_sec`` / ``post_roll_sec`` widen the window for BOTH the
+    retime (so extra segments get re-timed) and the reprocess."""
     try:
         from video.retime import retime_segments_for_case
-        summary = retime_segments_for_case(case_id)
+        summary = retime_segments_for_case(case_id,
+                                           pre_roll_sec=pre_roll_sec,
+                                           post_roll_sec=post_roll_sec)
         log.info("retime for case %s: considered=%s retimed=%s",
                  case_id, summary.get("segments_considered"),
                  summary.get("retimed"))
     except Exception:
         log.exception("retime failed for case %s (continuing to reprocess)",
                       case_id)
-    _run_reprocess(case_id, prior)
+    _run_reprocess(case_id, prior, pre_roll_sec=pre_roll_sec,
+                   post_roll_sec=post_roll_sec)
 
 
 @router.post("/{case_id}/reprocess", status_code=202)
@@ -252,15 +285,50 @@ def reprocess(case_id: str) -> dict:
                       "for the outcome"}
 
 
+# Hard ceiling on a single window (matches nvr.max_window_sec). Keeps an
+# operator from requesting an absurd pre/post that would pull in minutes of
+# footage and blow up perception time.
+_MAX_WINDOW_SEC = 900
+
+
 @router.post("/{case_id}/retime-reprocess", status_code=202)
-def retime_and_reprocess(case_id: str) -> dict:
+def retime_and_reprocess(
+    case_id: str,
+    pre_roll_sec: Optional[float] = Query(
+        None, ge=0, le=_MAX_WINDOW_SEC,
+        description="Seconds of footage BEFORE the POS event "
+                    "(default 90 when omitted)."),
+    post_roll_sec: Optional[float] = Query(
+        None, ge=0, le=_MAX_WINDOW_SEC,
+        description="Seconds of footage AFTER the POS event "
+                    "(default 60 when omitted)."),
+) -> dict:
     """Re-time the case's slow-motion CCTV segments to real time, THEN
     reprocess. For cases recorded before the recorder fps fix, whose clip
     plays too slow and doesn't cover the transaction. Real-time / already
     correct segments are left untouched. Background job; poll GET
-    /cases/{id}."""
+    /cases/{id}.
+
+    ``pre_roll_sec`` / ``post_roll_sec`` let an operator WIDEN the window
+    (e.g. 180s pre / 120s post) when the default 90/60 misses the action.
+    Omit either to keep its config default. Their sum is capped at
+    ``_MAX_WINDOW_SEC``."""
+    if (pre_roll_sec is not None and post_roll_sec is not None
+            and pre_roll_sec + post_roll_sec > _MAX_WINDOW_SEC):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"pre_roll_sec + post_roll_sec must be <= "
+                    f"{_MAX_WINDOW_SEC}s (got "
+                    f"{pre_roll_sec + post_roll_sec:.0f}s)"))
     before = _claim_for_reprocess(case_id)
-    _REPROCESS_POOL.submit(_run_retime_then_reprocess, case_id, before)
+    _REPROCESS_POOL.submit(_run_retime_then_reprocess, case_id, before,
+                           pre_roll_sec, post_roll_sec)
+    win = []
+    if pre_roll_sec is not None:
+        win.append(f"{pre_roll_sec:.0f}s pre")
+    if post_roll_sec is not None:
+        win.append(f"{post_roll_sec:.0f}s post")
+    win_txt = (" (window: " + ", ".join(win) + ")") if win else ""
     return {"case_id": case_id, "status": "REPROCESSING",
-            "detail": "retiming segments, then reprocessing; "
-                      "poll GET /cases/{id} for the outcome"}
+            "detail": "retiming segments, then reprocessing" + win_txt
+                      + "; poll GET /cases/{id} for the outcome"}

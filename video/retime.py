@@ -110,9 +110,15 @@ def retime_segment(seg, ffmpeg: Optional[str] = None) -> dict:
             "new_fps": seg.fps}
 
 
-def retime_segments_for_case(case_id: str) -> dict:
+def retime_segments_for_case(case_id: str, *,
+                             pre_roll_sec=None,
+                             post_roll_sec=None) -> dict:
     """Re-time the slow-mo segments a case's window needs. Returns a
-    summary; commits the DB."""
+    summary; commits the DB.
+
+    ``pre_roll_sec`` / ``post_roll_sec`` widen the window the same way as
+    the reprocess, so a larger requested window pulls in (and re-times)
+    the extra segments it now spans."""
     from db.models import Case, PosEvent, VideoSegment
     from db.session import get_sessionmaker
     from pos.correlation import plan_window
@@ -127,7 +133,9 @@ def retime_segments_for_case(case_id: str) -> dict:
         pos = s.get(PosEvent, case.pos_event_id) if case.pos_event_id else None
         if pos is None:
             return {"error": "case has no POS event", "case_id": case_id}
-        plan = plan_window(s, case.camera_id, pos.pos_event_at)
+        plan = plan_window(s, case.camera_id, pos.pos_event_at,
+                           pre_roll_sec=pre_roll_sec,
+                           post_roll_sec=post_roll_sec)
         ids = list(plan.matched_segment_ids or [])
         segs = (s.query(VideoSegment)
                 .filter(VideoSegment.id.in_(ids)).all()) if ids else []

@@ -38,6 +38,13 @@ from transformers import AutoProcessor, Gemma4ForConditionalGeneration
 
 log = logging.getLogger("tx_server")
 
+# Defensive server-side ceiling on image frames per request. The app already
+# bounds frames (manifest_max_frames), but a single oversized request can pin
+# the KV-cache high-water mark for the life of the process, so we hard-cap
+# here too. Generous (well above the normal ~64) so legitimate requests are
+# never truncated; only runaway inputs are clipped (with a warning).
+MAX_IMAGES_PER_REQUEST = int(os.environ.get("TX_MAX_IMAGES", "96"))
+
 MODEL_NAME = os.environ.get(
     "GEMMA_MODEL_NAME", "google/gemma-4-26B-A4B-it"
 )
@@ -147,6 +154,23 @@ def _build_chat_messages(messages: list[dict]) -> list[dict]:
         elif content is not None:
             parts.append({"type": "text", "text": str(content)})
         out.append({"role": role, "content": parts})
+    # Defensive cap: clip total image parts across the conversation so one
+    # runaway request can't balloon (and permanently pin) the KV cache.
+    total_imgs = sum(1 for m in out for p in m["content"]
+                     if p.get("type") == "image")
+    if total_imgs > MAX_IMAGES_PER_REQUEST:
+        log.warning("request had %d images; capping to %d (defensive)",
+                    total_imgs, MAX_IMAGES_PER_REQUEST)
+        kept = 0
+        for m in out:
+            new_parts = []
+            for p in m["content"]:
+                if p.get("type") == "image":
+                    if kept >= MAX_IMAGES_PER_REQUEST:
+                        continue
+                    kept += 1
+                new_parts.append(p)
+            m["content"] = new_parts
     return out
 
 
@@ -182,18 +206,37 @@ def _generate(messages: list[dict],
     if do_sample:
         gen_kwargs["temperature"] = float(temperature)
 
-    with torch.inference_mode():
-        with _GEN_LOCK:
-            out_ids = _MODEL.generate(**inputs, **gen_kwargs)
+    out_ids = None
+    try:
+        with torch.inference_mode():
+            with _GEN_LOCK:
+                out_ids = _MODEL.generate(**inputs, **gen_kwargs)
 
-    new_tokens = out_ids[0][prompt_len:]
-    text = _PROCESSOR.decode(new_tokens, skip_special_tokens=True)
-    completion_len = int(new_tokens.shape[-1])
-    return text, {
-        "prompt_tokens": int(prompt_len),
-        "completion_tokens": completion_len,
-        "total_tokens": int(prompt_len + completion_len),
-    }
+        new_tokens = out_ids[0][prompt_len:]
+        text = _PROCESSOR.decode(new_tokens, skip_special_tokens=True)
+        completion_len = int(new_tokens.shape[-1])
+        return text, {
+            "prompt_tokens": int(prompt_len),
+            "completion_tokens": completion_len,
+            "total_tokens": int(prompt_len + completion_len),
+        }
+    finally:
+        # Release this request's working memory. Multimodal prompts (many
+        # image frames) allocate a KV cache sized to the full prompt; without
+        # this, PyTorch's caching allocator keeps the high-water mark of the
+        # LARGEST request ever served reserved forever, so the server ratchets
+        # up to ~87G and never shrinks. Freeing per-request keeps steady-state
+        # at weights + current request. Cost is a few ms of cache re-alloc.
+        try:
+            del inputs
+            if out_ids is not None:
+                del out_ids
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            log.debug("post-generate cleanup skipped", exc_info=True)
 
 
 # ---- HTTP app -----------------------------------------------------------

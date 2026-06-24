@@ -108,22 +108,45 @@ def run_perception(session, case, window, *, cfg=None) -> dict:
         if falcon_enabled else None
     sam2_client = Sam2Client(model_path=sam2_path) if sam2_enabled else None
     ocr_engine = OcrEngine(model_path=ocr_path) if ocr_enabled else None
-    return run_perception_on_window(
-        window_path=window.path,
-        window_start_ts=window_start_ts,
-        fps=int(cfg.settings.get("gemma_video_fps", 25)),
-        zones=_load_zones(cfg, case.camera_id),
-        falcon_client=falcon_client,
-        sam2_client=sam2_client,
-        ocr_engine=ocr_engine,
-        sampling=SamplingPolicy(),
-        falcon_roi_view=model_view(cfg, case.camera_id, "falcon"),
-        sam2_roi_view=model_view(cfg, case.camera_id, "sam2"),
-        ocr_roi_view=model_view(cfg, case.camera_id, "ocr"),
-        falcon_enabled=falcon_enabled,
-        sam2_enabled=sam2_enabled,
-        ocr_enabled=ocr_enabled,
-    )
+    try:
+        return run_perception_on_window(
+            window_path=window.path,
+            window_start_ts=window_start_ts,
+            fps=int(cfg.settings.get("gemma_video_fps", 25)),
+            zones=_load_zones(cfg, case.camera_id),
+            falcon_client=falcon_client,
+            sam2_client=sam2_client,
+            ocr_engine=ocr_engine,
+            sampling=SamplingPolicy(),
+            falcon_roi_view=model_view(cfg, case.camera_id, "falcon"),
+            sam2_roi_view=model_view(cfg, case.camera_id, "sam2"),
+            ocr_roi_view=model_view(cfg, case.camera_id, "ocr"),
+            falcon_enabled=falcon_enabled,
+            sam2_enabled=sam2_enabled,
+            ocr_enabled=ocr_enabled,
+        )
+    finally:
+        # Free perception GPU memory before the caller proceeds to the VLM
+        # stage. PyTorch's caching allocator keeps Falcon/SAM2 weights
+        # RESERVED even after the clients are dereferenced, so the memory
+        # guard would still count them as "used" and defer VLM inference
+        # (hard-limit). Explicitly unload + empty_cache returns that memory
+        # to the unified pool so gemma can load. This matters most with a
+        # large union ROI crop, which inflates Falcon's footprint ~30G+.
+        for _c in (falcon_client, sam2_client, ocr_engine):
+            try:
+                if _c is not None and hasattr(_c, "unload"):
+                    _c.unload()
+            except Exception:
+                log.exception("perception client unload failed")
+        try:
+            import gc
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            log.debug("cuda empty_cache skipped", exc_info=True)
 
 
 def run_perception_on_window(*,

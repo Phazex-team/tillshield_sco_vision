@@ -54,7 +54,10 @@
     nav.tabs button.active {
       color: var(--text); border-bottom-color: var(--accent);
     }
-    main { padding: 22px; max-width: 1280px; margin: 0 auto; }
+    /* Use most of the viewport on wide monitors (was capped at 1280px,
+       which left large empty margins on a big display), but keep a ceiling
+       so text lines don't get unreadably long on ultrawide screens. */
+    main { padding: 22px 32px; max-width: min(1840px, 94vw); margin: 0 auto; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
     .panel {
@@ -225,12 +228,13 @@
         <thead>
           <tr>
             <th>Case</th>
-            <th>POS Txn</th>
             <th>Staff</th>
-            <th>SKU</th>
             <th>Amount</th>
             <th>POS time</th>
-            <th>Outcome</th>
+            <th>Verdict</th>
+            <th>Customer</th>
+            <th>Handover</th>
+            <th>Item</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -330,9 +334,17 @@
           <textarea id="review-notes" placeholder="optional"></textarea>
         </label>
       </div>
-      <div class="row" style="margin-top:12px;justify-content:flex-end">
+      <div class="row" style="margin-top:12px;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--muted)" title="Seconds of footage BEFORE the POS event (default 90)">
+          pre-roll s
+          <input id="retime-pre" type="number" min="0" max="900" step="5" value="90" style="width:64px"/>
+        </label>
+        <label style="font-size:11px;color:var(--muted)" title="Seconds of footage AFTER the POS event (default 60)">
+          post-roll s
+          <input id="retime-post" type="number" min="0" max="900" step="5" value="60" style="width:64px"/>
+        </label>
         <button id="reprocess-btn" class="danger">Request reprocess</button>
-        <button id="retime-btn" title="Re-time slow-motion segments to real time, then reprocess (for clips recorded before the recorder fix)">Retime + reprocess</button>
+        <button id="retime-btn" title="Re-time slow-motion segments to real time, then reprocess. Uses the pre/post-roll seconds at left to widen the window.">Retime + reprocess</button>
         <button id="submit-action" class="primary" disabled>
           Submit reviewer decision</button>
       </div>
@@ -699,12 +711,13 @@ async function refreshCases() {
     const p = row.pos_event || {};
     tr.innerHTML = `
       <td>${row.id.slice(0, 8)}…</td>
-      <td>${escapeHtml(p.transaction_id || "—")}</td>
       <td>${escapeHtml(p.staff_id || "—")}</td>
-      <td>${escapeHtml(p.sku || "—")}</td>
       <td>${p.amount ? `${p.currency || ""} ${p.amount}` : "—"}</td>
       <td>${p.pos_event_at || "—"}</td>
       <td>${pill(row.outcome || "—")}</td>
+      <td>${boolCell(row.customer_present)}</td>
+      <td>${boolCell(row.handover_occurred)}</td>
+      <td>${boolCell(row.item_presented)}</td>
       <td>${pill(row.status || "—")}</td>`;
     tr.onclick = () => openCase(row.id);
     tbody.appendChild(tr);
@@ -714,6 +727,12 @@ async function refreshCases() {
 function pill(s) {
   const cls = s.replace(/[^A-Z_]/g, "");
   return `<span class="pill ${cls}">${escapeHtml(s)}</span>`;
+}
+// Render a tri-state boolean (true / false / unknown) for grid cells.
+function boolCell(v) {
+  if (v === true)  return '<span style="color:var(--ok,#3ddc84)">✓ yes</span>';
+  if (v === false) return '<span style="color:var(--high,#e0843b)">✗ no</span>';
+  return '<span style="color:var(--muted)">—</span>';
 }
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({
@@ -1368,10 +1387,13 @@ document.getElementById("submit-action").onclick = async () => {
 };
 
 // Shared trigger for the (background) reprocess + retime-reprocess buttons.
-async function triggerReprocess(path, btn, busyLabel) {
+// `query` (optional) is an URLSearchParams/string appended to the URL, used
+// by retime to pass an operator-chosen pre/post-roll window.
+async function triggerReprocess(path, btn, busyLabel, query) {
   if (!currentCase) return;
   const caseId = currentCase;
-  const r = await fetch(`${API}/cases/${caseId}/${path}`, { method: "POST" });
+  const qs = query ? `?${query}` : "";
+  const r = await fetch(`${API}/cases/${caseId}/${path}${qs}`, { method: "POST" });
   if (!r.ok) {
     alert(`${path} failed: ${r.status} ${await r.text()}`);
     return;
@@ -1400,9 +1422,21 @@ async function triggerReprocess(path, btn, busyLabel) {
 document.getElementById("reprocess-btn").onclick = () =>
   triggerReprocess("reprocess", document.getElementById("reprocess-btn"),
                    "Reprocessing…");
-document.getElementById("retime-btn").onclick = () =>
+document.getElementById("retime-btn").onclick = () => {
+  // Read the operator's window choice; only send a value when it differs
+  // from the default so omitted fields keep the server-side config default.
+  const pre = parseFloat(document.getElementById("retime-pre").value);
+  const post = parseFloat(document.getElementById("retime-post").value);
+  const p = new URLSearchParams();
+  if (Number.isFinite(pre)) p.set("pre_roll_sec", pre);
+  if (Number.isFinite(post)) p.set("post_roll_sec", post);
+  if (Number.isFinite(pre) && Number.isFinite(post) && pre + post > 900) {
+    alert("pre-roll + post-roll must be ≤ 900 seconds total.");
+    return;
+  }
   triggerReprocess("retime-reprocess", document.getElementById("retime-btn"),
-                   "Retiming…");
+                   "Retiming…", p.toString());
+};
 
 document.getElementById("refresh").onclick = () => {
   refreshMemory(); refreshCases();
