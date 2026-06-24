@@ -2,10 +2,6 @@ cameras:
 - id: cam_01
   name: "Return Counter \u2014 Qusais"
   rtsp_url: rtsp://127.0.0.1:8554/CS_COUNTER_ch15
-  # ``return_review`` is review-safe: the VLM describes evidence; the
-  # deterministic ``reasoning.decision_policy`` decides the outcome.
-  # The legacy key ``fraud`` is silently remapped to this one — see
-  # classifiers.get_classifier.
   classifier: return_review
   token_budget: 1120
   enable_thinking: ''
@@ -23,50 +19,102 @@ cameras:
       w: 303
       h: 645
   prompts: {}
-# Return-counter cameras. Each return-counter workstation in the
-# TillShield poll allowlist must map to one of these IDs (see
-# integrations.tillshield.workstation_camera_map) and each must carry a
-# real rtsp_url so the recorder/window builder can resolve footage.
 - id: cam_return_01
-  name: "Return Counter 01"
-  # POS workstation 52 -> this camera (channel 15). The RTSP password must
-  # be URL-encoded in the URL (e.g. '%' -> %25).
-  # Secret: real URL lives in .env (gitignored) as CAM_RETURN_01_RTSP_URL;
-  # load_config expands ${VAR} from the environment.
-  rtsp_url: '${CAM_RETURN_01_RTSP_URL}'
+  name: Return Counter 01
+  rtsp_url: ${CAM_RETURN_01_RTSP_URL}
   classifier: return_review
   token_budget: 1120
   enable_thinking: ''
   max_frames: ''
   cooldown_sec: 30
-  zones: {}
+  zones:
+    staff_zone_vlm:
+      label: staff_zone_vlm
+      purpose: ''
+      x: 619
+      y: 115
+      w: 245
+      h: 536
+      source_width: 1920
+      source_height: 1080
+    customer_zonevlm:
+      label: customer_zonevlm
+      purpose: ''
+      x: 1106
+      y: 147
+      w: 249
+      h: 506
+      source_width: 1920
+      source_height: 1080
+    counter_zone_vlm:
+      label: counter_zone_vlm
+      purpose: ''
+      x: 858
+      y: 113
+      w: 260
+      h: 562
+      source_width: 1920
+      source_height: 1080
   prompts: {}
-  # On-demand NVR historical retrieval (additive; the live recorder
-  # remains the fallback until clip export is proven reliable).
   nvr:
     enabled: true
     base_url: http://192.168.1.13
-    # Secrets: real values in .env (gitignored). The NVR client also
-    # reads NVR_USERNAME / NVR_PASSWORD from the environment directly.
     username: ${NVR_USERNAME}
     password: ${NVR_PASSWORD}
-    live_channel: 15              # 1-based RTSP channel (live + playback URL)
-    # mediaFileFind condition.Channel (1-based on this NVR). Searching 15
-    # returns results labelled Channel=14 under /mnt/dvr/.../14/dav/ — the
-    # SAME camera (0-based result). Set to whatever returns this camera's
-    # recordings; the resolved result channel + file path are logged.
+    live_channel: 15
     playback_channel: 15
     subtype: 0
-    timezone: Asia/Dubai          # NVR local wall-clock for search/playback
+    timezone: Asia/Dubai
     pre_roll_sec: 120
-    post_roll_sec: 180
-    max_window_sec: 900           # hard cap: only the tx window (<= 15 min)
+    post_roll_sec: 60
+    max_window_sec: 900
     prefer_on_demand_for_pos: true
-    # Stage B clip export via RTSP playback-by-time (PROVEN against this
-    # NVR: pulls the exact bounded tx window to MP4). Streams at ~realtime
-    # so a 5-min window takes ~5 min; bounded by max_window_sec. On any
-    # failure the app falls back to the local recorded segments.
     export_enabled: true
+  model_roi_views:
+    falcon:
+      enabled: true
+      roi_ids:
+      - counter_zone_vlm
+      mode: union_crop
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+    sam2:
+      enabled: true
+      roi_ids:
+      - counter_zone_vlm
+      mode: filter_candidate_crops
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+    ocr:
+      enabled: true
+      roi_ids:
+      - counter_zone_vlm
+      mode: filter_candidate_crops
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+    qwen3_vl:
+      enabled: true
+      roi_ids:
+      - staff_zone_vlm
+      - customer_zonevlm
+      - counter_zone_vlm
+      mode: labeled_crops
+      margin_pct: 0.0
+      include_full_frame_overview: true
+      caption: ''
+    gemma:
+      enabled: true
+      roi_ids:
+      - staff_zone_vlm
+      - customer_zonevlm
+      - counter_zone_vlm
+      mode: labeled_crops
+      margin_pct: 0.0
+      include_full_frame_overview: true
+      caption: ''
 settings:
   rtsp_reconnect_sec: 10
   motion_threshold: 25
@@ -97,9 +145,6 @@ settings:
 models:
   falcon:
     name: tiiuae/Falcon-Perception
-  # Active reasoning provider. Must equal the name served by
-  # transformers_server.py / vllm_start.sh — mismatched names show up as
-  # the wrong model in tracer/Phoenix spans and break the inspector.
   gemma:
     name: google/gemma-4-26B-A4B-it
     vllm_url: http://localhost:8001
@@ -108,26 +153,10 @@ models:
     request_timeout_sec: 300
     request_retries: 3
     request_retry_backoff_sec: 5
-  # Primary visual evidence verifier when ENABLED + repo-local weights
-  # resolve. The ChainProvider (reasoning/providers/chain.py) tries
-  # Qwen first and falls back to Gemma on load/inference failure. The
-  # decision policy still wraps every result.
-  #
-  # ``local_path`` is a development fallback only; production mode
-  # (FRAUD_OFFLINE_MODE=1) ignores it and requires the repo-local
-  # ./models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/<snapshot>/ bundle.
   qwen3_vl:
     enabled: true
     name: Qwen/Qwen3-VL-30B-A3B-Instruct
-    # Active backend. ``vllm_openai`` hits a local-only vLLM
-    # OpenAI-compatible server (no HF imports, no GPU load from this
-    # process). ``local_transformers`` is the in-process rollback path
-    # (HF Transformers + optional bitsandbytes nf4) and is only used
-    # when the operator explicitly flips this back.
     provider: vllm_openai
-    # Strict local-only endpoint. The provider rejects anything other
-    # than this exact base_url unless ``allow_localhost_alias`` /
-    # ``allow_port_override`` is opted into.
     base_url: http://127.0.0.1:8000/v1
     served_model_name: qwen3_vl
     checkpoint_label: Qwen3-VL-30B-A3B-Instruct-FP8
@@ -140,54 +169,25 @@ models:
     max_frame_long_edge: 1280
     max_frame_pixels: 1048576
     max_tokens: 512
-    # ---- local_transformers rollback knobs (ignored under vllm_openai) ----
-    # 4-bit (nf4) load: the bf16 30B peaks >121G on this box and OOMs;
-    # 4-bit keeps it ~18G resident. bitsandbytes verified on GB10.
     max_new_tokens: 512
     temperature: 0.1
     load_in_4bit: true
     local_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
-  # Segmentation model used by the perception pipeline. The path is
-  # resolved to ./models/hf/facebook/sam2-hiera-large/<snapshot>/ by
-  # app.config.resolve_model_path. The ``sam2`` Python runtime is
-  # required separately — see scripts/verify_offline_python_env.py and
-  # offline_assets.yaml.required_python_packages.
   sam2:
     name: facebook/sam2-hiera-large
     enabled: true
-  # Optional preferred OCR upgrade. When ``tiiuae/Falcon-OCR`` is
-  # bundled under ./models/hf/, perception.ocr loads the real
-  # OCRInferenceEngine. Otherwise OCR is honestly marked unavailable.
   falcon_ocr:
     name: tiiuae/Falcon-OCR
-    # Optional preferred upgrade. Off by default because the weights
-    # are not part of the required bundle. When the operator bundles
-    # tiiuae/Falcon-OCR via prepare_offline_model_bundle.py and flips
-    # this to true, perception.ocr will run real OCRInferenceEngine
-    # on receipt/document crops automatically.
     enabled: false
 observability:
   phoenix_enabled: true
   phoenix_url: http://localhost:6006
   phoenix_project: fraud_detection_v3
-
-# ----------------------------------------------------------------------
-# Memory + reasoning policy (PRODUCTION_SPEC.md sections 7 + 11)
-# Memory limits are in GiB of total system RAM (DGX unified memory pool).
-# The guard polls system memory and refuses inference / unloads models
-# as the soft/hard/emergency thresholds are crossed.
-# ----------------------------------------------------------------------
 reasoning:
-  # Qwen3-VL (4-bit) is the active/primary reasoner. Gemma stays as a
-  # lazy HTTP fallback (transformers_server on :8001) — with
-  # warm_fallback:false it is NEVER loaded unless Qwen errors, so the two
-  # are never resident together. This preserves the chain architecture
-  # while analysis runs on Qwen alone in practice.
   primary_provider: qwen3_vl
   fallback_provider: gemma
   warm_fallback: false
   prompt_version: return_review_v1
-
 gpu:
   max_loaded_big_vlms: 1
   soft_memory_limit_gb: 90
@@ -196,74 +196,31 @@ gpu:
   poll_interval_sec: 5
   on_hard_limit: unload_models
   on_emergency_limit: stop_inference_workers
-
-# ----------------------------------------------------------------------
-# Storage retention (PRODUCTION_SPEC reliability rules)
-# Raw continuous CCTV segments that are NOT linked to a case / evidence
-# package may be deleted after `raw_segment_retention_hours`. Anything
-# linked to a case (window, artifact, review action, audit log) is
-# preserved indefinitely until an admin manually archives it.
-# `min_free_disk_gb` is the low-disk guard threshold: when the project
-# storage root drops below it, the recorder pauses but the API and
-# reviewer UI stay alive.
-# ----------------------------------------------------------------------
 storage:
   raw_segment_retention_hours: 48
-  # PRODUCTION_SPEC defaults: keep at least 100 GiB free on the storage
-  # root. The DGX Spark target ships with a 4 TB NVMe; 100 GiB is the
-  # conservative buffer that leaves room for one fully-bundled model
-  # refresh (~110 GiB) without contention. Do not lower without first
-  # measuring real headroom — never below 25 GiB.
   min_free_disk_gb: 100
   cleanup_dry_run_default: true
-
-# ----------------------------------------------------------------------
-# Integrations (POS agents)
-# ----------------------------------------------------------------------
 integrations:
   tillshield:
     return_event_types:
-      - RETURN
-      - REFUND
-      - REFUND_RETURN
-      - RETURN_REFUND
-      - VOID_RETURN
+    - RETURN
+    - REFUND
+    - REFUND_RETURN
+    - RETURN_REFUND
+    - VOID_RETURN
     line_level_cases: false
     ignore_unknown_types: true
-    # When unset (default) the endpoint is unauthenticated (dev mode).
-    # Production should set TILLSHIELD_INGEST_TOKEN in .env so the agent
-    # must send X-PhazeX-Ingest-Token on every call.
-    ingest_token: ""
-
-    # ----------------------------------------------------------------
-    # POS-agent polling (additive; the push endpoints above still work).
-    # The app pulls recent transactions from the local TillShield POS
-    # agent every poll_every_seconds and opens cases only for RETURN
-    # rows with a negative total at an allow-listed return-counter
-    # workstation that maps to a configured camera. Correlation always
-    # uses the row's transactionDate, never poll time.
-    # ----------------------------------------------------------------
+    ingest_token: ''
     poll_enabled: true
-    # The POS agent reports transactionDate in this timezone (its
-    # transactionEndDate is UTC, ~4h behind). pos_event_at is normalised
-    # to UTC on ingest so it correlates with the UTC CCTV segments.
-    # IANA name or fixed offset (e.g. "+04:00").
-    pos_timezone: "Asia/Dubai"
+    pos_timezone: Asia/Dubai
     base_url: http://localhost:8081
     info_path: /pos/data/info
-    # Per-workstation range feed: ?workstationId=<id>&start=<ISO>&end=<ISO>
     transactions_path: /pos/data/transactions
-    poll_every_seconds: 300        # query the agent every 5 minutes
+    poll_every_seconds: 300
     request_timeout_sec: 30
-    # First poll with no checkpoint looks back this far; subsequent polls
-    # resume from the per-workstation cursor.
     poll_lookback_seconds: 900
     require_negative_amount: true
-    # Return-counter workstations (canonical terminal_id after TillShield
-    # normalisation). Only these open cases via the poller.
     allowed_workstation_ids:
-      - "52"
-    # Each allow-listed workstation MUST map to a camera id defined under
-    # cameras: above, and that camera MUST carry a real rtsp_url.
+    - '52'
     workstation_camera_map:
-      "52": cam_return_01
+      '52': cam_return_01
