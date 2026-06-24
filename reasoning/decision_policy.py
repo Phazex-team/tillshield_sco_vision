@@ -182,14 +182,18 @@ def summary_from_vlm(parsed: dict, *, footage_valid: bool,
         for t in perception_tracks
         if isinstance(t, dict)
     )
+    # Counter/staff zones are matched by name (substring), so operator
+    # zones like ``counter_zone_vlm`` satisfy the gate, not only the
+    # literal ``counter_zone``. ``entered_<zone>`` events are emitted with
+    # the actual zone name, so accept any such event for a handover zone.
+    from perception.temporal_memory import is_handover_zone
     item_reaches_counter = any(
         bool(t.get("physical_item_candidate"))
-        and any(z in (t.get("zones") or [])
-                for z in ("counter_zone", "staff_zone"))
-        and any(e in (t.get("events") or [])
-                for e in ("handover_candidate",
-                          "entered_counter_zone",
-                          "entered_staff_zone"))
+        and any(is_handover_zone(z) for z in (t.get("zones") or []))
+        and ("handover_candidate" in (t.get("events") or [])
+             or any(e.startswith("entered_")
+                    and is_handover_zone(e[len("entered_"):])
+                    for e in (t.get("events") or [])))
         for t in perception_tracks
         if isinstance(t, dict)
     )

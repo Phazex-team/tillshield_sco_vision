@@ -25,11 +25,12 @@ def select_keyframes(tracks: list[Track],
             frame_id=first.frame_id, frame_idx=first.frame_idx,
             ts=first.ts, role="first_appearance", track_id=t.track_id,
         ))
-        # Counter placement: first detection inside counter_zone.
+        # Counter placement: first detection inside a counter zone
+        # (matched by name, e.g. counter_zone / counter_zone_vlm).
+        from .temporal_memory import is_counter_zone
         for det_idx in t.detections:
             det = detections[det_idx]
-            if "counter_zone" in t.zones and \
-                    "counter_zone" in t.events[:1] + [f for f in t.events]:
+            if any(is_counter_zone(z) for z in t.zones):
                 keyframes.append(Keyframe(
                     frame_id=det.frame_id, frame_idx=det.frame_idx,
                     ts=det.ts, role="counter_placement",

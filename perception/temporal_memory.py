@@ -13,6 +13,22 @@ from typing import Optional
 from .schemas import Detection, Track
 
 
+# Zone-role matching is by SUBSTRING (case-insensitive), not exact name, so
+# operator-named zones like ``counter_zone_vlm`` or ``main_counter`` still
+# drive the decision-policy counter/staff gate. The literal ``counter_zone``
+# / ``staff_zone`` convention keeps working as a special case.
+def is_counter_zone(name: str) -> bool:
+    return "counter" in (name or "").lower()
+
+
+def is_staff_zone(name: str) -> bool:
+    return "staff" in (name or "").lower()
+
+
+def is_handover_zone(name: str) -> bool:
+    return is_counter_zone(name) or is_staff_zone(name)
+
+
 @dataclass
 class Zone:
     name: str
@@ -68,8 +84,7 @@ def annotate_tracks(tracks: list[Track],
                        for label in receipt_labels)
         handover_candidate = (
             physical and
-            any(z in zones_visited for z in
-                ("counter_zone", "staff_zone"))
+            any(is_handover_zone(z) for z in zones_visited)
         )
         if handover_candidate:
             events.append("handover_candidate")
