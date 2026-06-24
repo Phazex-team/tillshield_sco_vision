@@ -1984,7 +1984,9 @@ function renderRoiModels() {
 document.getElementById("roi-reload").onclick = refreshRois;
 document.getElementById("roi-camera").onchange = loadSelectedRoi;
 document.getElementById("roi-add-zone").onclick = () => {
-  const id = document.getElementById("roi-new-id").value.trim();
+  // Auto-convert spaces/dashes to underscores so "Counter Zone" works.
+  const id = document.getElementById("roi-new-id").value
+    .trim().replace(/[\s-]+/g, "_");
   const ss = document.getElementById("roi-save-status");
   if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(id)) {
     ss.className = "save-status err";
