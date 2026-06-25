@@ -64,25 +64,31 @@ class Sam2Client:
         except Exception as exc:
             self._load_err = f"sam2 import failed: {exc}"
             raise
-        # Try a few well-known load paths so we work across the sam2
-        # package versions; from_pretrained is the official entry point
-        # on recent releases.
+        # from_pretrained is the official entry point on recent releases, but
+        # it expects a Hugging Face REPO ID — handing it a local directory
+        # path raises KeyError (repo-id lookup miss) / AttributeError /
+        # TypeError depending on the sam2 version. On ANY such failure, fall
+        # back to building from the local checkpoint we actually have on disk,
+        # using the PACKAGED hydra config NAME (Hydra resolves config names
+        # from the sam2 package's config dir, not from an arbitrary file path).
         try:
-            self._predictor = SAM2ImagePredictor.from_pretrained(
-                self.model_path, device=self.device)
-        except TypeError:
-            self._predictor = SAM2ImagePredictor.from_pretrained(
-                self.model_path)
-        except AttributeError:
+            try:
+                self._predictor = SAM2ImagePredictor.from_pretrained(
+                    self.model_path, device=self.device)
+            except TypeError:
+                self._predictor = SAM2ImagePredictor.from_pretrained(
+                    self.model_path)
+        except Exception as exc_fp:
             from sam2.build_sam import build_sam2  # type: ignore
             ckpt = _find_ckpt(self.model_path)
-            cfg = _find_cfg(self.model_path)
-            if not ckpt or not cfg:
+            if not ckpt:
                 self._load_err = (
-                    "no .pt checkpoint or hydra cfg under " + self.model_path)
+                    "sam2 from_pretrained failed (%r) and no local .pt "
+                    "checkpoint under %s" % (exc_fp, self.model_path))
                 raise RuntimeError(self._load_err)
+            cfg_name = _hydra_cfg_for_ckpt(ckpt)
             self._predictor = SAM2ImagePredictor(
-                build_sam2(cfg, ckpt, device=self.device))
+                build_sam2(cfg_name, ckpt, device=self.device))
 
     def segment(self,
                 image,
@@ -132,9 +138,21 @@ def _find_ckpt(path: str) -> Optional[str]:
     return None
 
 
-def _find_cfg(path: str) -> Optional[str]:
-    from pathlib import Path
-    for p in sorted(Path(path).iterdir()):
-        if p.suffix in (".yaml", ".yml") and "config" in p.name.lower():
-            return str(p)
-    return None
+def _hydra_cfg_for_ckpt(ckpt_path: str) -> str:
+    """Map a local SAM 2 checkpoint to the PACKAGED hydra config name that
+    ``build_sam2`` resolves from the installed ``sam2`` package (e.g.
+    ``configs/sam2/sam2_hiera_l.yaml``). Hydra needs the package-relative
+    config NAME, not a local .yaml path — passing a filesystem path fails."""
+    name = os.path.basename(ckpt_path).lower()
+    ver = "sam2.1" if ("sam2.1" in name or "sam2_1" in name) else "sam2"
+    if "base_plus" in name or "baseplus" in name or "_b+" in name:
+        size = "b+"
+    elif "large" in name or "_hiera_l" in name or name.endswith("_l.pt"):
+        size = "l"
+    elif "small" in name or "_s" in name:
+        size = "s"
+    elif "tiny" in name or "_t" in name:
+        size = "t"
+    else:
+        size = "l"
+    return f"configs/{ver}/{ver}_hiera_{size}.yaml"

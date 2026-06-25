@@ -698,7 +698,7 @@ def update_camera_rois(camera_id: str,
 MODEL_CONTROL_SPECS: tuple[dict, ...] = (
     {
         "id": "falcon", "config_key": "falcon",
-        "label": "Falcon detector",
+        "label": "Perception (FL)",
         "role": "perception_detector",
         "dependencies": [],
         "independent": True,
@@ -708,12 +708,12 @@ MODEL_CONTROL_SPECS: tuple[dict, ...] = (
     },
     {
         "id": "sam2", "config_key": "sam2",
-        "label": "SAM 2 segmenter",
+        "label": "Segmenter (S2)",
         "role": "perception_segmenter",
         "dependencies": ["falcon"],
         "independent": False,
-        "caption": ("Uses Falcon boxes; no useful standalone mode in "
-                    "this pipeline."),
+        "caption": ("Uses Perception (FL) boxes; no useful standalone mode "
+                    "in this pipeline."),
         "default_when_missing": True,
     },
     {
@@ -722,26 +722,26 @@ MODEL_CONTROL_SPECS: tuple[dict, ...] = (
         "role": "perception_ocr",
         "dependencies": ["falcon"],
         "independent": False,
-        "caption": "Uses Falcon receipt/document detections.",
+        "caption": "Uses Perception (FL) receipt/document detections.",
         "default_when_missing": False,
     },
     {
         "id": "qwen3_vl", "config_key": "qwen3_vl",
-        "label": "Qwen3-VL primary verifier",
+        "label": "Vision Primary (Q)",
         "role": "vlm_primary",
         "dependencies": [],
         "independent": True,
-        "caption": "Independent VLM verifier.",
+        "caption": "Independent vision verifier.",
         "default_when_missing": True,
     },
     {
         "id": "gemma", "config_key": "gemma",
-        "label": "Gemma fallback verifier",
+        "label": "Vision Fallback (G)",
         "role": "vlm_fallback",
         "dependencies": [],
         "independent": True,
-        "caption": ("Fallback VLM verifier; safe to disable, but Qwen "
-                    "failures then have no VLM fallback."),
+        "caption": ("Fallback vision verifier; safe to disable, but a "
+                    "Vision Primary (Q) failure then has no fallback."),
         "default_when_missing": True,
     },
 )
@@ -774,17 +774,17 @@ def _model_control_warnings(state: dict) -> list[str]:
     warnings: list[str] = []
     if not state.get("falcon"):
         warnings.append(
-            "Falcon disabled: no perception track evidence will exist, "
-            "so cases will likely fall through to REVIEW.")
+            "Perception (FL) disabled: no perception track evidence will "
+            "exist, so cases will likely fall through to REVIEW.")
     if not state.get("qwen3_vl") and not state.get("gemma"):
         warnings.append(
-            "Both VLM providers disabled: the provider chain will return "
+            "Both vision providers disabled: the provider chain will return "
             "a structured error and the decision policy will degrade to "
-            "REVIEW. No VLM narrative will be available.")
+            "REVIEW. No vision narrative will be available.")
     if not state.get("gemma") and state.get("qwen3_vl"):
         warnings.append(
-            "Gemma fallback disabled: a Qwen3-VL failure will surface as "
-            "an error with no VLM fallback.")
+            "Vision Fallback (G) disabled: a Vision Primary (Q) failure will "
+            "surface as an error with no fallback.")
     return warnings
 
 
@@ -850,17 +850,18 @@ def _validate_model_control_update(payload: dict, current: dict) -> dict:
     if not (new_state.get("falcon") or new_state.get("qwen3_vl")
             or new_state.get("gemma")):
         raise HTTPException(status_code=400, detail={
-            "error": "at least one independent source must remain "
-                      "enabled: falcon, qwen3_vl, or gemma"})
+            "error": "at least one independent source must remain enabled: "
+                      "Perception (FL), Vision Primary (Q), or "
+                      "Vision Fallback (G)"})
     if new_state.get("sam2") and not new_state.get("falcon"):
         raise HTTPException(status_code=400, detail={
-            "error": ("sam2 cannot be enabled while falcon is disabled "
-                      "(SAM 2 consumes Falcon boxes; no useful "
-                      "standalone mode)")})
+            "error": ("Segmenter (S2) cannot be enabled while Perception (FL) "
+                      "is disabled (it consumes Perception (FL) boxes; no "
+                      "useful standalone mode)")})
     if new_state.get("ocr") and not new_state.get("falcon"):
         raise HTTPException(status_code=400, detail={
-            "error": ("ocr cannot be enabled while falcon is disabled "
-                      "(OCR runs on Falcon receipt/document "
+            "error": ("OCR cannot be enabled while Perception (FL) is disabled "
+                      "(OCR runs on Perception (FL) receipt/document "
                       "detections)")})
     return new_state
 
