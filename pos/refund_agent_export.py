@@ -164,7 +164,16 @@ def _export(case_id: str, cfg, conf: dict) -> None:
         payload = _build_payload(case, pos, vlm_out, window)
         prior = _prior_refund_id(s, case_id)
 
-        # ---- step 1: create (or update by re-sending same txn) ----
+        # ---- step 1: create, or UPDATE an existing refund ----
+        # The agent does NOT upsert by pos_transaction_id (re-POSTing create
+        # makes a DUPLICATE). So if this case was already exported and we have
+        # no explicit update_path, SKIP — never create a duplicate on
+        # reprocess. Once update_path is configured, use it to update in place.
+        if prior and not conf["update_path"]:
+            log.info("refund export: case %s already exported (refund_id=%s) "
+                     "and no update_path set; skipping to avoid a duplicate",
+                     case_id[:8], prior)
+            return
         if prior and conf["update_path"]:
             url = conf["base_url"] + conf["update_path"].replace(
                 "{refund_id}", prior).replace("{id}", prior)
