@@ -191,7 +191,7 @@
   <button data-tab="cases" class="active">Cases</button>
   <button data-tab="pipeline">Pipeline</button>
   <button data-tab="cameras">Cameras</button>
-  <button data-tab="prompts">Prompts</button>
+  <button data-tab="prompts">Rules</button>
   <button data-tab="rois">Camera ROIs</button>
   <button data-tab="storage">Storage</button>
   <button data-tab="config">Config</button>
@@ -260,7 +260,7 @@
             <div id="summary-vlm" style="font-size:12px;line-height:1.5">—</div>
           </div>
           <div>
-            <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Perception (Falcon)</div>
+            <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Perception (FL)</div>
             <div id="summary-falcon" style="font-size:12px;line-height:1.5">—</div>
           </div>
           <div>
@@ -446,7 +446,7 @@
   <!-- ===================== PROMPTS TAB ===================== -->
   <section class="tab-pane" id="tab-prompts">
     <section class="panel">
-      <h2>Prompt editor</h2>
+      <h2>Rules editor</h2>
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
         Edits go through <code>PATCH /api/v1/admin/prompts/{camera_id}</code>.
         The backend refuses unsafe phrasing and writes an audit log
@@ -464,15 +464,15 @@
       </div>
       <div class="prompt-area">
         <label>
-          <span style="font-size:12px;color:var(--muted)">Falcon prompt (perception)</span>
+          <span style="font-size:12px;color:var(--muted)">Perception Objects(FL)</span>
           <textarea id="prompt-falcon"></textarea>
         </label>
         <label>
-          <span style="font-size:12px;color:var(--muted)">VLM system prompt (Gemma / Qwen)</span>
+          <span style="font-size:12px;color:var(--muted)">Vision System Rule (G/Q)</span>
           <textarea id="prompt-gemma-system"></textarea>
         </label>
         <label>
-          <span style="font-size:12px;color:var(--muted)">VLM user prompt (Gemma / Qwen)</span>
+          <span style="font-size:12px;color:var(--muted)">Vision User Rule (G/Q)</span>
           <textarea id="prompt-gemma-user"></textarea>
         </label>
       </div>
@@ -480,7 +480,7 @@
         Safety scan (live load): <span id="prompt-safety">—</span>
       </div>
       <div class="row" style="margin-top:12px;justify-content:flex-end">
-        <button id="prompt-save" class="primary">Save prompts</button>
+        <button id="prompt-save" class="primary">Save rules</button>
       </div>
       <div class="save-status" id="prompt-save-status"></div>
     </section>
@@ -494,11 +494,11 @@
         Numeric ROI editor with optional visual calibration. Each ROI is
         a labeled <code>(x, y, w, h)</code> in source-frame pixels. Per-model
         assignments control how the active pipeline crops or filters
-        evidence: <strong>Falcon</strong> crops to the union and
+        evidence: <strong>Perception (FL)</strong> crops to the union and
         translates detection boxes back to full frame;
-        <strong>SAM 2</strong> and <strong>OCR</strong> filter detections
-        whose centre falls inside the assigned union; <strong>Qwen3-VL</strong>
-        / <strong>Gemma</strong> receive labeled crops plus an optional
+        <strong>Segmenter (S2)</strong> and <strong>OCR</strong> filter detections
+        whose centre falls inside the assigned union; <strong>Vision Primary (Q)</strong>
+        / <strong>Vision Fallback (G)</strong> receive labeled crops plus an optional
         full-frame overview, with the caption injected into the user
         prompt.
       </p>
@@ -539,7 +539,7 @@
       <p id="roi-canvas-hint" style="font-size:11px;color:var(--muted);margin:0 0 12px 0" hidden>
         Select a row in the Zones table, then draw on the loaded frame.
         <strong>Rectangle</strong> (default): click-drag a box.
-        <strong>Polygon mode</strong> (used by Falcon/SAM2/OCR detection
+        <strong>Polygon mode</strong> (used by Perception (FL)/Segmenter (S2)/OCR detection
         filtering): click to drop points around the area, then
         <em>Finish polygon</em> (needs ≥ 3 points). Coordinates are
         recorded against the snapshot's <em>source</em> dimensions; the
@@ -616,8 +616,8 @@
         Config-level enable/disable for each stage. Changes apply to the
         <strong>next case or reprocess only</strong> &mdash; an
         analysis already in flight keeps the snapshot it loaded at
-        start. This panel never starts, stops, or restarts vLLM, the
-        Gemma server, the segment recorder, or any other process; those
+        start. This panel never starts, stops, or restarts the vision
+        servers, the segment recorder, or any other process; those
         remain managed externally. No memory is freed by toggling.
       </p>
       <div id="model-controls-list"></div>
@@ -834,8 +834,8 @@ function renderTimingsLegend(reasoning, timingsPayload) {
     ["NVR acquisition",      t ? t.nvr_acquisition_ms : null],
     ["Window build / adopt", t ? t.window_build_ms : null],
     ["Perception total",     t ? t.perception_total_ms : null],
-    ["  Falcon",             t && t.perception ? t.perception.falcon_ms : null],
-    ["  SAM 2",              t && t.perception ? t.perception.sam2_ms : null],
+    ["  Perception (FL)",    t && t.perception ? t.perception.falcon_ms : null],
+    ["  Segmenter (S2)",     t && t.perception ? t.perception.sam2_ms : null],
     ["  OCR",                t && t.perception ? t.perception.ocr_ms : null],
     ["Manifest frame extract", t ? t.manifest_frame_extract_ms : null],
     ["VLM ROI prepare",      t ? t.vlm_roi_prepare_ms : null],
@@ -1486,8 +1486,8 @@ async function refreshOps() {
       statusCard("Memory guard", s.memory),
       statusCard("Disk / storage", s.storage),
       statusCard("Provider chain", s.provider_chain),
-      statusCard("Qwen3-VL (vLLM)", s.qwen_vllm),
-      statusCard("Gemma fallback", s.gemma),
+      statusCard("Vision Primary (Q)", s.qwen_vllm),
+      statusCard("Vision Fallback (G)", s.gemma),
       statusCard("TillShield poller", s.tillshield),
       statusCard("Cases", s.cases),
     ];
@@ -1883,21 +1883,21 @@ document.getElementById("storage-execute").onclick = async () => {
 
 // ===================== CAMERA ROIs TAB =====================
 const ROI_MODELS = [
-  {id: "falcon",   label: "Falcon (detector)",
+  {id: "falcon",   label: "Perception (FL)",
    modes: ["union_crop"],
    note: "Crop union of assigned ROIs; detection boxes are translated back to full-frame coords."},
-  {id: "sam2",     label: "SAM 2 (segmenter)",
+  {id: "sam2",     label: "Segmenter (S2)",
    modes: ["filter_candidate_crops"],
-   note: "Filter detections whose centre falls inside the assigned ROI union before SAM 2."},
+   note: "Filter detections whose centre falls inside the assigned ROI union before segmentation."},
   {id: "ocr",      label: "OCR (receipt/document)",
    modes: ["filter_candidate_crops"],
    note: "Only OCR candidates whose centre is inside the assigned ROI union."},
-  {id: "qwen3_vl", label: "Qwen3-VL (primary VLM)",
+  {id: "qwen3_vl", label: "Vision Primary (Q)",
    modes: ["labeled_crops"],
    note: "Send labeled ROI crops + optional full-frame overview; caption is injected into the user prompt."},
-  {id: "gemma",    label: "Gemma (fallback VLM)",
+  {id: "gemma",    label: "Vision Fallback (G)",
    modes: ["labeled_crops"],
-   note: "Same labeled crops manifest as the primary, used on Gemma fallback."},
+   note: "Same labeled crops manifest as the primary, used on fallback."},
 ];
 let _roiCache = {};        // camera_id -> latest server payload
 let _roiState = null;      // editable working copy for the selected camera
@@ -2467,33 +2467,34 @@ function _modelControlsLocalValidation(state) {
   // they hit Save. Never mutate state here.
   const issues = [];
   if (!state.falcon && !state.qwen3_vl && !state.gemma) {
-    issues.push("At least one of Falcon / Qwen3-VL / Gemma must remain "
-                + "enabled (an independent source is required).");
+    issues.push("At least one of Perception (FL) / Vision Primary (Q) / "
+                + "Vision Fallback (G) must remain enabled (an independent "
+                + "source is required).");
   }
   if (state.sam2 && !state.falcon) {
-    issues.push("SAM 2 cannot run while Falcon is disabled — it consumes "
-                + "Falcon boxes.");
+    issues.push("Segmenter (S2) cannot run while Perception (FL) is disabled "
+                + "— it consumes Perception (FL) boxes.");
   }
   if (state.ocr && !state.falcon) {
-    issues.push("OCR cannot run while Falcon is disabled — it runs on "
-                + "Falcon receipt/document detections.");
+    issues.push("OCR cannot run while Perception (FL) is disabled — it runs "
+                + "on Perception (FL) receipt/document detections.");
   }
   return issues;
 }
 function _modelControlsAdvisoryWarnings(state) {
   const warnings = [];
   if (!state.falcon) {
-    warnings.push("Falcon disabled: no track evidence will exist, so "
-                  + "cases will likely fall through to REVIEW.");
+    warnings.push("Perception (FL) disabled: no track evidence will exist, "
+                  + "so cases will likely fall through to REVIEW.");
   }
   if (!_vlmEnabled(state)) {
-    warnings.push("Both VLM providers disabled: provider chain will "
+    warnings.push("Both vision providers disabled: provider chain will "
                   + "return a structured error and the decision policy "
                   + "will degrade to REVIEW.");
   }
   if (state.qwen3_vl && !state.gemma) {
-    warnings.push("Gemma fallback disabled: a Qwen3-VL failure will "
-                  + "surface as an error with no VLM fallback.");
+    warnings.push("Vision Fallback (G) disabled: a Vision Primary (Q) failure "
+                  + "will surface as an error with no vision fallback.");
   }
   return warnings;
 }
