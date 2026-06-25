@@ -78,14 +78,26 @@ def test_legacy_review_only_still_verified_with_real_track():
     from reasoning.decision_policy import (
         OUTCOME_VERIFIED, decide, summary_from_vlm,
     )
-    perception = {"tracks": [{
-        "track_id": "track_real",
-        "label": "shopping bag",
-        "physical_item_candidate": True,
-        "zones": ["counter_zone"],
-        "events": ["entered_counter_zone", "handover_candidate"],
-        "confidence": 0.9,
-    }]}
+    perception = {"tracks": [
+        {
+            "track_id": "track_real",
+            "label": "shopping bag",
+            "physical_item_candidate": True,
+            "zones": ["counter_zone"],
+            "events": ["entered_counter_zone", "handover_candidate"],
+            "confidence": 0.9,
+        },
+        # Customer on the customer side — required for VERIFIED since the
+        # customer_present gate was added.
+        {
+            "track_id": "track_person",
+            "label": "person",
+            "physical_item_candidate": False,
+            "zones": ["customer_zone"],
+            "events": [],
+            "confidence": 0.9,
+        },
+    ]}
     summary = summary_from_vlm(
         {"handover_occurred": True, "physical_item_presented": True,
          "receipt_visible": True, "confidence": "high"},

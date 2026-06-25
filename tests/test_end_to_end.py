@@ -68,11 +68,14 @@ def client(tmp_path, monkeypatch):
         }
 
     def patched(s, case_id, perception_runner=None, vlm_runner=None,
-                prompt_version="return_review_v1"):
+                prompt_version="return_review_v1", **kwargs):
+        # ``**kwargs`` tolerates new pass-through params the caller may add
+        # (e.g. pre_roll_sec/post_roll_sec from the retime-window feature)
+        # without this stub needing to track every signature change.
         return real(s, case_id,
                     perception_runner=perception_runner or _stub_perception,
                     vlm_runner=vlm_runner or _stub_vlm,
-                    prompt_version=prompt_version)
+                    prompt_version=prompt_version, **kwargs)
     monkeypatch.setattr("app.api.cases.analyze_case", patched)
 
     from fastapi.testclient import TestClient

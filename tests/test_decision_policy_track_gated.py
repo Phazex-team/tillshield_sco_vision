@@ -68,7 +68,18 @@ def test_real_track_evidence_enables_verified():
                 "zones": ["customer_zone", "counter_zone"],
                 "events": ["entered_counter_zone", "handover_candidate"],
                 "confidence": 0.85,
-            }
+            },
+            # A real person on the customer side — required for VERIFIED since
+            # the customer_present gate was added (prevents clearing a
+            # staff-only refund with no customer present).
+            {
+                "tracker_id": "track_person",
+                "label": "person",
+                "physical_item_candidate": False,
+                "zones": ["customer_zone"],
+                "events": [],
+                "confidence": 0.9,
+            },
         ]
     }
     summary = summary_from_vlm(_vlm_says_clean_handover(),
@@ -76,6 +87,7 @@ def test_real_track_evidence_enables_verified():
                                perception_result=perception)
     assert summary.physical_item_track is True
     assert summary.item_reaches_counter is True
+    assert summary.customer_present is True
     decision = decide(summary)
     assert decision.outcome == OUTCOME_VERIFIED
 

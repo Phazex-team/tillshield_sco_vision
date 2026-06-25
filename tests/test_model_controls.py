@@ -78,9 +78,13 @@ def test_get_model_controls_returns_all_five_with_metadata(client):
     assert by_id["falcon"]["independent"] is True
     assert by_id["sam2"]["independent"] is False
     assert by_id["qwen3_vl"]["independent"] is True
-    # Operator-facing copy is the same wording as the UI captions.
+    # Operator-facing copy is the same wording as the UI captions. (Model
+    # names are deliberately hidden behind the client-facing scheme:
+    # Perception (FL) / Segmenter (S2) / Vision Primary (Q) / Fallback (G).)
     assert "Independent detector" in by_id["falcon"]["caption"]
-    assert "Falcon" in by_id["sam2"]["caption"]
+    assert "Perception (FL)" in by_id["sam2"]["caption"]
+    assert by_id["sam2"]["label"] == "Segmenter (S2)"
+    assert by_id["falcon"]["label"] == "Perception (FL)"
     # config_key points at the YAML field this surface manages.
     assert by_id["falcon"]["config_key"] == "models.falcon.enabled"
     assert by_id["ocr"]["config_key"] == "models.falcon_ocr.enabled"
@@ -162,7 +166,7 @@ def test_patch_rejects_only_sam2_ocr_enabled(client):
     err = r.json()["detail"]["error"]
     # Either the at-least-one rule OR the SAM2/OCR-needs-Falcon rule
     # may fire first. Both are acceptable rejections.
-    assert ("independent source" in err) or ("falcon is disabled" in err)
+    assert ("independent source" in err) or ("Perception (FL) is disabled" in err)
 
 
 def test_patch_rejects_sam2_when_falcon_disabled(client):
@@ -171,7 +175,7 @@ def test_patch_rejects_sam2_when_falcon_disabled(client):
         "qwen3_vl": True, "gemma": True,
     })
     assert r.status_code == 400
-    assert "sam2" in r.json()["detail"]["error"].lower()
+    assert "segmenter (s2)" in r.json()["detail"]["error"].lower()
 
 
 def test_patch_rejects_ocr_when_falcon_disabled(client):
@@ -465,9 +469,9 @@ def test_review_ui_has_model_controls_panel():
         assert mid in src
     # Captions / dependency warnings — backend's exact UI wording
     # must appear somewhere so a local validation prompt is visible.
-    assert "SAM 2 cannot run while Falcon is disabled" in src
-    assert "OCR cannot run while Falcon is disabled" in src
-    assert "VLM providers disabled" in src
+    assert "Segmenter (S2) cannot run while Perception (FL) is disabled" in src
+    assert "OCR cannot run while Perception (FL) is disabled" in src
+    assert "vision providers disabled" in src
     # Hard contract: changes apply to the NEXT case, no process is
     # started/stopped, no memory freed.
     assert "next case or reprocess" in src
