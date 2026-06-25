@@ -24,6 +24,12 @@ _REPROCESS_POOL = ThreadPoolExecutor(max_workers=1,
                                      thread_name_prefix="reprocess")
 atexit.register(lambda: _REPROCESS_POOL.shutdown(wait=False))
 
+# Outbound result export to the refund agent runs on its OWN single worker so
+# the (slow) video render + HTTP upload never delays the analysis queue. The
+# export is fully guarded and one-way — it cannot affect analysis/evidence.
+_EXPORT_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="export")
+atexit.register(lambda: _EXPORT_POOL.shutdown(wait=False))
+
 
 def _run_reprocess(case_id: str, prior: dict,
                    pre_roll_sec=None, post_roll_sec=None) -> None:
@@ -62,6 +68,15 @@ def _run_reprocess(case_id: str, prior: dict,
         except Exception:
             log.exception("failed to record reprocess failure for %s",
                           case_id)
+    else:
+        # Analysis succeeded -> push the RESULT to the refund agent on the
+        # export pool (background). Guarded + one-way: a failure here never
+        # affects the case, the evidence, or the analysis.
+        try:
+            from pos.refund_agent_export import maybe_export_case
+            _EXPORT_POOL.submit(maybe_export_case, case_id)
+        except Exception:
+            log.exception("failed to queue refund-agent export for %s", case_id)
 
 
 def _drain_reprocess_pool() -> None:

@@ -149,6 +149,7 @@ settings:
 models:
   falcon:
     name: tiiuae/Falcon-Perception
+    enabled: true
   gemma:
     name: google/gemma-4-26B-A4B-it
     vllm_url: http://localhost:8001
@@ -157,6 +158,7 @@ models:
     request_timeout_sec: 300
     request_retries: 3
     request_retry_backoff_sec: 5
+    enabled: true
   qwen3_vl:
     enabled: true
     name: Qwen/Qwen3-VL-30B-A3B-Instruct
@@ -179,7 +181,7 @@ models:
     local_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
   sam2:
     name: facebook/sam2-hiera-large
-    enabled: true
+    enabled: false
   falcon_ocr:
     name: tiiuae/Falcon-OCR
     enabled: false
@@ -229,3 +231,16 @@ integrations:
     - '52'
     workstation_camera_map:
       '52': cam_return_01
+  # Outbound: push analysis RESULTS (+ boxed/face-masked clip) to the refund
+  # agent. One-way export; never affects our analysis/evidence. Same host we
+  # already poll; location may change so base_url is configurable.
+  refund_agent:
+    enabled: true
+    base_url: http://localhost:8081
+    create_path: /events/refund
+    evidence_path: /events/refund/evidence
+    update_path: ''            # empty => re-POST create (agent upserts by pos_transaction_id)
+    timeout_sec: 30
+    send_video: true
+    mask_customer_faces: true  # blur top of customer-zone person boxes in the EXPORT clip only
+    face_blur_strength: light  # light | medium
