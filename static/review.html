@@ -256,7 +256,7 @@
         <div id="summary-outcome" style="font-size:15px;font-weight:600;margin-bottom:10px">—</div>
         <div class="summary-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
           <div>
-            <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">VLM verdict</div>
+            <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Vision verdict</div>
             <div id="summary-vlm" style="font-size:12px;line-height:1.5">—</div>
           </div>
           <div>
@@ -734,6 +734,19 @@ function boolCell(v) {
   if (v === false) return '<span style="color:var(--high,#e0843b)">✗ no</span>';
   return '<span style="color:var(--muted)">—</span>';
 }
+// Client-facing display name for a provider/model value. The backend still
+// stores the real names (gemma / qwen3_vl / HF paths) — this only changes what
+// the UI renders, so proprietary model identities aren't shown to clients.
+function visionLabel(v) {
+  const s = String(v || "").toLowerCase();
+  if (!s) return "—";
+  if (s.includes("qwen")) return "Vision Primary (Q)";
+  if (s.includes("gemma")) return "Vision Fallback (G)";
+  if (s.includes("falcon")) return "Perception (FL)";
+  if (s.includes("sam")) return "Segmenter (S2)";
+  if (s === "chain") return "Vision chain";
+  return "Vision";
+}
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;",
@@ -838,8 +851,8 @@ function renderTimingsLegend(reasoning, timingsPayload) {
     ["  Segmenter (S2)",     t && t.perception ? t.perception.sam2_ms : null],
     ["  OCR",                t && t.perception ? t.perception.ocr_ms : null],
     ["Manifest frame extract", t ? t.manifest_frame_extract_ms : null],
-    ["VLM ROI prepare",      t ? t.vlm_roi_prepare_ms : null],
-    ["VLM total",            t ? t.vlm_total_ms : null],
+    ["Vision ROI prepare",   t ? t.vlm_roi_prepare_ms : null],
+    ["Vision total",         t ? t.vlm_total_ms : null],
     ["Decision policy",      t ? t.decision_ms : null],
     ["Package write",        t ? t.package_write_ms : null],
   ];
@@ -852,11 +865,11 @@ function renderTimingsLegend(reasoning, timingsPayload) {
   // does NOT hide the fact that a particular provider served the case.
   const providerRow = document.createElement("tr");
   providerRow.innerHTML =
-    `<td>VLM provider used</td><td>${provider ? escapeHtml(provider) : dash}</td>`;
+    `<td>Vision provider used</td><td>${provider ? escapeHtml(visionLabel(provider)) : dash}</td>`;
   tbody.appendChild(providerRow);
   const modelRow = document.createElement("tr");
   modelRow.innerHTML =
-    `<td>VLM model</td><td>${model ? escapeHtml(model) : dash}</td>`;
+    `<td>Vision model</td><td>${model ? escapeHtml(visionLabel(model)) : dash}</td>`;
   tbody.appendChild(modelRow);
   const statusRow = document.createElement("tr");
   const statusText = status ? escapeHtml(status) : dash;
@@ -864,11 +877,11 @@ function renderTimingsLegend(reasoning, timingsPayload) {
     ? ` <span style="color:var(--high)">(${escapeHtml(vlmError).slice(0,200)})</span>`
     : "";
   statusRow.innerHTML =
-    `<td>VLM status</td><td>${statusText}${errSuffix}</td>`;
+    `<td>Vision status</td><td>${statusText}${errSuffix}</td>`;
   tbody.appendChild(statusRow);
   const latencyRow = document.createElement("tr");
   latencyRow.innerHTML =
-    `<td>VLM latency</td><td>${fmtMs(vlmLatency)}</td>`;
+    `<td>Vision latency</td><td>${fmtMs(vlmLatency)}</td>`;
   tbody.appendChild(latencyRow);
 }
 
@@ -911,20 +924,20 @@ function renderCaseSummary(pkg, c, window_) {
   // VLM verdict.
   const runs = (pkg && pkg.reasoning) || [];
   const run = runs.length ? runs[runs.length - 1] : null;
-  let vlmHtml = '<span class="pill UNKNOWN">no VLM run</span>';
+  let vlmHtml = '<span class="pill UNKNOWN">no Vision run</span>';
   if (run) {
     const out = _vlmOut(run);
     const attempts = out._chain_attempts || [];
     const ran = run.status === "SUCCEEDED" &&
                 (out.narrative || out.handover_occurred !== undefined);
     if (!ran && attempts.length && attempts.every(a => /=err|err:/i.test(a))) {
-      vlmHtml = '<span class="pill ERROR">VLM did not run</span> all providers errored';
+      vlmHtml = '<span class="pill ERROR">Vision did not run</span> all providers errored';
     } else {
       const ho = out.handover_occurred;
       const items = (out.item_count != null) ? out.item_count
         : (Array.isArray(out.items_handed_over) ? out.items_handed_over.length : null);
       vlmHtml =
-        `provider <strong>${escapeHtml(run.provider || "?")}</strong> · ` +
+        `provider <strong>${escapeHtml(visionLabel(run.provider))}</strong> · ` +
         `handover: <strong>${ho === true ? "YES" : ho === false ? "NO" : "?"}</strong> · ` +
         `items: <strong>${items != null ? items : "?"}</strong>` +
         (out.confidence ? ` · conf ${escapeHtml(String(out.confidence))}` : "") +
@@ -971,7 +984,7 @@ function renderCaseSummary(pkg, c, window_) {
   }
   document.getElementById("summary-evidence").innerHTML =
     `${escapeHtml(srcLabel)}` +
-    (frames != null ? `<div style="margin-top:5px;color:var(--muted)">${frames} frames sent to VLM</div>` : "") +
+    (frames != null ? `<div style="margin-top:5px;color:var(--muted)">${frames} frames sent to Vision</div>` : "") +
     span;
 }
 
@@ -1250,8 +1263,8 @@ async function openCase(caseId) {
   }
   for (const r of (pkg?.reasoning || [])) {
     if (r.started_at || r.output)
-      events.push({ ts: r.started_at || "", kind: "VLM_RUN",
-                    label: `${r.provider}: ${r.status || ""}` });
+      events.push({ ts: r.started_at || "", kind: "VISION_RUN",
+                    label: `${visionLabel(r.provider)}: ${r.status || ""}` });
   }
   if (pkg?.case?.closed_at)
     events.push({ ts: pkg.case.closed_at, kind: "CASE_CLOSED",
