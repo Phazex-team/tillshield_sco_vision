@@ -202,7 +202,7 @@
   <section class="tab-pane active" id="tab-cases">
     <section class="panel" id="queue-panel">
       <h2>Case Queue</h2>
-      <div class="row" style="margin-bottom: 12px">
+      <div class="row" style="margin-bottom: 12px; flex-wrap: wrap; gap: 10px; align-items: flex-end">
         <label class="field">
           Outcome
           <select id="filter-outcome">
@@ -223,6 +223,48 @@
             <option>REPROCESSING</option>
           </select>
         </label>
+        <label class="field">
+          Date from
+          <input type="date" id="filter-date-from"/>
+        </label>
+        <label class="field">
+          Date to
+          <input type="date" id="filter-date-to"/>
+        </label>
+        <label class="field">
+          Staff
+          <input type="text" id="filter-staff" placeholder="staff id" style="width:110px"/>
+        </label>
+        <label class="field">
+          Customer
+          <select id="filter-customer">
+            <option value="">any</option>
+            <option value="yes">yes</option>
+            <option value="no">no</option>
+          </select>
+        </label>
+        <label class="field">
+          Handover
+          <select id="filter-handover">
+            <option value="">any</option>
+            <option value="yes">yes</option>
+            <option value="no">no</option>
+          </select>
+        </label>
+        <label class="field">
+          Item
+          <select id="filter-item">
+            <option value="">any</option>
+            <option value="yes">yes</option>
+            <option value="no">no</option>
+          </select>
+        </label>
+        <label class="field">
+          Search
+          <input type="text" id="filter-search" placeholder="case / txn id" style="width:150px"/>
+        </label>
+        <button id="filter-clear" type="button" style="font-size:12px">Clear filters</button>
+        <span id="filter-count" style="font-size:12px;color:var(--muted)"></span>
       </div>
       <table id="case-table">
         <thead>
@@ -693,18 +735,54 @@ async function refreshMemory() {
   }
 }
 
+// Client-side filters (date / staff / customer / search). Kept client-side
+// so they work with no backend change — Outcome+Status stay server-side.
+function _caseMatchesFilters(row) {
+  const p = row.pos_event || {};
+  const v = id => (document.getElementById(id)?.value || "").trim();
+  const dFrom = v("filter-date-from"), dTo = v("filter-date-to");
+  const staff = v("filter-staff").toLowerCase();
+  const cust = v("filter-customer");
+  const handover = v("filter-handover");
+  const item = v("filter-item");
+  const search = v("filter-search").toLowerCase();
+  const posDate = (p.pos_event_at || "").slice(0, 10);  // YYYY-MM-DD
+  if (dFrom && posDate && posDate < dFrom) return false;
+  if (dTo && posDate && posDate > dTo) return false;
+  if (staff && !String(p.staff_id || "").toLowerCase().includes(staff)) return false;
+  if (cust === "yes" && row.customer_present !== true) return false;
+  if (cust === "no" && row.customer_present !== false) return false;
+  if (handover === "yes" && row.handover_occurred !== true) return false;
+  if (handover === "no" && row.handover_occurred !== false) return false;
+  if (item === "yes" && row.item_presented !== true) return false;
+  if (item === "no" && row.item_presented !== false) return false;
+  if (search) {
+    const hay = (row.id + " " + (p.transaction_id || "")).toLowerCase();
+    if (!hay.includes(search)) return false;
+  }
+  return true;
+}
+
 async function refreshCases() {
   const outcome = document.getElementById("filter-outcome").value;
   const status = document.getElementById("filter-status").value;
   const params = new URLSearchParams();
   if (outcome) params.set("outcome", outcome);
   if (status) params.set("status", status);
+  // Pull a larger page so the client-side date/staff/search filters have
+  // enough rows to work across (server caps at 500).
+  params.set("limit", "500");
   const r = await fetch(`${API}/cases?${params}`);
   const body = await r.json();
+  const rows = (body.items || []).filter(_caseMatchesFilters);
   const tbody = document.querySelector("#case-table tbody");
   tbody.innerHTML = "";
-  document.getElementById("queue-empty").hidden = body.count !== 0;
-  for (const row of body.items) {
+  document.getElementById("queue-empty").hidden = rows.length !== 0;
+  const fc = document.getElementById("filter-count");
+  if (fc) fc.textContent = rows.length === (body.items || []).length
+    ? `${rows.length} case(s)`
+    : `${rows.length} of ${(body.items || []).length} shown`;
+  for (const row of rows) {
     const tr = document.createElement("tr");
     tr.className = "row-link";
     tr.dataset.id = row.id;
@@ -1456,6 +1534,22 @@ document.getElementById("refresh").onclick = () => {
 };
 document.getElementById("filter-outcome").onchange = refreshCases;
 document.getElementById("filter-status").onchange = refreshCases;
+// New Cases-tab filters (client-side). Text inputs filter as you type.
+for (const id of ["filter-date-from", "filter-date-to", "filter-customer",
+                  "filter-handover", "filter-item"]) {
+  document.getElementById(id).onchange = refreshCases;
+}
+for (const id of ["filter-staff", "filter-search"]) {
+  document.getElementById(id).oninput = refreshCases;
+}
+document.getElementById("filter-clear").onclick = () => {
+  for (const id of ["filter-outcome", "filter-status", "filter-date-from",
+                    "filter-date-to", "filter-staff", "filter-customer",
+                    "filter-handover", "filter-item", "filter-search"]) {
+    document.getElementById(id).value = "";
+  }
+  refreshCases();
+};
 
 // ===================== PIPELINE TAB =====================
 function statusCard(title, panel) {
