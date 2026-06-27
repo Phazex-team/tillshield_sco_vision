@@ -45,7 +45,8 @@ DEFAULT_FALCON_QUERY = (
 )
 
 
-def run_perception(session, case, window, *, cfg=None) -> dict:
+def run_perception(session, case, window, *, cfg=None,
+                   falcon_categories: Optional[dict[str, str]] = None) -> dict:
     """Default production runner. Reads the window MP4 from disk,
     samples frames, and drives the perception pipeline.
 
@@ -53,6 +54,12 @@ def run_perception(session, case, window, *, cfg=None) -> dict:
     loaded for this case. Passing it through avoids a second
     ``load_config()`` call that could pick up a mid-case ``config.yaml``
     edit. When omitted the snapshot is taken here.
+
+    ``falcon_categories`` (Phase 3 / SCO) is a per-case dict of
+    extra Falcon detection queries built from the POS basket via
+    ``perception.sku_translator.build_falcon_categories_from_pos``.
+    They are MERGED with FalconClient's defaults — reserved keys
+    (item/person/receipt) cannot be overwritten.
     """
     from app.config import load_config, resolve_model_path
 
@@ -118,6 +125,7 @@ def run_perception(session, case, window, *, cfg=None) -> dict:
             sam2_client=sam2_client,
             ocr_engine=ocr_engine,
             sampling=SamplingPolicy(),
+            falcon_categories=falcon_categories,
             falcon_roi_view=model_view(cfg, case.camera_id, "falcon"),
             sam2_roi_view=model_view(cfg, case.camera_id, "sam2"),
             ocr_roi_view=model_view(cfg, case.camera_id, "ocr"),
@@ -159,6 +167,7 @@ def run_perception_on_window(*,
                              window_start_ts: Optional[datetime] = None,
                              ocr_engine: Optional[OcrEngine] = None,
                              falcon_query: str = DEFAULT_FALCON_QUERY,
+                             falcon_categories: Optional[dict[str, str]] = None,
                              falcon_roi_view: Optional[dict] = None,
                              sam2_roi_view: Optional[dict] = None,
                              ocr_roi_view: Optional[dict] = None,
@@ -241,6 +250,7 @@ def run_perception_on_window(*,
             detections = falcon_client.detect_on_frames(
                 [(idx, ts, img) for idx, ts, img in frames],
                 query=falcon_query,
+                categories=falcon_categories,
                 roi_crop=falcon_crop,
             )
             for idx, ts, img in frames:

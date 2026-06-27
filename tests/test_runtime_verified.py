@@ -79,7 +79,7 @@ def _seed_pos(SM, *, pos_event_at):
             events=[PosEventIn(
                 store_id="store_1", terminal_id="t1",
                 transaction_id="txn-V", line_id="L1",
-                event_type="RETURN", pos_event_at=pos_event_at,
+                event_type="SALE", pos_event_at=pos_event_at,
             )],
         ))
         s.commit()
@@ -155,9 +155,15 @@ def test_analyze_case_verified_with_real_perception_track(tmp_path,
 
     from app.case_runner import analyze_case
     with SM() as s:
+        # This test exercises the legacy REFUND flow (handover semantics,
+        # customer_zone tracks, refund-shaped VLM output). The default
+        # prompt in SCO mode is sco_basket_match_v1 — explicitly opt
+        # into the legacy refund prompt so the legacy decision policy
+        # runs and VERIFIED is reachable.
         result = analyze_case(s, case_id,
                               perception_runner=_runtime_perception,
-                              vlm_runner=_stub_vlm)
+                              vlm_runner=_stub_vlm,
+                              prompt_version="return_review_v1")
     assert result["outcome"] == "VERIFIED", result
 
 

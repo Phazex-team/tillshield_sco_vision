@@ -48,7 +48,7 @@ def analyze_case(session: Session,
                  *,
                  perception_runner: Optional[Callable] = None,
                  vlm_runner: Optional[Callable] = None,
-                 prompt_version: str = "return_review_v1",
+                 prompt_version: Optional[str] = None,
                  manifest_max_frames: Optional[int] = None,
                  pre_roll_sec: Optional[float] = None,
                  post_roll_sec: Optional[float] = None,
@@ -106,6 +106,16 @@ def analyze_case(session: Session,
     if cfg is None:
         from app.config import load_config
         cfg = load_config()
+
+    # SCO Phase 5: prompt_version is config-driven. Callers may still
+    # override explicitly (tests do). Defaults to the SCO basket-match
+    # prompt; legacy callers can re-pin to return_review_v1 via config
+    # or kwarg.
+    if prompt_version is None:
+        prompt_version = (
+            (cfg.raw.get("reasoning") or {}).get("prompt_version")
+            or "sco_basket_match_v1"
+        )
 
     # ----- 1. Resolve window from segment index ----------------------
     storage_root = _storage_root(cfg)
@@ -218,12 +228,33 @@ def analyze_case(session: Session,
     if perception_runner is None:
         try:
             from perception.pipeline import run_perception
+            from perception.sku_translator import (
+                build_falcon_categories_from_pos,
+                init_translator,
+            )
             # Bind the config snapshot so the perception runner sees
             # the same enable/disable flags as the rest of the case.
             _cfg_snapshot = cfg
+            # SCO Phase 3: build Falcon categories from the POS basket
+            # so Falcon searches for the line items AND a generic
+            # catch-all. The translator is initialised lazily here from
+            # config-defined paths so v1 has zero network and a single
+            # source of truth.
+            sco_cfg = (cfg.raw.get("sco_checkout") if cfg else None) or {}
+            init_translator(
+                cache_path=sco_cfg.get("sku_cache_path"),
+                overrides_path=sco_cfg.get("sku_overrides_path"),
+            )
+            try:
+                _sco_falcon_categories = build_falcon_categories_from_pos(pos)
+            except Exception:
+                log.exception("sku_translator failed; using generic Falcon "
+                              "defaults only")
+                _sco_falcon_categories = None
 
             def _bound_perception(s, c, w):
-                return run_perception(s, c, w, cfg=_cfg_snapshot)
+                return run_perception(s, c, w, cfg=_cfg_snapshot,
+                                      falcon_categories=_sco_falcon_categories)
             perception_runner = _bound_perception
         except Exception as exc:
             log.warning("perception pipeline unavailable: %s", exc)
@@ -255,6 +286,37 @@ def analyze_case(session: Session,
     # Release the lock before keyframe extraction (ffmpeg) and the VLM
     # inference, which are the longest phases of the run.
     session.commit()
+
+    # ----- 3.5 Episode selection (SCO Phase 4) -----------------------
+    # Derive the SCO customer episode from the perception tracks BEFORE
+    # the VLM stage so the prompt + policy receive episode metadata.
+    # Falcon already ran on the wide POS window in one pass; the
+    # episode-selector only re-uses those tracks (no second detection).
+    _sco_episode = None
+    try:
+        from perception.episode_selector import select_sco_episode
+        sco_cfg = (cfg.raw.get("sco_checkout") if cfg else None) or {}
+        roi_name = sco_cfg.get("roi_name", "sco_audit_zone")
+        _t = time.perf_counter()
+        try:
+            ep = select_sco_episode(
+                (perception_result or {}).get("tracks") or [],
+                pos_time=pos.pos_event_at,
+                roi_name=roi_name,
+                window_start=(build.actual_start_at
+                              or plan.requested_start),
+                window_end=(build.actual_end_at
+                            or plan.requested_end),
+            )
+        finally:
+            timings["sco_episode_select_ms"] = _ms_since(_t)
+        _sco_episode = ep.to_dict()
+        log.info(
+            "sco_episode case=%s reason=%s ambiguous=%s coverage=%.2f",
+            case.id, ep.reason, ep.ambiguous, ep.coverage_ratio,
+        )
+    except Exception:
+        log.exception("sco episode selection failed (continuing without)")
 
     # ----- 4. Build the evidence manifest with REAL frames -----------
     window_start_naive = build.actual_start_at or plan.requested_start
@@ -303,15 +365,54 @@ def analyze_case(session: Session,
     from reasoning.providers.base import EvidenceManifest
     manifest_frames = list(sampled_frames)
     manifest_user_prompt = None
+    manifest_system_prompt = None
     manifest_meta: dict = {"prompt_version": prompt_version}
+    # SCO Phase 4: hand the episode meta to the VLM (Phase 5 prompt
+    # uses ambiguity/coverage to qualify its narrative) and to the
+    # policy (Phase 6 demands episode coverage for VERIFIED).
+    if _sco_episode is not None:
+        manifest_meta["sco_episode"] = _sco_episode
+
+    # SCO Phase 5: when the active prompt is sco_basket_match_v1, build
+    # the basket-match system + user prompts from POS + Falcon summary +
+    # episode metadata. The providers (Qwen3-VL, Gemma) honour
+    # manifest.system_prompt / manifest.user_prompt as overrides, so no
+    # provider-specific code change is needed here.
+    sco_user_prompt_only: Optional[str] = None
+    if prompt_version == "sco_basket_match_v1":
+        try:
+            from reasoning.prompts.sco_basket_match import build_sco_prompts
+            basket = ((pos.raw_payload or {}).get("items")
+                      if pos.raw_payload else None) or []
+            falcon_summary = _summarise_falcon_for_sco(perception_result)
+            manifest_meta["sco_falcon_summary"] = falcon_summary
+            manifest_system_prompt, sco_user_prompt_only = build_sco_prompts(
+                basket=basket,
+                falcon_summary=falcon_summary,
+                episode_meta=_sco_episode,
+            )
+            manifest_user_prompt = sco_user_prompt_only
+        except Exception:
+            log.exception("SCO prompt build failed; falling back to "
+                          "provider default prompt")
     if vlm_roi_extras is not None:
         # The helper already composes the FINAL ordered frame list so
         # the user-prompt's "Attached images" section matches the
         # actual provider attachment order one-to-one.
         manifest_frames = list(vlm_roi_extras["frames"])
-        manifest_user_prompt = vlm_roi_extras["user_prompt"]
         manifest_meta["rois"] = vlm_roi_extras["roi_descriptors"]
         manifest_meta["roi_caption_text"] = vlm_roi_extras["caption_text"]
+        # SCO Phase 5 council fix: when SCO mode is active AND ROI
+        # extras are enabled, the helper's default user_prompt suffix
+        # is the refund/return JSON shape (qwen3_vl.DEFAULT_USER_PROMPT).
+        # That would silently replace the SCO basket prompt and the
+        # VLM would be asked to fill the refund schema instead. We
+        # must compose: ROI image-legend caption + SCO user prompt.
+        if sco_user_prompt_only:
+            manifest_user_prompt = (vlm_roi_extras["caption_text"]
+                                    + "\n\n" + sco_user_prompt_only)
+        else:
+            manifest_user_prompt = vlm_roi_extras["user_prompt"]
 
     manifest = EvidenceManifest(
         case_id=case.id,
@@ -323,6 +424,7 @@ def analyze_case(session: Session,
         frames=manifest_frames,
         tracks=(perception_result or {}).get("tracks") or [],
         ocr=(perception_result or {}).get("ocr") or [],
+        system_prompt=manifest_system_prompt,
         user_prompt=manifest_user_prompt,
         metadata=manifest_meta,
     )
@@ -404,23 +506,44 @@ def analyze_case(session: Session,
     session.flush()
 
     # ----- 7. Decision policy ----------------------------------------
-    # Track-gated: pass the perception_result through so the policy can
-    # derive physical_item_track from real persisted tracks. Without
-    # this, the VLM could upgrade a case alone — the contract the
-    # K-series fixed in summary_from_vlm.
+    # SCO Phase 6: when the active prompt is sco_basket_match_v1, route
+    # the decision through reasoning.sco_policy (basket-match semantics,
+    # strict VERIFIED gates, never emits HIGH_RISK_REVIEW). Otherwise
+    # fall back to the legacy refund decision policy. The refund module
+    # stays on disk so future multi-scenario routing can re-activate it.
     _t = time.perf_counter()
     try:
-        summary = summary_from_vlm(
-            vlm_result_dict.get("parsed", {}),
-            footage_valid=True,
-            obstructed=_perception_obstructed(perception_result),
-            camera_gap=False,
-            perception_result=perception_result,
-        )
-        if vlm_result_dict.get("error"):
-            summary.contradictions.append(
-                f"vlm error: {vlm_result_dict['error']}")
-        decision = decide(summary)
+        if prompt_version == "sco_basket_match_v1":
+            from reasoning.schemas.sco_basket_match import parse_or_fallback
+            from reasoning.sco_policy import decide_sco
+            parsed_vlm = vlm_result_dict.get("parsed") or {}
+            if vlm_result_dict.get("error"):
+                # VLM error → schema fallback (uncertain, low confidence)
+                sco_vlm = parse_or_fallback({})
+            else:
+                sco_vlm = parse_or_fallback(parsed_vlm)
+            decision = decide_sco(sco_vlm, _sco_episode)
+            # Keep a minimal `summary` for downstream rows that still
+            # read .customer_present (Phase 7a / refund-shaped audit
+            # surfaces). For SCO v1 we don't compute customer_present
+            # from perception tracks — the episode selector covers that
+            # responsibility implicitly.
+            class _SummaryShim:
+                customer_present = False
+                contradictions: list = []
+            summary = _SummaryShim()
+        else:
+            summary = summary_from_vlm(
+                vlm_result_dict.get("parsed", {}),
+                footage_valid=True,
+                obstructed=_perception_obstructed(perception_result),
+                camera_gap=False,
+                perception_result=perception_result,
+            )
+            if vlm_result_dict.get("error"):
+                summary.contradictions.append(
+                    f"vlm error: {vlm_result_dict['error']}")
+            decision = decide(summary)
     finally:
         timings["decision_ms"] = _ms_since(_t)
     case.outcome = decision.outcome
@@ -696,6 +819,42 @@ def _summarise_perception(perception_result: Optional[dict]) -> dict:
         "detections": len(perception_result.get("detections") or []),
         "limitations": perception_result.get("limitations") or [],
     }
+
+
+def _summarise_falcon_for_sco(perception_result: Optional[dict]) -> dict:
+    """Count Falcon detections by category prefix so the SCO basket-match
+    prompt can hand the VLM a structured evidence summary.
+
+    Buckets (label prefix → meaning):
+      ``sco_item_*``       → POS-derived item query fired (matched candidate)
+      ``sco_generic_*``    → generic catch-all query fired (possible extra)
+      anything else        → default categories (item/person/receipt)
+    """
+    summary = {
+        "matched_count": 0,
+        "generic_candidate_count": 0,
+        "default_detection_count": 0,
+        "queries_run": [],
+    }
+    if not perception_result:
+        return summary
+    queries_seen: set[str] = set()
+    for d in (perception_result.get("detections") or []):
+        label = ""
+        if isinstance(d, dict):
+            label = str(d.get("label") or "")
+        else:
+            label = str(getattr(d, "label", "") or "")
+        if label.startswith("sco_item_"):
+            summary["matched_count"] += 1
+            queries_seen.add(label)
+        elif label.startswith("sco_generic"):
+            summary["generic_candidate_count"] += 1
+            queries_seen.add(label)
+        else:
+            summary["default_detection_count"] += 1
+    summary["queries_run"] = sorted(queries_seen)
+    return summary
 
 
 def _build_vlm_roi_extras(camera_id: str,

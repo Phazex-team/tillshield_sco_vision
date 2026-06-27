@@ -227,7 +227,7 @@ def _fresh_session(tmp_path, monkeypatch):
 def _make_case(session, camera_id):
     from db.models import Case, PosEvent
     ev = PosEvent(store_id="2270", terminal_id="52", transaction_id="T1",
-                  line_id="transaction", event_type="RETURN",
+                  line_id="transaction", event_type="SALE",
                   pos_event_at=POS_UTC, amount=-100.0)
     session.add(ev)
     session.flush()

@@ -240,7 +240,7 @@ def _make_two_segments(storage_root: Path):
         # Build a case + POS event + window referencing ``linked``.
         pe = PosEvent(store_id="store", terminal_id="52",
                       transaction_id="tx1", line_id="transaction",
-                      event_type="RETURN",
+                      event_type="SALE",
                       pos_event_at=old + timedelta(seconds=70))
         s.add(pe)
         s.flush()

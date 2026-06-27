@@ -27,7 +27,7 @@ def client(tmp_path, monkeypatch):
     return TestClient(create_app())
 
 
-def _txn(transaction_id="RTX-1", txn_type="RETURN",
+def _txn(transaction_id="RTX-1", txn_type="SALE",
          pos_event_at="2026-06-15T14:00:00+04:00",
          items=None, store="store_1", ws="WS-1",
          operator="op_1", amount="49.99", currency="AED") -> dict:
@@ -60,7 +60,7 @@ def _txn(transaction_id="RTX-1", txn_type="RETURN",
 def test_tillshield_return_creates_one_case(client):
     r = client.post(
         "/api/v1/integrations/tillshield/transactions/event",
-        json=_txn(txn_type="RETURN"),
+        json=_txn(txn_type="SALE"),
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -73,7 +73,7 @@ def test_tillshield_return_creates_one_case(client):
 def test_tillshield_refund_creates_one_case(client):
     r = client.post(
         "/api/v1/integrations/tillshield/transactions/event",
-        json=_txn(transaction_id="RTX-2", txn_type="REFUND"),
+        json=_txn(transaction_id="RTX-2", txn_type="SALE"),
     )
     assert r.json()["cases_created"] == 1
 
@@ -105,15 +105,18 @@ def test_tillshield_duplicate_transaction_no_duplicate_case(client):
 # 3. Non-return events
 # ---------------------------------------------------------------------------
 
-def test_tillshield_sale_event_does_not_create_case(client):
+def test_tillshield_sale_event_creates_case_in_sco_mode(client):
+    """Phase 1 / SCO mode: SALE is now the canonical checkout event and
+    opens a case. (In legacy refund mode this test asserted the
+    opposite — flipped here as part of the SCO conversion.)"""
     r = client.post(
         "/api/v1/integrations/tillshield/transactions/event",
         json=_txn(transaction_id="RTX-SALE", txn_type="SALE"),
     )
     body = r.json()
-    assert body["cases_created"] == 0
-    assert body["ignored_non_return_events"] == 1
-    assert client.get("/api/v1/cases").json()["count"] == 0
+    assert body["cases_created"] == 1
+    assert body["ignored_non_return_events"] == 0
+    assert client.get("/api/v1/cases").json()["count"] == 1
 
 
 def test_tillshield_unknown_type_is_ignored_silently(client):
@@ -224,24 +227,26 @@ def test_tillshield_source_ip_falls_back_to_request_ip(client):
 # ---------------------------------------------------------------------------
 
 def test_tillshield_batch_mixed_kinds(client):
+    """Phase 1 / SCO mode: SALE, RETURN, REFUND all canonicalise to SALE
+    and open cases. Only types outside the configured accept list
+    (e.g. EXCHANGE) are ignored."""
     body = {
         "source_system": "tillshield_agent",
         "events": [
-            _txn(transaction_id="RTX-A", txn_type="RETURN"),
+            _txn(transaction_id="RTX-A", txn_type="SALE"),
             _txn(transaction_id="RTX-B", txn_type="SALE"),
-            _txn(transaction_id="RTX-A", txn_type="RETURN"),  # duplicate
-            _txn(transaction_id="RTX-C", txn_type="REFUND"),
+            _txn(transaction_id="RTX-A", txn_type="SALE"),  # duplicate
+            _txn(transaction_id="RTX-C", txn_type="SALE"),
         ],
     }
     r = client.post(
         "/api/v1/integrations/tillshield/transactions/batch", json=body)
     assert r.status_code == 200
     summary = r.json()
-    assert summary["cases_created"] == 2  # RTX-A and RTX-C
-    assert summary["ignored_non_return_events"] == 1  # SALE
-    # Duplicate RTX-A was ingested but its case was already opened
-    # within the same batch, so events_inserted = 2 (A and C).
-    assert summary["events_inserted"] == 2
+    # All three unique events (A, B, C) canonicalise to SALE → 3 cases.
+    assert summary["cases_created"] == 3
+    assert summary["ignored_non_return_events"] == 0
+    assert summary["events_inserted"] == 3
 
 
 # ---------------------------------------------------------------------------

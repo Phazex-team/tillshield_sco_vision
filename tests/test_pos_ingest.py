@@ -32,7 +32,7 @@ def _sample_batch():
             PosEventIn(
                 store_id="store_1", terminal_id="t1",
                 transaction_id="txn-A", line_id="L1",
-                event_type="RETURN", pos_event_at=ts,
+                event_type="SALE", pos_event_at=ts,
                 sku="SKU-1", amount=49.99, currency="AED",
             ),
             PosEventIn(
@@ -88,12 +88,12 @@ def test_partial_overlap_with_different_batch_does_not_dup_events(tmp_path,
             PosEventIn(
                 store_id="store_1", terminal_id="t1",
                 transaction_id="txn-A", line_id="L1",
-                event_type="RETURN", pos_event_at=ts,
+                event_type="SALE", pos_event_at=ts,
             ),
             PosEventIn(
                 store_id="store_1", terminal_id="t1",
                 transaction_id="txn-B", line_id="L1",
-                event_type="REFUND", pos_event_at=ts + timedelta(minutes=5),
+                event_type="SALE", pos_event_at=ts + timedelta(minutes=5),
                 amount=10.0,
             ),
         ],
@@ -106,7 +106,12 @@ def test_partial_overlap_with_different_batch_does_not_dup_events(tmp_path,
     assert result["cases_created"] == 1     # txn-B REFUND opens a case
 
 
-def test_malformed_event_rejected_before_persistence(tmp_path, monkeypatch):
+def test_unknown_event_type_does_not_open_a_case(tmp_path, monkeypatch):
+    """Phase 1 / SCO: event_type acceptance is config-driven and lives at
+    the boundary (API endpoint + TillShield adapter). For direct
+    ingest_batch callers, an unknown type is still persisted (so the
+    audit trail captures what came in) but does NOT open a case because
+    case_opening_types() only includes the canonical SCO type."""
     SM = _fresh_session(tmp_path, monkeypatch)
     from pos.ingest import ingest_batch
     from pos.schemas import PosBatchIn, PosEventIn
@@ -116,14 +121,17 @@ def test_malformed_event_rejected_before_persistence(tmp_path, monkeypatch):
         events=[PosEventIn(
             store_id="store_1", terminal_id="t1",
             transaction_id="txn-X", line_id="L1",
-            event_type="SOMETHING_ELSE",   # not in VALID_EVENT_TYPES
+            event_type="SOMETHING_ELSE",
             pos_event_at=ts,
         )],
     )
-    import pytest
     with SM() as s:
-        with pytest.raises(ValueError):
-            ingest_batch(s, bad)
+        result = ingest_batch(s, bad)
+        s.commit()
+    assert result["events_inserted"] == 1, \
+        "the event is still persisted for audit even when unknown"
+    assert result["cases_created"] == 0, \
+        "unknown types must not open a case"
 
 
 def test_window_plan_invalid_when_no_segments(tmp_path, monkeypatch):

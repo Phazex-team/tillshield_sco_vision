@@ -383,11 +383,14 @@ def _make_data_url(width: int = 200, height: int = 200) -> str:
 
 
 def test_build_vlm_roi_extras_returns_none_when_no_view(client):
-    # Sandbox config (cam_01 has no model_roi_views in default config).
+    """An unknown camera_id has no model_roi_views configured at all
+    → the helper returns None and the manifest keeps its full-frame
+    shape. (cam_01 in the SCO repo now has a sco_audit_zone view, so
+    we use a camera_id that is intentionally not in the config.)"""
     from app.case_runner import _build_vlm_roi_extras
     frames = [{"frame_id": "f0", "frame_idx": 0, "ts": "2026-06-17T14:00",
                "image_url": _make_data_url(160, 120)}]
-    assert _build_vlm_roi_extras("cam_01", frames) is None
+    assert _build_vlm_roi_extras("cam_unconfigured", frames) is None
 
 
 def test_build_vlm_roi_extras_appends_labeled_crops(client):

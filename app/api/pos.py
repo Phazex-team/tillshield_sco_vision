@@ -46,15 +46,27 @@ class PosBatchBody(BaseModel):
 def ingest_event(body: PosEventBody, request: Request) -> dict:
     from app import audit
     from db.session import get_sessionmaker
+    from pos.event_normalizer import normalize_event_type
     from pos.ingest import ingest_batch
     from pos.schemas import PosBatchIn, PosEventIn
 
     received = datetime.now(timezone.utc)
+    # Canonicalise event_type at the boundary. SCO mode rejects anything
+    # that isn't in sco_checkout.accept_event_types.
+    canonical = normalize_event_type(body.event_type)
+    if canonical is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"event_type {body.event_type!r} is not accepted "
+                    "(check sco_checkout.accept_event_types in config)"),
+        )
+    event_payload = body.model_dump()
+    event_payload["event_type"] = canonical
     batch = PosBatchIn(
         source_system="api_single",
         store_id=body.store_id,
         received_at=received,
-        events=[PosEventIn(**body.model_dump())],
+        events=[PosEventIn(**event_payload)],
     )
     SM = get_sessionmaker()
     with SM() as s:
@@ -80,11 +92,23 @@ def ingest_event(body: PosEventBody, request: Request) -> dict:
 def ingest_batch_endpoint(body: PosBatchBody, request: Request) -> dict:
     from app import audit
     from db.session import get_sessionmaker
+    from pos.event_normalizer import normalize_event_type
     from pos.ingest import ingest_batch
     from pos.schemas import PosBatchIn, PosEventIn
 
     received = body.received_at or datetime.now(timezone.utc)
-    events = [PosEventIn(**e.model_dump()) for e in body.events]
+    events = []
+    for e in body.events:
+        canonical = normalize_event_type(e.event_type)
+        if canonical is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"event_type {e.event_type!r} is not accepted "
+                        "(check sco_checkout.accept_event_types in config)"),
+            )
+        payload = e.model_dump()
+        payload["event_type"] = canonical
+        events.append(PosEventIn(**payload))
     batch = PosBatchIn(
         source_system=body.source_system,
         store_id=body.store_id,

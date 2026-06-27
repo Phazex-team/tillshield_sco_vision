@@ -12,6 +12,11 @@ from datetime import datetime
 from typing import Optional
 
 
+# Legacy constant kept for callers that still import it. Active validation
+# is config-driven via pos.event_normalizer.normalize_event_type — see
+# PosEventIn.validate below. In SCO mode this set is no longer the
+# acceptance gate; in legacy mode (no sco_checkout config block) the
+# normalizer falls back to this same family.
 VALID_EVENT_TYPES = {"RETURN", "REFUND", "REPLACEMENT"}
 
 
@@ -36,11 +41,16 @@ class PosEventIn:
             raise ValueError("store_id and terminal_id are required")
         if not self.transaction_id or not self.line_id:
             raise ValueError("transaction_id and line_id are required")
-        if self.event_type not in VALID_EVENT_TYPES:
-            raise ValueError(
-                f"event_type {self.event_type!r} must be one of "
-                f"{sorted(VALID_EVENT_TYPES)}"
-            )
+        if not self.event_type or not isinstance(self.event_type, str):
+            raise ValueError("event_type is required and must be a string")
+        # Active acceptance is config-driven and happens at the boundary
+        # (pos.event_normalizer.normalize_event_type in app/api/pos.py and
+        # in the TillShield adapter). Dataclass-level acceptance was
+        # dropped because it required loading app.config inside this
+        # data carrier — too coupled for unit tests that construct
+        # PosEventIn directly. Bad types still cannot open a case
+        # because pos.ingest gates case creation on
+        # pos.event_normalizer.case_opening_types().
         if not isinstance(self.pos_event_at, datetime):
             raise ValueError("pos_event_at must be a datetime")
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -26,6 +27,10 @@ from db.models import Case, PosBatch, PosEvent
 from .schemas import PosBatchIn, PosEventIn
 
 
+# Legacy default kept for direct importers. Active runtime uses
+# pos.event_normalizer.case_opening_types(cfg) which reads the
+# sco_checkout config block (SCO mode: {canonical}; legacy fallback:
+# {RETURN, REFUND}).
 CASE_OPENING_TYPES = {"RETURN", "REFUND"}
 
 # A camera resolver maps (store_id, terminal_id) -> camera_id or None.
@@ -159,17 +164,36 @@ def ingest_batch(session: Session, batch: PosBatchIn,
             raise
         return _duplicate_batch_result(existing_batch.id, batch)
 
+    # Resolve the case-opening predicate ONCE per batch so SCO config is
+    # consulted at the right point in time. In SCO mode this is a singleton
+    # set containing the canonical event type; in legacy fallback it is
+    # {RETURN, REFUND}. We also canonicalise each event_type on the way in
+    # so any configured alias (e.g. RETURN -> SALE in SCO mode) is stored
+    # as the single canonical form.
+    from pos.event_normalizer import case_opening_types, normalize_event_type
+    opening_types = case_opening_types()
+
     inserted = 0
     already = 0
     cases_created = 0
     unmapped = 0
-    for ev in batch.events:
+    for ev_orig in batch.events:
+        canonical = normalize_event_type(ev_orig.event_type)
+        # Build a shallow copy with the canonical event_type instead of
+        # mutating the caller's PosEventIn — mutating it would change
+        # subsequent batch payload hashes and break the idempotency
+        # contract (a re-played batch would compute a different hash and
+        # be treated as new).
+        if canonical is not None and canonical != ev_orig.event_type:
+            ev = replace(ev_orig, event_type=canonical)
+        else:
+            ev = ev_orig
         pos_event_id = _upsert_event(session, pb.id, ev)
         if pos_event_id is None:
             already += 1
             continue
         inserted += 1
-        if ev.event_type in CASE_OPENING_TYPES:
+        if ev.event_type in opening_types:
             opened, reason = _open_case_for_event(
                 session, pos_event_id, ev.store_id, ev.terminal_id,
                 resolve_camera)

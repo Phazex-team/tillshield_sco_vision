@@ -76,7 +76,11 @@ class TillShieldPollConfig:
     poll_overlap_seconds: int = 600
     poll_retry_attempts: int = 3
     poll_retry_backoff_sec: float = 2.0
-    require_negative_amount: bool = True
+    # Default flipped to False for SCO mode: a sale has a positive total
+    # so the legacy refund-counter filter (only negative totals) would
+    # drop every SCO transaction. Deployments that still want refund-counter
+    # behavior set this to True in integrations.tillshield.
+    require_negative_amount: bool = False
     allowed_workstation_ids: list[str] = field(default_factory=list)
     workstation_camera_map: dict[str, str] = field(default_factory=dict)
     source_system: str = SOURCE_SYSTEM
@@ -104,7 +108,7 @@ def load_poll_config(cfg) -> TillShieldPollConfig:
         poll_overlap_seconds=int(ts.get("poll_overlap_seconds", 600) or 0),
         poll_retry_attempts=int(ts.get("poll_retry_attempts", 3) or 1),
         poll_retry_backoff_sec=float(ts.get("poll_retry_backoff_sec", 2) or 0),
-        require_negative_amount=bool(ts.get("require_negative_amount", True)),
+        require_negative_amount=bool(ts.get("require_negative_amount", False)),
         allowed_workstation_ids=allowed,
         workstation_camera_map=ws_map,
     )

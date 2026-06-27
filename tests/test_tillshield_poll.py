@@ -26,8 +26,18 @@ def _fresh_session(tmp_path, monkeypatch):
 
 
 def _cfg(*, cameras=None, allowed=("52",), ws_map=None,
-         require_negative=True, poll_enabled=True, return_types=None,
+         require_negative=False, poll_enabled=True, return_types=None,
          pos_timezone=None):
+    """SCO-aware TillShield test fixture.
+
+    Defaults aligned to SCO mode:
+      * require_negative=False — SCO sales are positive amounts; the
+        old refund-counter "must be negative" filter is OFF by default
+        in the production config too.
+      * return_event_types defaults to ["SALE"] — the canonical SCO
+        alias. Tests that need to exercise other aliases pass
+        ``return_types=[...]`` explicitly.
+    """
     from app.config import AppConfig
     cameras = list(cameras if cameras is not None
                    else [{"id": "cam_return_01"}])
@@ -41,7 +51,7 @@ def _cfg(*, cameras=None, allowed=("52",), ws_map=None,
         "require_negative_amount": require_negative,
         "allowed_workstation_ids": list(allowed),
         "workstation_camera_map": ws_map,
-        "return_event_types": list(return_types or ["RETURN", "REFUND"]),
+        "return_event_types": list(return_types or ["SALE"]),
     }
     if pos_timezone is not None:
         ts["pos_timezone"] = pos_timezone
@@ -50,7 +60,7 @@ def _cfg(*, cameras=None, allowed=("52",), ws_map=None,
                      observability={})
 
 
-def _row(txn_id, ws, ttype="RETURN", amount=-100.0,
+def _row(txn_id, ws, ttype="SALE", amount=-100.0,
          date="2026-06-15T00:01:17", store="2270"):
     return {
         "_meta": {"sourceFile": "X"},
@@ -86,19 +96,26 @@ def test_policy_accepts_return_negative_allowed_mapped():
     assert d.camera_id == "cam_return_01"
 
 
-def test_policy_non_return_ignored():
+def test_policy_non_checkout_type_ignored():
+    """SCO mode: only the configured checkout aliases are accepted; an
+    unrelated transaction_type (e.g. EXCHANGE) is filtered out and
+    counted under ``ignored_non_return_events`` for back-compat with
+    the existing summary key naming."""
     from pos.tillshield_poll import classify_row, load_poll_config
     cfg = _cfg()
-    d = classify_row(_row("S1", "52", ttype="SALE", amount=55.9),
+    d = classify_row(_row("S1", "52", ttype="EXCHANGE", amount=55.9),
                      load_poll_config(cfg), cfg)
     assert d.accept is False
     assert d.reason == "ignored_non_return_events"
 
 
-def test_policy_non_negative_ignored():
+def test_policy_non_negative_ignored_when_filter_enabled():
+    """The legacy negative-amount filter still works when an operator
+    explicitly turns it back on (e.g. for a refund-mode pilot). SCO
+    default for this fixture is ``require_negative=False``."""
     from pos.tillshield_poll import classify_row, load_poll_config
-    cfg = _cfg()
-    d = classify_row(_row("R2", "52", ttype="RETURN", amount=100.0),
+    cfg = _cfg(require_negative=True)
+    d = classify_row(_row("R2", "52", ttype="SALE", amount=100.0),
                      load_poll_config(cfg), cfg)
     assert d.accept is False
     assert d.reason == "ignored_non_negative_events"
@@ -194,13 +211,17 @@ def test_poll_checkpoint_avoids_duplicates_across_runs(tmp_path, monkeypatch):
 
 
 def test_poll_mixed_feed_counts_by_reason(tmp_path, monkeypatch):
+    """SCO mode: only the configured checkout alias (SALE) qualifies;
+    other types (EXCHANGE) are tagged ignored_non_return_events. With
+    ``require_negative=True`` we also exercise the legacy
+    non-negative-amount filter so the count column populates."""
     SM = _fresh_session(tmp_path, monkeypatch)
     from pos.tillshield_poll import poll_once
-    cfg = _cfg(allowed=("52",))
+    cfg = _cfg(allowed=("52",), require_negative=True)
     rows = [
-        _row("R1", "52", ttype="RETURN", amount=-100.0),   # qualifies
-        _row("S1", "52", ttype="SALE", amount=55.9),       # non-return
-        _row("R2", "52", ttype="RETURN", amount=20.0),     # non-negative
+        _row("R1", "52", ttype="SALE", amount=-100.0),     # qualifies
+        _row("S1", "52", ttype="EXCHANGE", amount=55.9),   # non-checkout
+        _row("R2", "52", ttype="SALE", amount=20.0),       # non-negative
     ]
     http = _http({"52": rows})
     with SM() as s:

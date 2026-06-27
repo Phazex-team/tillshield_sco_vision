@@ -82,7 +82,7 @@ def test_vlm_run_input_manifest_round_trips_nested_dict(fresh_db):
         batch = PosBatch(source_system="t", store_id="s"); s.add(batch); s.flush()
         pe = PosEvent(batch_id=batch.id, store_id="s", terminal_id="t1",
                        transaction_id="tx1", line_id="L1",
-                       event_type="RETURN",
+                       event_type="SALE",
                        pos_event_at=datetime(2026, 6, 17))
         s.add(pe); s.flush()
         case = Case(pos_event_id=pe.id, camera_id="cam_01",
@@ -112,7 +112,7 @@ def test_video_window_segment_ids_round_trips_list(fresh_db):
         batch = PosBatch(source_system="t", store_id="s"); s.add(batch); s.flush()
         pe = PosEvent(batch_id=batch.id, store_id="s", terminal_id="t1",
                        transaction_id="tx2", line_id="L1",
-                       event_type="RETURN",
+                       event_type="SALE",
                        pos_event_at=datetime(2026, 6, 17))
         s.add(pe); s.flush()
         case = Case(pos_event_id=pe.id, camera_id="cam_01",
@@ -173,7 +173,7 @@ def test_pos_batch_replay_does_not_create_duplicate_events(fresh_db):
         events=[PosEventIn(
             store_id="s1", terminal_id="t1",
             transaction_id="txn-A", line_id="L1",
-            event_type="RETURN",
+            event_type="SALE",
             pos_event_at=datetime(2026, 6, 17, 14, 0, 0),
         )],
     )
@@ -207,7 +207,7 @@ def test_pos_concurrent_batches_with_same_event_only_persist_once(
         events=[PosEventIn(
             store_id="s2", terminal_id="t1",
             transaction_id="txn-RACE", line_id="L1",
-            event_type="RETURN",
+            event_type="SALE",
             pos_event_at=datetime(2026, 6, 17, 14, 1, 0),
         )],
     )
@@ -268,7 +268,7 @@ def _seed_two_segments(SM, storage_root, *, linked_to_window: bool):
             batch = PosBatch(source_system="t", store_id="s"); s.add(batch); s.flush()
             pe = PosEvent(batch_id=batch.id, store_id="s", terminal_id="t1",
                            transaction_id="tx", line_id="L1",
-                           event_type="RETURN",
+                           event_type="SALE",
                            pos_event_at=old + timedelta(seconds=25))
             s.add(pe); s.flush()
             case = Case(pos_event_id=pe.id, camera_id="cam_01",

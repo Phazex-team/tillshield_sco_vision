@@ -148,7 +148,13 @@ def normalise_to_pos_events(
     ``transaction_date`` in; the stored ``pos_event_at`` is normalised to
     naive UTC so it correlates with UTC CCTV segments.
     """
-    event_type = _normalise_event_type(txn.transaction_type)
+    # In SCO mode, canonicalise via pos.event_normalizer so the stored
+    # event_type matches what ingest.case_opening_types() expects. In
+    # legacy mode, fall back to the local normaliser which preserves the
+    # raw uppercased form.
+    from pos.event_normalizer import normalize_event_type
+    event_type = (normalize_event_type(txn.transaction_type)
+                  or _normalise_event_type(txn.transaction_type))
     event_at = _to_naive_utc(txn.transaction_date, pos_tz)
 
     raw_payload = {

@@ -208,7 +208,7 @@ def _seed_segment_and_case(SM, storage_root, *, pos_event_at,
             events=[PosEventIn(
                 store_id="store_1", terminal_id="t1",
                 transaction_id="txn-A", line_id="L1",
-                event_type="RETURN", pos_event_at=pos_event_at,
+                event_type="SALE", pos_event_at=pos_event_at,
             )],
         ))
         s.commit()

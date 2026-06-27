@@ -1,6 +1,6 @@
 cameras:
 - id: cam_01
-  name: "Return Counter \u2014 Qusais"
+  name: "SCO Audit Camera — cam_01"
   rtsp_url: rtsp://127.0.0.1:8554/CS_COUNTER_ch15
   classifier: return_review
   token_budget: 1120
@@ -8,6 +8,23 @@ cameras:
   max_frames: ''
   cooldown_sec: 30
   zones:
+    # SCO Phase 4/5/6: the single audit zone for SCO basket-match v1.
+    # Episode selector, Falcon, and the VLM all read this zone only.
+    # The placeholder geometry covers the bulk of a 1920x1080 frame so
+    # detection is not accidentally excluded; operators MUST retune
+    # this against real SCO footage before going live.
+    sco_audit_zone:
+      label: sco_audit_zone
+      purpose: "SCO checkout audit area (scanner + bagging + customer)"
+      x: 200
+      y: 100
+      w: 1520
+      h: 880
+      source_width: 1920
+      source_height: 1080
+    # Legacy refund zones kept for the (inactive) refund flow. Removing
+    # them would break refund regression tests that still exercise the
+    # legacy decision_policy via prompt_version="return_review_v1".
     customer_zone:
       x: 874
       y: 29
@@ -18,6 +35,34 @@ cameras:
       y: 4
       w: 303
       h: 645
+  model_roi_views:
+    # All SCO model views target ONLY the SCO audit zone. The legacy
+    # zones above are still defined for the refund-mode regression
+    # tests but no production model view points at them.
+    falcon:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: union_crop
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+    qwen3_vl:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: labeled_crops
+      margin_pct: 0.0
+      include_full_frame_overview: true
+      caption: ''
+    gemma:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: labeled_crops
+      margin_pct: 0.0
+      include_full_frame_overview: true
+      caption: ''
   prompts: {}
 - id: cam_return_01
   name: Return Counter 01
@@ -28,6 +73,23 @@ cameras:
   max_frames: ''
   cooldown_sec: 30
   zones:
+    # SCO Phase 4/5/6 (council fix follow-up): cam_return_01 also gets
+    # the single sco_audit_zone so the TillShield poller's
+    # workstation_camera_map can safely route here without falling back
+    # to refund-shaped zones. Operators must retune the geometry
+    # against real footage from this camera before going live.
+    sco_audit_zone:
+      label: sco_audit_zone
+      purpose: "SCO checkout audit area (scanner + bagging + customer)"
+      x: 200
+      y: 100
+      w: 1520
+      h: 880
+      source_width: 1920
+      source_height: 1080
+    # Legacy refund zones — kept so refund regression tests that opt
+    # back into prompt_version=return_review_v1 still have something
+    # to point at. No active SCO model view references them.
     staff_zone_vlm:
       label: staff_zone_vlm
       purpose: ''
@@ -71,30 +133,29 @@ cameras:
     prefer_on_demand_for_pos: true
     export_enabled: true
   model_roi_views:
+    # All SCO model views target the SCO audit zone only. SAM2 and OCR
+    # are config-disabled at the top-level models block; their view
+    # entries are retained for back-compat but inert at runtime.
     falcon:
       enabled: true
       roi_ids:
-      - counter_zone_vlm
-      - staff_zone_vlm
-      - customer_zonevlm
+      - sco_audit_zone
       mode: union_crop
       margin_pct: 0.0
       include_full_frame_overview: false
       caption: ''
     sam2:
-      enabled: true
+      enabled: false
       roi_ids:
-      - counter_zone_vlm
-      - staff_zone_vlm
-      - customer_zonevlm
+      - sco_audit_zone
       mode: filter_candidate_crops
       margin_pct: 0.0
       include_full_frame_overview: false
       caption: ''
     ocr:
-      enabled: true
+      enabled: false
       roi_ids:
-      - counter_zone_vlm
+      - sco_audit_zone
       mode: filter_candidate_crops
       margin_pct: 0.0
       include_full_frame_overview: false
@@ -102,9 +163,7 @@ cameras:
     qwen3_vl:
       enabled: true
       roi_ids:
-      - staff_zone_vlm
-      - customer_zonevlm
-      - counter_zone_vlm
+      - sco_audit_zone
       mode: labeled_crops
       margin_pct: 0.0
       include_full_frame_overview: true
@@ -112,9 +171,7 @@ cameras:
     gemma:
       enabled: true
       roi_ids:
-      - staff_zone_vlm
-      - customer_zonevlm
-      - counter_zone_vlm
+      - sco_audit_zone
       mode: labeled_crops
       margin_pct: 0.0
       include_full_frame_overview: true
@@ -188,13 +245,15 @@ models:
 observability:
   phoenix_enabled: true
   phoenix_url: http://localhost:6006
-  phoenix_project: fraud_detection_v3
+  phoenix_project: sco_vision
 reasoning:
   primary_provider: qwen3_vl
   fallback_provider: gemma
   warm_fallback: false
-  prompt_version: return_review_v1
-  auto_analyze_enabled: true
+  # SCO mode: default to the basket-match prompt for new cases. Tests
+  # and operators can override per-case via analyze_case(prompt_version=...).
+  prompt_version: sco_basket_match_v1
+  auto_analyze_enabled: false
 gpu:
   max_loaded_big_vlms: 1
   soft_memory_limit_gb: 90
@@ -207,18 +266,43 @@ storage:
   raw_segment_retention_hours: 48
   min_free_disk_gb: 100
   cleanup_dry_run_default: true
+sco_checkout:
+  # SCO mode acceptance gate. Every direct API ingest
+  # (POST /api/v1/pos/returns/event) and every TillShield row is
+  # normalised against this list. The check is case-insensitive,
+  # whitespace-stripped, and treats "-"/" " as "_".
+  #
+  # Strictly SCO-checkout aliases only. Legacy refund tokens
+  # (RETURN, REFUND, REFUND_RETURN, ...) are NOT accepted — they
+  # are conceptually a different event class and should not silently
+  # canonicalise to SALE. Operators with a POS that emits a
+  # non-listed alias for checkout should add it here (and to
+  # integrations.tillshield.return_event_types below).
+  accept_event_types:
+    - SALE
+    - SCO_SALE
+    - CHECKOUT
+  # All accepted aliases are stored/used internally as this single
+  # canonical type. ingest.case_opening_types() returns {canonical}.
+  canonical_event_type: SALE
+  # Single ROI used by Falcon AND by the episode selector. Defining
+  # multi-zone behavior is out of v1 scope.
+  roi_name: sco_audit_zone
+  sku_overrides_path: config/sku_overrides.yaml
+  sku_cache_path: storage/sku_translator/cache.json
 integrations:
   tillshield:
+    # Must stay in lock-step with sco_checkout.accept_event_types above.
+    # Drift between the TillShield filter and the SCO normaliser is
+    # what produces the "passes the poller but opens no case" leak.
     return_event_types:
-    - RETURN
-    - REFUND
-    - REFUND_RETURN
-    - RETURN_REFUND
-    - VOID_RETURN
+    - SALE
+    - SCO_SALE
+    - CHECKOUT
     line_level_cases: false
     ignore_unknown_types: true
     ingest_token: ''
-    poll_enabled: true
+    poll_enabled: false
     pos_timezone: Asia/Dubai
     base_url: http://localhost:8081
     info_path: /pos/data/info
@@ -226,16 +310,24 @@ integrations:
     poll_every_seconds: 300
     request_timeout_sec: 30
     poll_lookback_seconds: 900
-    require_negative_amount: true
+    require_negative_amount: false
     allowed_workstation_ids:
     - '52'
     workstation_camera_map:
-      '52': cam_return_01
+      # Council fix follow-up: route workstation 52 to cam_01 (the
+      # canonical SCO-configured camera). cam_return_01 also has
+      # sco_audit_zone defined now, so re-mapping back to it later is
+      # a safe one-line config change.
+      '52': cam_01
   # Outbound: push analysis RESULTS (+ boxed/face-masked clip) to the refund
   # agent. One-way export; never affects our analysis/evidence. Same host we
   # already poll; location may change so base_url is configurable.
   refund_agent:
-    enabled: true
+    # SCO Phase 7a: refund-agent export is the legacy refund-flow
+    # exporter. In SCO mode (default for this repo) it MUST stay
+    # disabled — the SCO exporter is deferred to v1.1. Flip to true
+    # only after rolling back to refund mode.
+    enabled: false
     base_url: http://localhost:8081
     create_path: /events/refund
     evidence_path: /events/refund/evidence

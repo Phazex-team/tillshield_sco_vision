@@ -29,7 +29,7 @@ def test_create_all_and_insert_pos_event(tmp_path, monkeypatch):
             terminal_id="t1",
             transaction_id="txn-100",
             line_id="L1",
-            event_type="RETURN",
+            event_type="SALE",
             pos_event_at=datetime(2026, 6, 15, 14, 0, 0),
         )
         session.add(ev)
@@ -43,7 +43,7 @@ def test_create_all_and_insert_pos_event(tmp_path, monkeypatch):
             terminal_id="t1",
             transaction_id="txn-100",
             line_id="L1",
-            event_type="RETURN",
+            event_type="SALE",
             pos_event_at=datetime(2026, 6, 15, 14, 0, 0),
         )
         session.add(dup)

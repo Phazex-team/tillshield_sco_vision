@@ -87,7 +87,7 @@ def _pos_event(*, transaction_id: str = "txn-1") -> dict:
     return {
         "store_id": "store_1", "terminal_id": "t1",
         "transaction_id": transaction_id, "line_id": "L1",
-        "event_type": "RETURN",
+        "event_type": "SALE",
         "pos_event_at": "2026-06-15T14:00:00",
         "staff_id": "staff_77", "sku": "SKU-A",
         "amount": 49.99, "currency": "AED",

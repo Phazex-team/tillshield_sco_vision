@@ -69,14 +69,31 @@ def _run_reprocess(case_id: str, prior: dict,
             log.exception("failed to record reprocess failure for %s",
                           case_id)
     else:
-        # Analysis succeeded -> push the RESULT to the refund agent on the
-        # export pool (background). Guarded + one-way: a failure here never
-        # affects the case, the evidence, or the analysis.
+        # SCO Phase 7a: the refund-agent export is the legacy refund flow.
+        # In SCO mode it stays disabled by default; an SCO-shaped exporter
+        # is deferred to v1.1. The legacy module remains on disk so the
+        # refund flow can be re-enabled by flipping the config flag.
         try:
-            from pos.refund_agent_export import maybe_export_case
-            _EXPORT_POOL.submit(maybe_export_case, case_id)
+            from app.config import load_config
+            cfg = load_config()
+            refund_export_enabled = bool(
+                ((cfg.raw.get("integrations") or {})
+                 .get("refund_agent") or {})
+                .get("enabled", False)
+            )
         except Exception:
-            log.exception("failed to queue refund-agent export for %s", case_id)
+            refund_export_enabled = False
+        if refund_export_enabled:
+            try:
+                from pos.refund_agent_export import maybe_export_case
+                _EXPORT_POOL.submit(maybe_export_case, case_id)
+            except Exception:
+                log.exception(
+                    "failed to queue refund-agent export for %s", case_id)
+        else:
+            log.debug(
+                "sco mode: refund-agent export disabled (case=%s); "
+                "SCO exporter deferred to v1.1", case_id)
 
 
 def _drain_reprocess_pool() -> None:

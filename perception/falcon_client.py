@@ -51,6 +51,13 @@ class FalconClient:
         "person": "person, hand, arm, cashier, customer",
     }
 
+    # Keys that downstream consumers (decision policy, customer_present gate,
+    # track-gating in perception.temporal_memory) rely on. Callers can ADD
+    # new categories (e.g. POS-derived SKU queries) but must never overwrite
+    # these. A custom categories dict that drops/replaces them would silently
+    # break person detection or item gating elsewhere in the pipeline.
+    RESERVED_CATEGORY_KEYS: frozenset[str] = frozenset({"item", "person", "receipt"})
+
     def detect_on_frames(self,
                          frames: list[tuple[int, datetime, Image.Image]],
                          *,
@@ -67,6 +74,12 @@ class FalconClient:
         caught per (frame, category) so one decode failure never loses
         the rest of the window.
 
+        ``categories`` ADDS to ``DEFAULT_CATEGORIES`` — it does not
+        replace it. Reserved keys (``item``, ``person``, ``receipt``)
+        cannot be overwritten via ``categories`` because downstream
+        consumers (decision policy, customer-presence gate, track-gating)
+        depend on them. Attempts to overwrite are logged and ignored.
+
         ``roi_crop`` (optional ``(x1, y1, x2, y2)`` in *full-frame*
         pixel coordinates) restricts Falcon to the cropped region.
         Detection ``bbox_xyxy`` values are translated back to full-frame
@@ -75,7 +88,18 @@ class FalconClient:
         its full-frame coordinate contract.
         """
         self._ensure_loaded()
-        cats = dict(categories or self.DEFAULT_CATEGORIES)
+        # Always start from defaults so person/item/receipt detectors
+        # never silently disappear when a scenario adds POS categories.
+        cats: dict[str, str] = dict(self.DEFAULT_CATEGORIES)
+        if categories:
+            for k, v in categories.items():
+                if k in self.RESERVED_CATEGORY_KEYS:
+                    log.warning(
+                        "FalconClient: refusing to overwrite reserved "
+                        "category %r via categories= (defaults preserved). "
+                        "Use query= to refine the 'item' default.", k)
+                    continue
+                cats[k] = v
         if query:
             cats.setdefault("item", query)
         ox, oy = 0, 0

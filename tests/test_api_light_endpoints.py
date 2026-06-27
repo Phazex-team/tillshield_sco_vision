@@ -191,7 +191,7 @@ def test_window_stream_410_when_window_file_missing(client, tmp_path):
         batch = PosBatch(source_system="t", store_id="s"); s.add(batch); s.flush()
         pe = PosEvent(batch_id=batch.id, store_id="s", terminal_id="t1",
                        transaction_id="x1", line_id="L1",
-                       event_type="RETURN",
+                       event_type="SALE",
                        pos_event_at=datetime.now())
         s.add(pe); s.flush()
         case = Case(pos_event_id=pe.id, camera_id="cam_01",
@@ -220,7 +220,7 @@ def test_window_stream_returns_mp4_when_file_present(client, tmp_path):
         batch = PosBatch(source_system="t", store_id="s"); s.add(batch); s.flush()
         pe = PosEvent(batch_id=batch.id, store_id="s", terminal_id="t1",
                        transaction_id="x2", line_id="L1",
-                       event_type="RETURN",
+                       event_type="SALE",
                        pos_event_at=datetime.now())
         s.add(pe); s.flush()
         case = Case(pos_event_id=pe.id, camera_id="cam_01",

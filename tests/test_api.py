@@ -99,7 +99,7 @@ def _event(transaction_id: str = "txn-1", line_id: str = "L1") -> dict:
         "terminal_id": "t1",
         "transaction_id": transaction_id,
         "line_id": line_id,
-        "event_type": "RETURN",
+        "event_type": "SALE",
         "pos_event_at": "2026-06-15T14:00:00",
         "sku": "SKU-1",
         "amount": 49.99,
