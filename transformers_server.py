@@ -1,7 +1,7 @@
 """Minimal OpenAI-compatible HTTP server for Gemma 4 BF16 (vision-language).
 
 Stands in for vLLM on :8001 when the NVFP4 path can't be made to work on
-this hardware. The fraud_detection app's existing ``gemma_reasoner.py``
+this hardware. The SCO Vision app's existing ``gemma_reasoner.py``
 HTTP client talks to this without modification.
 
 Single in-process model: ``transformers.Gemma4ForConditionalGeneration``

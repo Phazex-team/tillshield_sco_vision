@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gracefully stop the v3 app and the vLLM server. Touches NOTHING outside
-# fraud_detection_v3.
+# sco_vision.
 set -u
 cd "$(dirname "$0")"
 

@@ -1,4 +1,4 @@
-# fraud_detection v3 — pinned dependency set
+# SCO Vision — pinned dependency set
 #
 # Verified end-to-end on: NVIDIA DGX Spark (GB10 Grace Blackwell, sm_121),
 # Ubuntu 24.04 aarch64, system CUDA 13.0, Python 3.12.

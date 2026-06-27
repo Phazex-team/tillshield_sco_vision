@@ -1,4 +1,4 @@
-"""Phoenix / OpenTelemetry tracer for fraud_detection_v3.
+"""Phoenix / OpenTelemetry tracer for sco_vision.
 
 If ``observability.phoenix_enabled`` is False (or the OTel deps are not
 installed) every ``trace_*`` call is a no-op. None of the public
@@ -57,7 +57,7 @@ def init(cfg: dict) -> None:
             return
         endpoint = (obs.get("phoenix_url", "http://localhost:6006")
                     .rstrip("/")) + "/v1/traces"
-        project = obs.get("phoenix_project", "fraud_detection_v3")
+        project = obs.get("phoenix_project", "sco_vision")
         try:
             resource = Resource.create({"service.name": project})
             provider = TracerProvider(resource=resource)

@@ -3,7 +3,7 @@
 v3 swaps the in-process ``transformers``/``torch`` Gemma loader for an
 HTTP client that talks to a vLLM OpenAI-compatible server (default
 ``http://localhost:8001``). The model is no longer loaded into the
-fraud-detection process; the server holds the weights once and serves
+SCO Vision process; the server holds the weights once and serves
 every camera's clips concurrently.
 
 Public interface is unchanged:

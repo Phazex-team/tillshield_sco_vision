@@ -1,4 +1,4 @@
--- 0001_core.sql — production Postgres schema for fraud_detection_v3.
+-- 0001_core.sql — production Postgres schema for sco_vision.
 --
 -- This is the production target. The SQLAlchemy models in db/models.py
 -- are schema-compatible with this DDL, but use plain TEXT in place of

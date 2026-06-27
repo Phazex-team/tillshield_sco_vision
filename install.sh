@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fresh-DGX installer for fraud_detection_v3.
+# Fresh-DGX installer for sco_vision.
 #
 # Idempotent. Run from inside the project directory.
 #
@@ -15,7 +15,7 @@ cd "$(dirname "$0")"
 
 PY="${PY:-python3}"
 echo "================================================================"
-echo "fraud_detection_v3 installer"
+echo "sco_vision installer"
 echo "================================================================"
 
 # ---- 1. apt -----------------------------------------------------------

@@ -65,7 +65,7 @@ class AppConfig:
     def database_url(self) -> str:
         return os.environ.get(
             "DATABASE_URL",
-            f"sqlite:///{PROJECT_ROOT / 'fraud_detection_v3.sqlite'}",
+            f"sqlite:///{PROJECT_ROOT / 'sco_vision.sqlite'}",
         )
 
 

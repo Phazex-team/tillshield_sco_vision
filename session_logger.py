@@ -244,7 +244,7 @@ class SessionLogger:
     def write_daily_report(self) -> str:
         c = self.counts
         lines = [
-            f"Fraud Detection v3 — daily report {self.date}",
+            f"SCO Vision — daily report {self.date}",
             "=" * 60,
             f"total sessions         : {c.total}",
             f"events observed        : {c.handovers}",

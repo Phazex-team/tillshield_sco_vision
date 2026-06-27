@@ -2,8 +2,8 @@
 
 This USB copy was prepared from:
 
-- Source repo: `/home/fazil/workspace/projects/fraud_detection_v3`
-- USB repo: `/media/fazil/PHAZEX_USB/fraud_detection_v3`
+- Source repo: `/home/fazil/workspace/projects/sco_vision`
+- USB repo: `/media/fazil/PHAZEX_USB/sco_vision`
 - Latest copied commit: `33273a2 Block M: close the 2 wiring/naming gaps Block L missed`
 - USB filesystem: ext4, label `PHAZEX_USB`
 - Copy policy: source/runtime repo copied, but oversized/unneeded generated folders were excluded.
@@ -139,7 +139,7 @@ models/hf/google/gemma-4-26B-A4B-it/
 Expected source path on this DGX:
 
 ```text
-/home/fazil/workspace/projects/fraud_detection_v3/models/hf/google/gemma-4-26B-A4B-it/
+/home/fazil/workspace/projects/sco_vision/models/hf/google/gemma-4-26B-A4B-it/
 ```
 
 Expected destination path on the other DGX:

@@ -3,8 +3,8 @@
   "prepared_at": "2026-06-15T19:39:00Z",
   "duration_sec": 54.5,
   "mode": "copy_from_cache_only",
-  "repo_root": "/home/fazil/workspace/projects/fraud_detection_v3",
-  "bundle_root": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf",
+  "repo_root": "/home/fazil/workspace/projects/sco_vision",
+  "bundle_root": "/home/fazil/workspace/projects/sco_vision/models/hf",
   "models": [
     {
       "name": "qwen3_vl",
@@ -15,8 +15,8 @@
       "status": "present",
       "snapshot": "9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
       "source": "bundle",
-      "source_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
-      "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
+      "source_path": "/home/fazil/workspace/projects/sco_vision/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
+      "dest_path": "/home/fazil/workspace/projects/sco_vision/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c",
       "file_count": 23,
       "total_bytes": 62153198906,
       "files": [
@@ -147,8 +147,8 @@
       "status": "present",
       "snapshot": "4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a",
       "source": "bundle",
-      "source_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/google/gemma-4-26B-A4B-it/4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a",
-      "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/google/gemma-4-26B-A4B-it/4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a",
+      "source_path": "/home/fazil/workspace/projects/sco_vision/models/hf/google/gemma-4-26B-A4B-it/4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a",
+      "dest_path": "/home/fazil/workspace/projects/sco_vision/models/hf/google/gemma-4-26B-A4B-it/4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a",
       "file_count": 9,
       "total_bytes": 51644307479,
       "files": [
@@ -209,8 +209,8 @@
       "status": "present",
       "snapshot": "5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
       "source": "bundle",
-      "source_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/tiiuae/Falcon-Perception/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
-      "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/tiiuae/Falcon-Perception/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
+      "source_path": "/home/fazil/workspace/projects/sco_vision/models/hf/tiiuae/Falcon-Perception/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
+      "dest_path": "/home/fazil/workspace/projects/sco_vision/models/hf/tiiuae/Falcon-Perception/5b0808e4af1e58ad6ff0b72be54d3a38b2e50c5b",
       "file_count": 16,
       "total_bytes": 2540057792,
       "files": [
@@ -306,8 +306,8 @@
       "status": "present",
       "snapshot": "84e1da65d438d18182be0b8684ee7fdb4c7ef6d3",
       "source": "bundle",
-      "source_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/facebook/sam2-hiera-large/84e1da65d438d18182be0b8684ee7fdb4c7ef6d3",
-      "dest_path": "/home/fazil/workspace/projects/fraud_detection_v3/models/hf/facebook/sam2-hiera-large/84e1da65d438d18182be0b8684ee7fdb4c7ef6d3",
+      "source_path": "/home/fazil/workspace/projects/sco_vision/models/hf/facebook/sam2-hiera-large/84e1da65d438d18182be0b8684ee7fdb4c7ef6d3",
+      "dest_path": "/home/fazil/workspace/projects/sco_vision/models/hf/facebook/sam2-hiera-large/84e1da65d438d18182be0b8684ee7fdb4c7ef6d3",
       "file_count": 20,
       "total_bytes": 1795816996,
       "files": [

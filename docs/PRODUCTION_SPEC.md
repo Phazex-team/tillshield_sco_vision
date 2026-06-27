@@ -1,6 +1,6 @@
 # Retail Return / Refund Visual Evidence Investigation Platform
 
-Status: target production specification for `fraud_detection_v3`.
+Status: target production specification for `sco_vision`.
 
 This document defines what the application must do when the refactor is complete. It is intentionally product, architecture, and reliability focused. Advanced MLOps/evaluation work is the only explicitly deferred category; all runtime functionality described here is core product scope.
 
@@ -116,7 +116,7 @@ The diagram above is the visual contract for the local product architecture. It 
 
 ## 5. Repository Ownership
 
-This remains the same repo: `fraud_detection_v3`.
+This remains the same repo: `sco_vision`.
 
 Current MVP modules to keep and evolve:
 

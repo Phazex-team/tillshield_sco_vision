@@ -1,4 +1,4 @@
-# Fraud Detection v3 — Multi-Camera Video Reasoning
+# SCO Vision — Multi-Camera Video Reasoning
 
 Fraud / safety / QC / shelf / access video reasoning over RTSP streams.
 Falcon Perception (object detection) + Gemma 4 26B-A4B-it (NVFP4 video
@@ -29,8 +29,8 @@ activations need the rest).
 ## Fresh install
 
 ```bash
-git clone <this-repo> fraud_detection_v3
-cd fraud_detection_v3
+git clone <this-repo> sco_vision
+cd sco_vision
 bash install.sh           # apt + venv + pip + model downloads
 cp .env.example .env      # edit if you want non-default ports / paths
 bash start.sh             # boots vLLM (8001) then app (3902)
@@ -331,7 +331,7 @@ Toggle in `config.yaml`:
 observability:
   phoenix_enabled: true
   phoenix_url: http://localhost:6006
-  phoenix_project: fraud_detection_v3
+  phoenix_project: sco_vision
 ```
 
 `bash start.sh` brings up Phoenix between vLLM and the app. Phoenix

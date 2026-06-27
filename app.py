@@ -1,4 +1,4 @@
-"""FastAPI dashboard + embedded fraud-detection pipeline (v3, multi-camera).
+"""FastAPI dashboard + embedded SCO Vision pipeline (multi-camera).
 
 v3 changes from v2:
   * Multi-camera. Every endpoint that takes / returns frames or stats
@@ -187,7 +187,7 @@ async def lifespan(app: FastAPI):
     state.stop_pipeline()
 
 
-app = FastAPI(lifespan=lifespan, title="Fraud Detection Dashboard (v3)")
+app = FastAPI(lifespan=lifespan, title="SCO Vision Dashboard")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 

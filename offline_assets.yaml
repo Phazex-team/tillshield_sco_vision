@@ -1,4 +1,4 @@
-# Offline asset registry for fraud_detection_v3.
+# Offline asset registry for sco_vision.
 #
 # This file is the SINGLE declaration of every model / data asset the
 # production runtime is allowed to depend on. The prepare and verify

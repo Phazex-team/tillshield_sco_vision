@@ -38,7 +38,7 @@ storage/
 *.key
 
 # Backups produced by this refactor
-fraud_detection_v3.backup.*.tar.gz
+sco_vision.backup.*.tar.gz
 
 # Offline model bundle: hardlinks into ~/.cache. Each operator prepares
 # their own via scripts/prepare_offline_model_bundle.py. The README,
