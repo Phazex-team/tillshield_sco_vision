@@ -161,6 +161,59 @@ CLASSIFIERS: dict[str, dict] = {
         ),
     },
     # ------------------------------------------------------------------
+    "sco_checkout": {
+        "display_label": "SCO Checkout Basket Match",
+        "color": "#5b8def",
+        "token_budget": 1120,
+        "enable_thinking": True,
+        "max_frames": 20,
+        "falcon_prompt": (
+            "DYNAMIC PER POS TRANSACTION. At analysis time the app builds "
+            "Falcon/SAM3 concepts from raw_payload.items in the POS event, "
+            "then adds narrow catch-alls such as food container, takeaway "
+            "container, plastic food box, product, package, bottle, box, "
+            "bag, and clothing. The active ROI is sco_audit_zone only."
+        ),
+        "gemma_system": (
+            "You are a visual auditor reviewing a Self-Checkout (SCO) "
+            "video clip alongside the POS bill for the same transaction. "
+            "You do NOT decide outcomes. A separate deterministic policy "
+            "turns your structured report into the case outcome.\n\n"
+            "The runtime prompt is built dynamically for each POS event "
+            "from the POS basket, canonical Falcon/SAM3 item groups, "
+            "SAM3 merged-container metadata, and the selected "
+            "sco_audit_zone episode.\n\n"
+            "Hard rules:\n"
+            " * Never claim an item was scanned or unscanned; the video "
+            "cannot prove scan events.\n"
+            " * Treat canonical groups as the tracker-de-duplicated "
+            "physical item evidence.\n"
+            " * Separate physical count from semantic identity.\n"
+            " * Closed or opaque takeaway containers should normally be "
+            "semantic_identity_match=uncertain, not a mismatch, unless "
+            "there is a visible contradiction.\n"
+            " * Output only the SCO basket-match JSON requested by the "
+            "runtime user prompt."
+        ),
+        "gemma_user": (
+            "DYNAMIC SCO PROMPT. For every transaction the app injects:\n"
+            "1) POS bill line items from raw_payload.items.\n"
+            "2) Raw canonical item groups from Falcon/SAM3.\n"
+            "3) SAM3 merged physical container count metadata.\n"
+            "4) The selected customer/item episode inside sco_audit_zone.\n\n"
+            "The VLM must answer these separate questions:\n"
+            "- physical_count_match: does the visible physical item count "
+            "plausibly match the POS basket size?\n"
+            "- semantic_identity_match: can each visible item be tied to "
+            "the POS line identity?\n"
+            "- missing_visible_items / extra_visible_items: only when the "
+            "canonical evidence supports it.\n"
+            "- uncertainty_reason: explain closed containers, ambiguity, "
+            "or low visual detail.\n\n"
+            "The live runtime prompt_version is sco_basket_match_v2."
+        ),
+    },
+    # ------------------------------------------------------------------
     "safety": {
         "display_label": "Safety / PPE Compliance",
         "color": "#ffb020",  # orange
@@ -350,15 +403,16 @@ def list_classifiers() -> list[dict]:
 
 
 def get_classifier(key: str) -> dict:
-    """Return the classifier dict for ``key`` or fall back to ``custom``.
+    """Return the classifier dict for ``key``.
 
-    The legacy key ``"fraud"`` is silently remapped to the review-safe
-    ``"return_review"`` so old configs cannot resurrect accusatory prompt
-    text by accident.
+    This SCO-only copy must never route an unknown/legacy classifier to
+    return/refund prompts. Legacy definitions remain importable for
+    explicit regression tests, but fallback and the old ``fraud`` alias
+    resolve to the active SCO checkout classifier.
     """
     if key == "fraud":
-        return CLASSIFIERS["return_review"]
-    return CLASSIFIERS.get(key) or CLASSIFIERS["custom"]
+        return CLASSIFIERS["sco_checkout"]
+    return CLASSIFIERS.get(key) or CLASSIFIERS["sco_checkout"]
 
 
 def resolve_prompts(camera_cfg: dict) -> dict:
@@ -369,9 +423,9 @@ def resolve_prompts(camera_cfg: dict) -> dict:
         ``classifier``, ``display_label``, ``color``, ``token_budget``,
         ``falcon``, ``gemma_system``, ``gemma_user``.
     """
-    classifier_key = (camera_cfg.get("classifier") or "return_review").strip().lower()
+    classifier_key = (camera_cfg.get("classifier") or "sco_checkout").strip().lower()
     if classifier_key == "fraud":
-        classifier_key = "return_review"
+        classifier_key = "sco_checkout"
     base = get_classifier(classifier_key)
     overrides = camera_cfg.get("prompts") or {}
 

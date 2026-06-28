@@ -16,7 +16,7 @@ Hard rules (PRODUCTION_SPEC):
   * Preserve the full raw TillShield payload for audit.
 
 Configuration knobs live under ``config.yaml.integrations.tillshield``:
-``return_event_types``, ``line_level_cases``, ``ingest_token``,
+``accepted_event_types``, ``line_level_cases``, ``ingest_token``,
 ``ignore_unknown_types``.
 """
 from __future__ import annotations
@@ -36,8 +36,8 @@ from .tillshield_schemas import TillShieldBatch, TillShieldTransaction
 log = logging.getLogger(__name__)
 
 
-DEFAULT_RETURN_EVENT_TYPES: tuple[str, ...] = (
-    "RETURN", "REFUND", "REFUND_RETURN", "RETURN_REFUND", "VOID_RETURN",
+DEFAULT_ACCEPTED_EVENT_TYPES: tuple[str, ...] = (
+    "SALE", "SCO_SALE", "CHECKOUT",
 )
 
 
@@ -47,13 +47,18 @@ def _normalise_event_type(raw: Optional[str]) -> str:
     return raw.strip().upper().replace("-", "_").replace(" ", "_")
 
 
-def _accepted_return_types(cfg) -> set[str]:
+def _accepted_event_types(cfg) -> set[str]:
     integrations = (cfg.raw.get("integrations") if cfg else None) or {}
     ts = integrations.get("tillshield") or {}
-    custom = ts.get("return_event_types")
+    custom = ts.get("accepted_event_types")
     if custom:
         return {_normalise_event_type(x) for x in custom}
-    return set(DEFAULT_RETURN_EVENT_TYPES)
+    return set(DEFAULT_ACCEPTED_EVENT_TYPES)
+
+
+def _accepted_return_types(cfg) -> set[str]:
+    """Compatibility alias for older imports; returns SCO accepted types."""
+    return _accepted_event_types(cfg)
 
 
 def _line_level_enabled(cfg) -> bool:
@@ -141,8 +146,9 @@ def normalise_to_pos_events(
         pos_tz: Optional[tzinfo] = None) -> list[PosEventIn]:
     """Build one (or more) ``PosEventIn`` rows from a TillShield row.
 
-    Returns ``[]`` if the row's transaction_type is not a return/refund
-    family; callers should count these in ``ignored_non_return_events``.
+    Returns ``[]`` if the row's transaction_type is not an accepted SCO
+    checkout event; callers should count these in
+    ``ignored_non_return_events`` for backwards-compatible metrics.
 
     ``pos_tz`` (when set) is the timezone the POS agent reports
     ``transaction_date`` in; the stored ``pos_event_at`` is normalised to
@@ -255,7 +261,7 @@ def ingest_tillshield_batch(session: Session,
     workstation-aware case routing. When omitted (the push endpoints'
     default) the legacy store-default camera is used.
     """
-    accepted = _accepted_return_types(cfg)
+    accepted = _accepted_event_types(cfg)
     line_level = _line_level_enabled(cfg)
     ignore_unknown = _ignore_unknown(cfg)
     pos_tz = _resolve_pos_timezone(cfg)

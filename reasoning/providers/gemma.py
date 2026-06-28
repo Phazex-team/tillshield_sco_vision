@@ -96,11 +96,11 @@ class GemmaProvider(VLMProvider):
         # basket_match and falls back to uncertain/low — turning a
         # legitimate Gemma answer into REVIEW with sco_low_confidence.
         # Flip to schema-passthrough so the dict is returned verbatim.
+        # In this SCO-only app, passthrough is the safe default; only
+        # an explicit return_review_v1 opt-in uses the legacy parser.
         prompt_version = ((manifest.metadata or {}).get("prompt_version")
                           if isinstance(manifest.metadata, dict) else None)
-        schema_passthrough = prompt_version in (
-            "sco_basket_match_v1", "sco_basket_match_v2",
-        )
+        schema_passthrough = prompt_version != "return_review_v1"
         t0 = time.time()
         try:
             parsed = self._client().reason(

@@ -1,6 +1,6 @@
 """Phase 1 — pos.event_normalizer tests.
 
-Covers normalization rules, SCO-mode canonicalization, legacy fallback,
+Covers normalization rules, SCO-mode canonicalization, SCO-only rejection,
 and case-opening-types resolution.
 """
 from __future__ import annotations
@@ -86,39 +86,38 @@ def test_sco_mode_canonical_is_returned_normalized():
 
 
 # ---------------------------------------------------------------------------
-# Legacy fallback (no SCO config)
+# SCO-only fallback safety (no SCO config)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("raw,expected", [
-    ("RETURN", "RETURN"),
-    ("refund", "REFUND"),
-    ("Replacement", "REPLACEMENT"),
-    ("SALE", None),       # SCO alias rejected in legacy mode
+    ("RETURN", None),
+    ("refund", None),
+    ("Replacement", None),
+    ("SALE", None),
     ("CHECKOUT", None),
 ])
-def test_legacy_fallback_accepts_refund_family(raw, expected):
+def test_missing_sco_config_rejects_everything(raw, expected):
     from pos.event_normalizer import normalize_event_type
     cfg = _empty_cfg()
     assert normalize_event_type(raw, cfg) == expected
 
 
-def test_legacy_fallback_case_opening_types_is_return_refund():
+def test_missing_sco_config_case_opening_types_is_empty():
     from pos.event_normalizer import case_opening_types
     cfg = _empty_cfg()
-    assert case_opening_types(cfg) == {"RETURN", "REFUND"}
+    assert case_opening_types(cfg) == set()
 
 
 # ---------------------------------------------------------------------------
 # Defensive: malformed cfg shouldn't crash the normaliser
 # ---------------------------------------------------------------------------
 
-def test_partial_sco_config_falls_back_to_legacy():
+def test_partial_sco_config_rejects_everything():
     """If sco_checkout is present but missing accept_event_types or
-    canonical_event_type, fall back to legacy behavior rather than crash."""
+    canonical_event_type, reject instead of falling back to refund."""
     from pos.event_normalizer import normalize_event_type
     cfg = SimpleNamespace(raw={"sco_checkout": {
         "canonical_event_type": "SALE",  # but no accept_event_types
     }})
-    # Falls back to legacy because the gate is incomplete
-    assert normalize_event_type("RETURN", cfg) == "RETURN"
+    assert normalize_event_type("RETURN", cfg) is None
     assert normalize_event_type("SALE", cfg) is None

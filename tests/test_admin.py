@@ -40,7 +40,7 @@ def test_admin_classifiers_lists_review_safe_entries(client):
     r = client.get("/api/v1/admin/classifiers")
     assert r.status_code == 200
     keys = {c["key"] for c in r.json()["items"]}
-    assert "return_review" in keys
+    assert keys == {"sco_checkout"}
 
 
 def test_admin_prompts_returns_effective_text_and_no_accusation(client):

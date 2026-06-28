@@ -200,13 +200,13 @@ def test_sco_passthrough_round_trips_to_decide_sco_review_with_extras():
 
 
 # ---------------------------------------------------------------------------
-# 3. Refund / missing prompt_version regression — legacy parser unchanged
+# 3. Explicit refund prompt regression — legacy parser unchanged
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("prompt_version", ["return_review_v1", None])
-def test_refund_or_missing_prompt_uses_legacy_refund_parser(prompt_version):
+def test_explicit_refund_prompt_uses_legacy_refund_parser():
     provider, _ = _provider_with_canned_text(json.dumps(REFUND_VLM_JSON))
-    result = provider.analyze_evidence(_manifest(prompt_version=prompt_version))
+    result = provider.analyze_evidence(
+        _manifest(prompt_version="return_review_v1"))
     assert result.error is None
     parsed = result.parsed
     # Legacy projected refund shape is present
@@ -215,7 +215,7 @@ def test_refund_or_missing_prompt_uses_legacy_refund_parser(prompt_version):
                 "people", "item_presented", "objects_detected"):
         assert key in parsed, (
             f"legacy refund parser dropped {key!r} for "
-            f"prompt_version={prompt_version!r}")
+            "prompt_version='return_review_v1'")
     assert parsed["handover_occurred"] is True
     assert parsed["item_count"] == 1
     assert parsed["items_handed_over"] == ["bag"]
@@ -257,6 +257,23 @@ def test_sco_prompt_requests_schema_passthrough():
     assert captured.get("schema_passthrough") is True, (
         "SCO prompt path must request schema passthrough so the SCO "
         "keys survive the parser")
+
+
+def test_missing_prompt_version_defaults_to_schema_passthrough():
+    """SCO-only safety: missing metadata must not silently project model
+    output through the old refund parser."""
+    from reasoning.providers.gemma import GemmaProvider
+    captured: dict = {}
+
+    class _FakeClient:
+        def reason(self, frames, **kwargs):
+            captured.update(kwargs)
+            return dict(SCO_VLM_JSON)
+
+    provider = GemmaProvider(model_name="stub", enabled=True)
+    provider._client_cache = _FakeClient()
+    provider.analyze_evidence(_manifest(prompt_version=None))
+    assert captured.get("schema_passthrough") is True
 
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,7 @@
     .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
     label.field { font-size: 12px; color: var(--muted);
       display: inline-flex; align-items: center; gap: 6px; }
+    .legacy-flow-field { display: none !important; }
     input, select, button, textarea {
       background: #0e131a; color: var(--text); border: 1px solid var(--border);
       padding: 7px 10px; border-radius: 5px; font: inherit;
@@ -243,7 +244,7 @@
             <option value="no">no</option>
           </select>
         </label>
-        <label class="field" title="Legacy refund-flow signal: kept for back-compat. SCO cases use the SCO risk-reason filters below.">
+        <label class="field legacy-flow-field" title="Legacy signal kept for historical cases. SCO cases use the SCO risk-reason filters below.">
           Handover
           <select id="filter-handover">
             <option value="">any</option>
@@ -292,7 +293,7 @@
             <th>Verdict</th>
             <th>SCO reasons</th>
             <th>Customer</th>
-            <th>Handover</th>
+            <th class="legacy-flow-field">Handover</th>
             <th>Item</th>
             <th>Status</th>
           </tr>
@@ -375,7 +376,7 @@
 
       <h3 style="font-size:13px;margin:24px 0 10px 0">Reviewer Decision</h3>
       <div class="reviewer-actions" id="reviewer-actions">
-        <button data-action="verified_physical_return" data-outcome="VERIFIED"
+        <button data-action="verified_basket_match" data-outcome="VERIFIED"
                 title="Mark this SCO checkout as visually consistent with the POS basket.">
           ✅ Verified — basket matches</button>
         <button data-action="needs_review" data-outcome="REVIEW">
@@ -853,7 +854,7 @@ async function refreshCases() {
       <td>${pill(row.outcome || "—")}</td>
       <td>${scoReasonPills(row.risk_reasons) || '<span style="color:var(--muted)">—</span>'}</td>
       <td>${boolCell(row.customer_present)}</td>
-      <td>${boolCell(row.handover_occurred)}</td>
+      <td class="legacy-flow-field">${boolCell(row.handover_occurred)}</td>
       <td>${boolCell(row.item_presented)}</td>
       <td>${pill(row.status || "—")}</td>`;
     tr.onclick = () => openCase(row.id);
@@ -1564,13 +1565,21 @@ document.getElementById("submit-action").onclick = async () => {
 // Shared trigger for the (background) reprocess + retime-reprocess buttons.
 // `query` (optional) is an URLSearchParams/string appended to the URL, used
 // by retime to pass an operator-chosen pre/post-roll window.
-async function triggerReprocess(path, btn, busyLabel, query) {
+async function triggerReprocess(action, btn, busyLabel, query) {
   if (!currentCase) return;
   const caseId = currentCase;
-  const qs = query ? `?${query}` : "";
-  const r = await fetch(`${API}/cases/${caseId}/${path}${qs}`, { method: "POST" });
+  let r;
+  if (action === "reprocess") {
+    r = await fetch(`${API}/cases/${caseId}/reprocess`, { method: "POST" });
+  } else if (action === "retime-reprocess") {
+    const retimeUrl = `${API}/cases/${caseId}/retime-reprocess`;
+    r = await fetch(query ? `${retimeUrl}?${query}` : retimeUrl, { method: "POST" });
+  } else {
+    alert(`unknown reprocess action: ${action}`);
+    return;
+  }
   if (!r.ok) {
-    alert(`${path} failed: ${r.status} ${await r.text()}`);
+    alert(`${action} failed: ${r.status} ${await r.text()}`);
     return;
   }
   refreshCases();
@@ -2680,8 +2689,8 @@ function _modelControlsAdvisoryWarnings(state) {
                   + "will likely fall through to REVIEW.");
   } else if (!state.falcon && state.sam3) {
     warnings.push("Perception (FL) disabled, SAM 3 ON: SCO checkout cases "
-                  + "will use SAM 3 only. Refund-flow callers that still "
-                  + "rely on Falcon track gating will fall through to REVIEW.");
+                  + "will use SAM 3 only. Legacy callers that still rely "
+                  + "on Falcon track gating will fall through to REVIEW.");
   }
   if (!_vlmEnabled(state)) {
     warnings.push("Both vision providers disabled: provider chain will "

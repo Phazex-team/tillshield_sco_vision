@@ -71,8 +71,18 @@ def get_effective_config(request: Request) -> dict:
 
 @router.get("/classifiers")
 def list_all_classifiers(request: Request) -> dict:
+    from app.config import load_config
     from classifiers import list_classifiers
-    return {"items": list_classifiers()}
+    cfg = load_config()
+    active = {
+        str(cam.get("classifier") or "").strip().lower()
+        for cam in cfg.cameras
+        if cam.get("classifier")
+    }
+    items = list_classifiers()
+    if active:
+        items = [it for it in items if it.get("key") in active]
+    return {"items": items}
 
 
 @router.get("/prompts")
@@ -798,8 +808,8 @@ def _model_control_warnings(state: dict) -> list[str]:
     elif not state.get("falcon") and state.get("sam3"):
         warnings.append(
             "Perception (FL) disabled, SAM 3 ON: SCO checkout cases will "
-            "use SAM 3 only. Refund-flow callers that still rely on "
-            "Falcon track gating will fall through to REVIEW.")
+            "use SAM 3 only. Legacy callers that still rely on Falcon "
+            "track gating will fall through to REVIEW.")
     if not state.get("qwen3_vl") and not state.get("gemma"):
         warnings.append(
             "Both vision providers disabled: the provider chain will return "

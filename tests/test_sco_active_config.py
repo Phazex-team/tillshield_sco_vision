@@ -10,7 +10,7 @@ that the production wiring matches the SCO v1 design intent:
       config → the reprocess-success branch does NOT submit the
       legacy refund-agent export.
 
-  (c) When ROI extras are enabled AND ``prompt_version=sco_basket_match_v1``
+  (c) When ROI extras are enabled AND ``prompt_version=sco_basket_match_v2``
       is active, the composed ``manifest.user_prompt`` contains BOTH the
       ROI legend AND the SCO basket-match JSON request — and does NOT
       contain Qwen's refund/return JSON shape.
@@ -32,6 +32,12 @@ if str(ROOT) not in sys.path:
 def _load_real_config():
     from app.config import load_config
     return load_config()
+
+
+def test_active_config_defaults_to_sco_v2_prompt():
+    cfg = _load_real_config()
+    reasoning = cfg.raw.get("reasoning") or {}
+    assert reasoning.get("prompt_version") == "sco_basket_match_v2"
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +231,7 @@ def test_real_config_reprocess_success_does_not_submit_refund_export(
 
 # ---------------------------------------------------------------------------
 # (c) ROI extras + SCO prompt: composed prompt contains SCO basket JSON
-#     and ROI legend, NOT the Qwen DEFAULT_USER_PROMPT (refund JSON shape)
+#     and ROI legend, NOT the provider fallback prompt.
 # ---------------------------------------------------------------------------
 
 def _make_data_url(w=160, h=120):
@@ -241,20 +247,20 @@ def _make_data_url(w=160, h=120):
 def test_sco_prompt_survives_roi_extras_composition():
     """The biggest council-flagged bug: when ROI extras are enabled,
     _build_vlm_roi_extras() composes its user_prompt with
-    qwen3_vl.DEFAULT_USER_PROMPT (refund schema). case_runner used to
+    qwen3_vl.DEFAULT_USER_PROMPT. case_runner used to
     overwrite the SCO prompt with that composition. Fix: when SCO is
     active, the manifest.user_prompt is the ROI legend + SCO basket
-    prompt, NOT the refund prompt.
+    prompt, NOT the provider fallback prompt.
 
     Test approach: use the same composition logic case_runner uses,
     drive it with the REAL config (cam_01 has SCO ROI views), and
-    assert the resulting prompt contains the SCO JSON shape AND the
-    ROI legend AND does NOT contain Qwen's refund JSON shape.
+    assert the resulting prompt contains the SCO v2 JSON shape AND the
+    ROI legend AND does NOT contain the provider fallback prompt.
     """
     cfg = _load_real_config()
     from app.case_runner import _build_vlm_roi_extras
-    from reasoning.prompts.sco_basket_match import build_sco_prompts
-    from reasoning.providers.qwen3_vl import DEFAULT_USER_PROMPT as QWEN_REFUND
+    from reasoning.prompts.sco_basket_match_v2 import build_sco_prompts_v2
+    from reasoning.providers.qwen3_vl import DEFAULT_USER_PROMPT as QWEN_FALLBACK
 
     # Build ROI extras using real config + a single synthetic frame.
     sampled_frames = [{
@@ -269,12 +275,10 @@ def test_sco_prompt_survives_roi_extras_composition():
     )
 
     # Build the SCO prompt the way case_runner does.
-    _system, sco_user = build_sco_prompts(
+    _system, sco_user = build_sco_prompts_v2(
         basket=[{"description": "DOVE SOAP BAR 100G", "quantity": 1},
                 {"description": "COKE CAN 330ML", "quantity": 2}],
-        falcon_summary={"matched_count": 2, "unmatched_count": 0,
-                        "generic_candidate_count": 0,
-                        "queries_run": ["dove soap bar", "coke can"]},
+        canonical_groups=[],
         episode_meta={"start": "2026-06-17T14:02:10",
                       "end": "2026-06-17T14:02:50",
                       "ambiguous": False, "reason": "clean_episode",
@@ -287,17 +291,15 @@ def test_sco_prompt_survives_roi_extras_composition():
     # ROI legend present
     assert "ROI legend:" in composed_user_prompt
     # SCO JSON shape present (sample of unique fields)
-    assert '"basket_match"' in composed_user_prompt
-    assert '"matched"' in composed_user_prompt
+    assert '"physical_count_match"' in composed_user_prompt
+    assert '"semantic_identity_match"' in composed_user_prompt
     assert '"video_usable"' in composed_user_prompt
     # POS basket present
     assert "DOVE SOAP BAR 100G" in composed_user_prompt
     assert "COKE CAN 330ML" in composed_user_prompt
-    # Falcon summary present
-    assert "matched POS-item detections: 2" in composed_user_prompt
-    # Qwen refund DEFAULT prompt is NOT included
-    assert QWEN_REFUND not in composed_user_prompt, (
-        "Qwen's refund DEFAULT_USER_PROMPT leaked into the SCO "
+    # Qwen fallback prompt is NOT included
+    assert QWEN_FALLBACK not in composed_user_prompt, (
+        "Qwen DEFAULT_USER_PROMPT leaked into the SCO "
         "composed prompt — fix is not effective"
     )
     # Specifically, the refund-only field names must NOT appear
@@ -313,13 +315,13 @@ def test_sco_prompt_survives_roi_extras_composition():
 
 def test_case_runner_branch_uses_sco_prompt_with_roi_extras(monkeypatch):
     """Drive the real composition path in case_runner: when
-    prompt_version=sco_basket_match_v1 and ROI extras exist, the final
+    prompt_version=sco_basket_match_v2 and ROI extras exist, the final
     manifest.user_prompt is the SCO composition.
     """
     cfg = _load_real_config()
     from app.case_runner import _build_vlm_roi_extras
-    from reasoning.prompts.sco_basket_match import build_sco_prompts
-    from reasoning.providers.qwen3_vl import DEFAULT_USER_PROMPT as QWEN_REFUND
+    from reasoning.prompts.sco_basket_match_v2 import build_sco_prompts_v2
+    from reasoning.providers.qwen3_vl import DEFAULT_USER_PROMPT as QWEN_FALLBACK
 
     sampled_frames = [{
         "frame_id": "f0", "frame_idx": 0,
@@ -329,12 +331,14 @@ def test_case_runner_branch_uses_sco_prompt_with_roi_extras(monkeypatch):
     extras = _build_vlm_roi_extras("cam_01", sampled_frames, cfg=cfg)
     assert extras is not None
 
-    _system, sco_user = build_sco_prompts(basket=[], falcon_summary={},
-                                           episode_meta={})
+    _system, sco_user = build_sco_prompts_v2(basket=[],
+                                             canonical_groups=[],
+                                             episode_meta={})
 
     # case_runner's exact composition for SCO + ROI extras:
     composed = extras["caption_text"] + "\n\n" + sco_user
 
     # Sanity: this is what gets put on manifest.user_prompt
-    assert '"basket_match"' in composed
-    assert QWEN_REFUND not in composed
+    assert '"physical_count_match"' in composed
+    assert '"semantic_identity_match"' in composed
+    assert QWEN_FALLBACK not in composed

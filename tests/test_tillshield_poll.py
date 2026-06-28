@@ -34,7 +34,7 @@ def _cfg(*, cameras=None, allowed=("52",), ws_map=None,
       * require_negative=False — SCO sales are positive amounts; the
         old refund-counter "must be negative" filter is OFF by default
         in the production config too.
-      * return_event_types defaults to ["SALE"] — the canonical SCO
+      * accepted_event_types defaults to ["SALE"] — the canonical SCO
         alias. Tests that need to exercise other aliases pass
         ``return_types=[...]`` explicitly.
     """
@@ -51,7 +51,7 @@ def _cfg(*, cameras=None, allowed=("52",), ws_map=None,
         "require_negative_amount": require_negative,
         "allowed_workstation_ids": list(allowed),
         "workstation_camera_map": ws_map,
-        "return_event_types": list(return_types or ["SALE"]),
+        "accepted_event_types": list(return_types or ["SALE"]),
     }
     if pos_timezone is not None:
         ts["pos_timezone"] = pos_timezone

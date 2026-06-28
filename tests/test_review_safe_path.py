@@ -136,14 +136,13 @@ def test_active_camera_prompts_have_no_fraud_accusation():
             )
 
 
-def test_legacy_fraud_key_remaps_to_review_safe_classifier():
+def test_legacy_fraud_key_remaps_to_sco_classifier():
     from classifiers import get_classifier
     legacy = get_classifier("fraud")
-    review = get_classifier("return_review")
+    review = get_classifier("sco_checkout")
     assert legacy is review, \
-        "the 'fraud' alias must resolve to the review-safe classifier"
-    # And the review-safe classifier itself must not contain accusation
-    # language.
+        "the 'fraud' alias must resolve to the active SCO classifier"
+    # And the SCO classifier itself must not contain accusation language.
     sys_prompt = legacy["gemma_system"].lower()
     for phrase in _FORBIDDEN_PROMPT_PHRASES:
         assert phrase not in sys_prompt

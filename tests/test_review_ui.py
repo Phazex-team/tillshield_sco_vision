@@ -54,7 +54,7 @@ def test_review_ui_strict_word_ban():
 
 def test_review_ui_exposes_review_safe_actions():
     src = (ROOT / "static" / "review.html").read_text()
-    for a in ("verified_physical_return", "needs_review",
+    for a in ("verified_basket_match", "needs_review",
               "high_risk_review", "invalid_video",
               "camera_blind_spot", "pos_camera_mismatch"):
         assert a in src, f"missing reviewer action {a!r}"

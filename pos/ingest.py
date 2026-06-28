@@ -3,13 +3,10 @@
 Contract:
   * Replaying the same batch (same payload hash OR same natural key
     tuple) does NOT create duplicate ``PosEvent`` or ``Case`` rows.
-  * A ``RETURN`` / ``REFUND`` event opens (at most) one ``Case`` with
+  * A configured SCO checkout event opens (at most) one ``Case`` with
     status=OPEN and outcome=NULL.
-  * ``REPLACEMENT`` events insert the event but do not open a case;
-    they are correlated by the perception pipeline as context.
-  * Camera assignment uses the store->camera mapping in ``config.yaml``;
-    no mapping yet means a single default camera id is used (so the MVP
-    keeps working until multi-store config lands).
+  * Camera assignment uses the store/workstation camera mapping in
+    ``config.yaml``.
 """
 from __future__ import annotations
 
@@ -27,11 +24,10 @@ from db.models import Case, PosBatch, PosEvent
 from .schemas import PosBatchIn, PosEventIn
 
 
-# Legacy default kept for direct importers. Active runtime uses
-# pos.event_normalizer.case_opening_types(cfg) which reads the
-# sco_checkout config block (SCO mode: {canonical}; legacy fallback:
-# {RETURN, REFUND}).
-CASE_OPENING_TYPES = {"RETURN", "REFUND"}
+# Compatibility constant for direct importers. Active runtime uses
+# pos.event_normalizer.case_opening_types(cfg), which reads the
+# sco_checkout config block.
+CASE_OPENING_TYPES = {"SALE"}
 
 # A camera resolver maps (store_id, terminal_id) -> camera_id or None.
 CameraResolver = Callable[[str, str], Optional[str]]
@@ -165,9 +161,8 @@ def ingest_batch(session: Session, batch: PosBatchIn,
         return _duplicate_batch_result(existing_batch.id, batch)
 
     # Resolve the case-opening predicate ONCE per batch so SCO config is
-    # consulted at the right point in time. In SCO mode this is a singleton
-    # set containing the canonical event type; in legacy fallback it is
-    # {RETURN, REFUND}. We also canonicalise each event_type on the way in
+    # consulted at the right point in time. This is a singleton set
+    # containing the canonical event type. We also canonicalise each event_type on the way in
     # so any configured alias (e.g. RETURN -> SALE in SCO mode) is stored
     # as the single canonical form.
     from pos.event_normalizer import case_opening_types, normalize_event_type

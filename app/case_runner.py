@@ -107,15 +107,21 @@ def analyze_case(session: Session,
         from app.config import load_config
         cfg = load_config()
 
-    # SCO Phase 5: prompt_version is config-driven. Callers may still
-    # override explicitly (tests do). Defaults to the SCO basket-match
-    # prompt; legacy callers can re-pin to return_review_v1 via config
-    # or kwarg.
+    # SCO prompt routing is config-driven. Defaults to the v2
+    # basket-match prompt. Only an explicit return_review_v1 opt-in
+    # can reach the legacy refund policy; unknown/empty prompt versions
+    # stay on SCO v2 instead of silently falling through to refund.
     if prompt_version is None:
         prompt_version = (
             (cfg.raw.get("reasoning") or {}).get("prompt_version")
-            or "sco_basket_match_v1"
+            or "sco_basket_match_v2"
         )
+    if prompt_version not in (
+        "sco_basket_match_v2", "sco_basket_match_v1", "return_review_v1",
+    ):
+        log.warning("unknown prompt_version=%r; defaulting to SCO v2",
+                    prompt_version)
+        prompt_version = "sco_basket_match_v2"
 
     # ----- 1. Resolve window from segment index ----------------------
     storage_root = _storage_root(cfg)
@@ -502,10 +508,9 @@ def analyze_case(session: Session,
         manifest_meta["roi_caption_text"] = vlm_roi_extras["caption_text"]
         # SCO Phase 5 council fix: when SCO mode is active AND ROI
         # extras are enabled, the helper's default user_prompt suffix
-        # is the refund/return JSON shape (qwen3_vl.DEFAULT_USER_PROMPT).
-        # That would silently replace the SCO basket prompt and the
-        # VLM would be asked to fill the refund schema instead. We
-        # must compose: ROI image-legend caption + SCO user prompt.
+        # is only a provider fallback. The transaction-specific SCO
+        # basket prompt must remain the main prompt. Compose:
+        # ROI image-legend caption + SCO user prompt.
         if sco_user_prompt_only:
             manifest_user_prompt = (vlm_roi_extras["caption_text"]
                                     + "\n\n" + sco_user_prompt_only)
@@ -657,7 +662,7 @@ def analyze_case(session: Session,
                 customer_present = False
                 contradictions: list = []
             summary = _SummaryShim()
-        else:
+        elif prompt_version == "return_review_v1":
             summary = summary_from_vlm(
                 vlm_result_dict.get("parsed", {}),
                 footage_valid=True,
@@ -669,6 +674,8 @@ def analyze_case(session: Session,
                 summary.contradictions.append(
                     f"vlm error: {vlm_result_dict['error']}")
             decision = decide(summary)
+        else:
+            raise RuntimeError(f"unhandled prompt_version {prompt_version!r}")
     finally:
         timings["decision_ms"] = _ms_since(_t)
     case.outcome = decision.outcome
@@ -1121,12 +1128,9 @@ def _build_vlm_roi_extras(camera_id: str,
         else []
     final_frames = overview_frames + extra_frames
 
-    # Compose the user prompt. We start with an "Attached images"
-    # section that pairs position -> image (overview vs roi_crop with
-    # full metadata). Then the operator-supplied ROI caption + ROI
-    # legend, and finally the canonical JSON request kept verbatim so
-    # the review-safe contract (no fraud verdict, conservative
-    # confidence) cannot regress through ROI editing.
+    # Compose the provider fallback prompt. Runtime SCO cases replace
+    # this suffix with the transaction-specific basket prompt before
+    # sending the manifest.
     image_lines: list[str] = []
     image_lines.append(
         "Attached images (the model receives them in this exact order):")

@@ -12,12 +12,10 @@ from datetime import datetime
 from typing import Optional
 
 
-# Legacy constant kept for callers that still import it. Active validation
-# is config-driven via pos.event_normalizer.normalize_event_type — see
-# PosEventIn.validate below. In SCO mode this set is no longer the
-# acceptance gate; in legacy mode (no sco_checkout config block) the
-# normalizer falls back to this same family.
-VALID_EVENT_TYPES = {"RETURN", "REFUND", "REPLACEMENT"}
+# Compatibility constant for callers that still import it. Active validation
+# is config-driven via pos.event_normalizer.normalize_event_type, but in this
+# SCO-only copy the public accepted family is checkout aliases.
+VALID_EVENT_TYPES = {"SALE", "SCO_SALE", "CHECKOUT"}
 
 
 @dataclass

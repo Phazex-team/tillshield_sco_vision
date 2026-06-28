@@ -6,8 +6,8 @@ The local TillShield agent exposes a per-workstation transaction feed
     GET /pos/data/transactions?workstationId=<id>&start=<ISO>&end=<ISO>
 
 This module polls that feed every ``poll_every_seconds`` for each
-allow-listed return-counter workstation, applies the return-counter
-policy (RETURN type + negative total + allow-listed workstation that maps
+allow-listed SCO workstation, applies the checkout policy (accepted
+event type + optional amount gate + allow-listed workstation that maps
 to a configured camera), and reuses ``pos.tillshield.ingest_tillshield_batch``
 so the downstream case flow is identical to the push path.
 
@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from db.models import IntegrationPollState
 from pos.ingest import resolve_camera_for_pos_event
-from pos.tillshield import _accepted_return_types, _normalise_event_type
+from pos.tillshield import _accepted_event_types, _normalise_event_type
 from pos.tillshield_schemas import TillShieldBatch, TillShieldTransaction
 
 
@@ -197,9 +197,9 @@ class RowDecision:
 
 
 def classify_row(row: dict, pc: TillShieldPollConfig, cfg) -> RowDecision:
-    """Decide whether a raw agent row should open a return-counter case.
+    """Decide whether a raw agent row should open an SCO checkout case.
 
-    Order: return-type -> negative-amount -> allow-listed workstation ->
+    Order: accepted event type -> amount gate -> allow-listed workstation ->
     workstation maps to a configured camera. Never raises on a normal
     non-matching row."""
     try:
@@ -208,7 +208,7 @@ def classify_row(row: dict, pc: TillShieldPollConfig, cfg) -> RowDecision:
         log.warning("tillshield poll: skipping malformed row: %s", exc)
         return RowDecision(False, "ignored_non_return_events", None, None)
 
-    accepted = _accepted_return_types(cfg)
+    accepted = _accepted_event_types(cfg)
     if _normalise_event_type(txn.transaction_type) not in accepted:
         return RowDecision(False, "ignored_non_return_events", txn, None)
 
@@ -443,7 +443,7 @@ def backfill_range(session: Session,
                    advance_cursor: bool = False) -> dict:
     """One-time historical backfill over an explicit [start_local,
     end_local] window (NVR/agent local time), independent of the poll
-    cursor. Same return-counter policy + idempotent ingest as the live
+    cursor. Same SCO checkout policy + idempotent ingest as the live
     poller, so re-running never duplicates cases. By default the poll
     cursor is left untouched (so the live poller keeps its own position).
     """

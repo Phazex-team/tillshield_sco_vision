@@ -193,7 +193,7 @@ def test_review_safe_labels_are_intact():
         "SCO Vision — Self-Checkout Reviewer",
         "Case Queue",                     # cases panel title
         "Pipeline status",                # pipeline tab title
-        "Prompt editor",                  # prompts tab title
+            "Rules editor",                   # prompts/rules tab title
         "Camera ROIs &amp; model views",  # ROI tab title (HTML-escaped)
         "Disk &amp; retention",            # storage tab title (HTML-escaped)
         "Effective configuration",        # config tab title

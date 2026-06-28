@@ -129,21 +129,21 @@ def test_no_legacy_classifier_default_in_static_ui():
 
 
 # ---------------------------------------------------------------------------
-# 4. Legacy 'fraud' alias still resolves to review-safe entry
+# 4. Legacy 'fraud' alias resolves to active SCO entry
 # ---------------------------------------------------------------------------
 
-def test_legacy_fraud_alias_resolves_to_return_review():
+def test_legacy_fraud_alias_resolves_to_sco_checkout():
     from classifiers import get_classifier, resolve_prompts
     legacy = get_classifier("fraud")
-    safe = get_classifier("return_review")
+    safe = get_classifier("sco_checkout")
     assert legacy is safe
 
     # A camera config that still says ``classifier: fraud`` must resolve
-    # to the safe prompts, NOT to anything that mentions accusation.
+    # to SCO prompts, NOT to anything that mentions accusation or refund.
     resolved = resolve_prompts({"classifier": "fraud"})
-    assert resolved["classifier"] == "return_review"
+    assert resolved["classifier"] == "sco_checkout"
     for needle in ("determine fraud", "is this fraud",
-                   "loss-prevention analyst"):
+                   "loss-prevention analyst", "return / refund"):
         assert needle not in resolved["gemma_system"].lower()
         assert needle not in resolved["gemma_user"].lower()
 

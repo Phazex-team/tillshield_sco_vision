@@ -288,10 +288,15 @@ def test_sco_end_to_end_basket_mismatch_lands_in_review(
         return {
             "provider": "qwen3_vl", "model_name": "stub",
             "parsed": {
-                "basket_match": "no",
-                "matched": [], "missing": [{"pos_item": "DOVE SOAP 100G",
-                                            "reason": "not visible"}],
-                "extras": [], "video_usable": True,
+                "physical_count_match": "no",
+                "semantic_identity_match": "no",
+                "matched_items": [],
+                "missing_visible_items": [
+                    {"pos_item": "DOVE SOAP 100G", "reason": "not visible"}
+                ],
+                "extra_visible_items": [],
+                "uncertainty_reason": "",
+                "video_usable": True,
                 "confidence": "high",
                 "narrative": "Item not visible during episode.",
             },

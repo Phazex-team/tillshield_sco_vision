@@ -14,19 +14,13 @@ Config shape (under top-level ``sco_checkout`` in ``config.yaml``):
       sku_overrides_path: config/sku_overrides.yaml
       sku_cache_path: storage/sku_translator/cache.json
 
-If the ``sco_checkout`` block is absent (e.g. a deployment that hasn't
-opted into SCO mode yet), the normaliser falls back to recognising the
-legacy refund family ``{RETURN, REFUND, REPLACEMENT}`` so existing
-integrations keep working. In this SCO-only repo copy, the block IS
-present in ``config.yaml`` and legacy refund types will no longer
-normalize to anything (returning ``None``).
+If the ``sco_checkout`` block is absent or malformed, the normaliser
+accepts no event types. This SCO-only copy must not silently fall back
+to return/refund semantics.
 """
 from __future__ import annotations
 
 from typing import Optional
-
-
-_LEGACY_FALLBACK: frozenset[str] = frozenset({"RETURN", "REFUND", "REPLACEMENT"})
 
 
 def _normalize(raw: str) -> str:
@@ -76,8 +70,8 @@ def normalize_event_type(raw: Optional[str], cfg=None) -> Optional[str]:
         configured aliases normalise (to the canonical); everything else
         returns ``None``. **Legacy refund types are NOT accepted in this
         mode.**
-      * If the ``sco_checkout`` block is missing/incomplete: fall back
-        to the legacy refund family ``{RETURN, REFUND, REPLACEMENT}``.
+      * If the ``sco_checkout`` block is missing/incomplete: reject the
+        event by returning ``None``.
     """
     if not isinstance(raw, str) or not raw.strip():
         return None
@@ -86,17 +80,16 @@ def normalize_event_type(raw: Optional[str], cfg=None) -> Optional[str]:
     canonical = canonical_event_type(cfg)
     if aliases and canonical:
         return canonical if norm in aliases else None
-    # Legacy fallback (no SCO config block configured)
-    return norm if norm in _LEGACY_FALLBACK else None
+    return None
 
 
 def case_opening_types(cfg=None) -> set[str]:
     """The set of event types that open a case in this deployment.
 
     SCO mode: ``{canonical_event_type}`` only.
-    Legacy fallback: ``{RETURN, REFUND}`` (REPLACEMENT does not open).
+    Missing/malformed SCO config: empty set.
     """
     canonical = canonical_event_type(cfg)
     if canonical:
         return {canonical}
-    return {"RETURN", "REFUND"}
+    return set()

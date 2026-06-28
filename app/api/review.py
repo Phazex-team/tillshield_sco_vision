@@ -11,6 +11,8 @@ router = APIRouter(prefix="/cases", tags=["review"])
 
 
 VALID_REVIEWER_ACTIONS = {
+    "verified_basket_match",
+    # Legacy alias accepted for historical rows / old clients.
     "verified_physical_return",
     "needs_review",
     "high_risk_review",

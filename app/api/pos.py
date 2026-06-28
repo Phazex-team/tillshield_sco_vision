@@ -1,7 +1,9 @@
 """POS ingest endpoints.
 
-Single-event (`POST /pos/returns/event`) and batch (`POST /pos/returns/batch`)
-ingest. Both are idempotent via the natural key
+Single-event and batch checkout ingest. The legacy `/pos/returns/*`
+route names are kept as backwards-compatible aliases, but accepted
+event types are SCO checkout aliases from `sco_checkout.accept_event_types`.
+Both endpoints are idempotent via the natural key
 ``(store_id, terminal_id, transaction_id, line_id)`` (per PRODUCTION_SPEC §8).
 """
 from __future__ import annotations
@@ -21,7 +23,7 @@ class PosEventBody(BaseModel):
     terminal_id: str
     transaction_id: str
     line_id: str
-    event_type: str = Field(description="RETURN | REFUND | REPLACEMENT")
+    event_type: str = Field(description="SALE | SCO_SALE | CHECKOUT")
     pos_event_at: datetime
     staff_id: Optional[str] = None
     sku: Optional[str] = None
@@ -42,6 +44,7 @@ class PosBatchBody(BaseModel):
     raw_payload: Optional[dict] = None
 
 
+@router.post("/checkout/event", status_code=200)
 @router.post("/returns/event", status_code=200)
 def ingest_event(body: PosEventBody, request: Request) -> dict:
     from app import audit
@@ -88,6 +91,7 @@ def ingest_event(body: PosEventBody, request: Request) -> dict:
     return result
 
 
+@router.post("/checkout/batch", status_code=200)
 @router.post("/returns/batch", status_code=200)
 def ingest_batch_endpoint(body: PosBatchBody, request: Request) -> dict:
     from app import audit

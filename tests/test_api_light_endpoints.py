@@ -92,11 +92,11 @@ def test_classifiers_lists_known_keys(client):
     items = r.json()["items"]
     assert isinstance(items, list) and items, "expected non-empty classifier list"
     by_key = {it["key"]: it for it in items}
-    # The repo ships a ``return_review`` classifier; ``fraud`` is a
-    # silently-remapped alias in the loader, so it's allowed to be
-    # absent from the listing.
-    assert "return_review" in by_key, by_key
-    rr = by_key["return_review"]
+    # This SCO-only copy only advertises the active SCO classifier via
+    # the admin route. Legacy classifiers remain importable in code for
+    # rollback/regression tests but are not exposed to operators.
+    assert set(by_key) == {"sco_checkout"}, by_key
+    rr = by_key["sco_checkout"]
     for key in ("display_label", "color", "token_budget",
                 "enable_thinking", "max_frames"):
         assert key in rr

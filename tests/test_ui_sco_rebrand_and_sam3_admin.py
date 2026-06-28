@@ -54,9 +54,7 @@ def test_review_page_title_and_h1_are_sco():
 def test_verified_action_label_does_not_say_refund():
     """The verified-decision button used to read 'Verified physical
     return'. SCO operators are reviewing a CHECKOUT, not a refund."""
-    # The data-action attribute kept its historical name so audit
-    # rows persist — only the user-visible label changed.
-    m = re.search(r'data-action="verified_physical_return"[^>]*>\s*([^<]+)',
+    m = re.search(r'data-action="verified_basket_match"[^>]*>\s*([^<]+)',
                   REVIEW_HTML)
     assert m, "verified action button missing"
     label = m.group(1).strip()
@@ -120,6 +118,30 @@ def test_sco_vlm_render_is_sco_shape_aware():
     # Legacy refund fallback still rendered for old cases
     assert "handover_occurred" in REVIEW_HTML
     assert "items_handed_over" in REVIEW_HTML
+
+
+def test_active_admin_prompts_are_sco_not_return_refund():
+    """The Rules tab is backed by /admin/prompts. Active cameras must
+    resolve to the SCO classifier so operators do not see stale
+    return/refund Gemma and Falcon rules."""
+    from app.api.admin import list_active_prompts
+
+    rows = list_active_prompts(camera_id=None)["items"]
+    assert rows
+    for row in rows:
+        assert row["classifier"] == "sco_checkout"
+        assert row["scenario_label"] == "SCO Checkout Basket Match"
+        combined = "\n".join([
+            row.get("gemma_system") or "",
+            row.get("gemma_user") or "",
+            row.get("falcon") or "",
+        ]).lower()
+        assert "self-checkout" in combined or "sco" in combined
+        assert "return / refund" not in combined
+        assert "return-counter" not in combined
+        assert "handover_occurred" not in combined
+        assert "physical_count_match" in combined
+        assert "semantic_identity_match" in combined
 
 
 # ---------------------------------------------------------------------------
