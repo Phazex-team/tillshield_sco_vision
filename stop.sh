@@ -7,7 +7,8 @@ cd "$(dirname "$0")"
 if [[ -f .env ]]; then set -a; source ./.env; set +a; fi
 
 APP_PID_FILE="${APP_PID_FILE:-./run/app.pid}"
-VLLM_PID_FILE="${PID_FILE:-./run/vllm.pid}"
+VLLM_PID_FILE="${PID_FILE:-./run/vllm.pid}"           # Gemma BF16 server
+QWEN_PID_FILE="${QWEN_PID_FILE:-./run/qwen.pid}"       # Qwen3-VL vLLM server
 PHOENIX_PID_FILE="${PHOENIX_PID_FILE:-./run/phoenix.pid}"
 
 stop_pid() {
@@ -38,5 +39,6 @@ stop_pid() {
 
 stop_pid "app"     "$APP_PID_FILE"
 stop_pid "phoenix" "$PHOENIX_PID_FILE"
-stop_pid "vllm"    "$VLLM_PID_FILE"
+stop_pid "qwen"    "$QWEN_PID_FILE"
+stop_pid "gemma"   "$VLLM_PID_FILE"
 echo "[stop] done"

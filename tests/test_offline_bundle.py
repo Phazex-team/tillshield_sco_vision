@@ -424,8 +424,10 @@ def test_build_active_provider_qwen_disabled_returns_gemma_only(monkeypatch):
 
 
 def test_build_active_provider_qwen_enabled_returns_chain(monkeypatch, tmp_path):
-    """With Qwen enabled AND a repo-local snapshot present, the chain is
-    built with Qwen first, Gemma second."""
+    """With Qwen enabled AND a repo-local snapshot present AND the
+    operator has explicitly opted in to the Gemma fallback, the chain
+    is built with Qwen first, Gemma second. (Production default is
+    Qwen-only; this test exercises the opt-in fallback shape.)"""
     import app.config as ac
     from reasoning.providers import build_active_provider, ChainProvider
 
@@ -437,6 +439,8 @@ def test_build_active_provider_qwen_enabled_returns_chain(monkeypatch, tmp_path)
 
     cfg = ac.load_config()
     cfg.models["qwen3_vl"].enabled = True
+    # Opt in to Gemma fallback (production default is null).
+    cfg.raw.setdefault("reasoning", {})["fallback_provider"] = "gemma"
     p = build_active_provider(cfg)
     assert isinstance(p, ChainProvider)
     assert p.providers[0].name == "qwen3_vl"

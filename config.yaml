@@ -271,8 +271,19 @@ observability:
   phoenix_url: http://localhost:6006
   phoenix_project: sco_vision
 reasoning:
+  # Qwen3-VL is the day-to-day primary VLM for SCO Vision: stronger
+  # temporal/video grounding than the local Gemma BF16 path, and
+  # better at the v2 basket-match prompt. The Qwen vLLM server must
+  # be running on :8000 (see scripts/qwen_vllm_start.sh).
   primary_provider: qwen3_vl
-  fallback_provider: gemma
+  # Gemma fallback is OFF by default. When Qwen is unavailable the
+  # chain will surface a clear "Vision did not run / all providers
+  # errored" message to the reviewer UI rather than silently fall
+  # back. To re-enable, set fallback_provider: gemma here AND launch
+  # the Gemma BF16 server (START_GEMMA=1 bash start.sh). The Gemma
+  # provider code is preserved in tree — only the chain-level
+  # fallback default is gated.
+  fallback_provider: null
   warm_fallback: false
   # SCO mode: default to the basket-match prompt for new cases. Tests
   # and operators can override per-case via analyze_case(prompt_version=...).

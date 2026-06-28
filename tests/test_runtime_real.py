@@ -345,6 +345,9 @@ def test_evidence_graph_includes_perception_node_types(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_chain_provider_health_returns_member_status(tmp_path, monkeypatch):
+    """When the operator opts in to the Gemma fallback, the chain
+    health line surfaces BOTH members. Production default is Qwen-only
+    so this test explicitly enables fallback."""
     import app.config as ac
     fake_root = tmp_path / "models" / "hf"
     (fake_root / "Qwen/Qwen3-VL-30B-A3B-Instruct" / "snap").mkdir(parents=True)
@@ -352,6 +355,7 @@ def test_chain_provider_health_returns_member_status(tmp_path, monkeypatch):
     from reasoning.providers import ChainProvider, build_active_provider
 
     cfg = ac.load_config()
+    cfg.raw.setdefault("reasoning", {})["fallback_provider"] = "gemma"
     chain = build_active_provider(cfg)
     assert isinstance(chain, ChainProvider)
     h = chain.health()
@@ -375,7 +379,9 @@ def test_chain_provider_registers_unload_callbacks_with_memory_guard(
     set_policy_for_test(policy)
     try:
         from reasoning.providers import build_active_provider
-        chain = build_active_provider(ac.load_config())
+        cfg = ac.load_config()
+        cfg.raw.setdefault("reasoning", {})["fallback_provider"] = "gemma"
+        chain = build_active_provider(cfg)
         # Once built, the policy should know about each member.
         for member in chain.providers:
             assert member.name in policy._unload_callbacks

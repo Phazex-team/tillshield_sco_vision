@@ -197,8 +197,12 @@ def build_active_provider(cfg: Any) -> VLMProvider:
 
       * ``reasoning.primary_provider`` (default ``qwen3_vl``) goes
         first if enabled AND its repo-local weights resolve.
-      * ``reasoning.fallback_provider`` (default ``gemma``) is the
-        chain fallback. It is **not** warm-loaded unless
+      * ``reasoning.fallback_provider`` (default ``None``) is the
+        chain fallback. SCO production defaults to NO fallback so
+        a Qwen failure surfaces a clear error in the reviewer UI
+        instead of silently switching providers. Set it to
+        ``gemma`` AND boot the Gemma BF16 server to re-enable. The
+        fallback is **not** warm-loaded unless
         ``reasoning.warm_fallback`` is true.
       * If only one provider is configured, return it directly so
         memory-state checks still apply.
@@ -213,7 +217,10 @@ def build_active_provider(cfg: Any) -> VLMProvider:
 
     reasoning_cfg = (cfg.raw.get("reasoning") if cfg else None) or {}
     primary = reasoning_cfg.get("primary_provider", "qwen3_vl")
-    fallback = reasoning_cfg.get("fallback_provider", "gemma")
+    # Fallback default changed from "gemma" to None: SCO production
+    # wants Qwen-only by default with a clear error when Qwen is
+    # unavailable. Gemma fallback is preserved as opt-in via config.
+    fallback = reasoning_cfg.get("fallback_provider", None)
     warm_fallback = bool(reasoning_cfg.get("warm_fallback", False))
 
     providers: list[VLMProvider] = []

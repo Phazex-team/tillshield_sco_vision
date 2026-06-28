@@ -70,10 +70,15 @@ def test_qwen_enabled_in_active_config():
 
 
 def test_active_provider_is_chain_with_qwen_first():
+    """Production default is Qwen-only (fallback_provider: null). To
+    pin the Qwen-first ordering when the operator re-enables the
+    Gemma fallback, we explicitly opt in here. The Qwen-only path is
+    covered by tests/test_startup_qwen_default.py."""
     from app.config import load_config
     from reasoning.providers import ChainProvider, build_active_provider
 
     cfg = load_config()
+    cfg.raw.setdefault("reasoning", {})["fallback_provider"] = "gemma"
     p = build_active_provider(cfg)
     assert isinstance(p, ChainProvider), \
         f"expected ChainProvider, got {type(p).__name__}"

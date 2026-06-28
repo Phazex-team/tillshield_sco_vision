@@ -109,7 +109,8 @@ def test_recorder_path_does_not_gate_on_memory(policy):
 def test_chain_provider_construction_does_not_load_weights(monkeypatch,
                                                            tmp_path):
     """build_active_provider must not load Qwen or Gemma weights at
-    construction time."""
+    construction time. (Test forces the chain shape by opting in to
+    the Gemma fallback — production default is Qwen-only.)"""
     import app.config as ac
     fake_root = tmp_path / "models" / "hf"
     qwen_snap = fake_root / "Qwen/Qwen3-VL-30B-A3B-Instruct" / "snap"
@@ -118,6 +119,10 @@ def test_chain_provider_construction_does_not_load_weights(monkeypatch,
 
     from reasoning.providers import build_active_provider, ChainProvider
     cfg = ac.load_config()
+    # Production default is reasoning.fallback_provider: null (Qwen-only);
+    # for THIS test we want to assert the multi-provider construction
+    # path is also lazy. Force the chain shape.
+    cfg.raw.setdefault("reasoning", {})["fallback_provider"] = "gemma"
     p = build_active_provider(cfg)
     assert isinstance(p, ChainProvider)
     # Qwen private fields must remain unset until analyze_evidence.
@@ -132,12 +137,15 @@ def test_chain_provider_construction_does_not_load_weights(monkeypatch,
 
 
 def test_qwen_and_gemma_not_loaded_simultaneously_by_default():
-    """By default config.reasoning.warm_fallback is false; the chain
-    must not pre-warm the fallback. The ``warm_fallback`` flag on the
-    constructed ChainProvider mirrors that."""
+    """When the operator opts in to the Gemma fallback, the chain
+    constructor must not pre-warm it (``warm_fallback`` defaults to
+    false). Production-default Qwen-only mode skips the ChainProvider
+    entirely; this test pins the chain semantics when the operator
+    re-enables fallback."""
     from app.config import load_config
     from reasoning.providers import build_active_provider, ChainProvider
     cfg = load_config()
+    cfg.raw.setdefault("reasoning", {})["fallback_provider"] = "gemma"
     p = build_active_provider(cfg)
     assert isinstance(p, ChainProvider)
     assert p.warm_fallback is False
