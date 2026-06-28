@@ -386,10 +386,30 @@ def analyze_case(session: Session,
                       if pos.raw_payload else None) or []
             falcon_summary = _summarise_falcon_for_sco(perception_result)
             manifest_meta["sco_falcon_summary"] = falcon_summary
+            # SCO v1.1: collapse re-detections of the same physical
+            # item into canonical groups BEFORE the VLM sees them.
+            # Without this, the same hot-food container detected once
+            # as sco_item_000 and once as sco_generic_products would
+            # be reported by the VLM as one matched item PLUS one
+            # extra candidate — sending an honest case to REVIEW for
+            # a phantom extra.
+            try:
+                from perception.item_grouping import group_sco_items
+                canonical_groups = group_sco_items(
+                    (perception_result or {}).get("detections") or [],
+                    (perception_result or {}).get("tracks") or [],
+                    pos_basket=basket,
+                )
+            except Exception:
+                log.exception("SCO item grouping failed; VLM will see "
+                              "raw detections")
+                canonical_groups = []
+            manifest_meta["sco_canonical_groups"] = canonical_groups
             manifest_system_prompt, sco_user_prompt_only = build_sco_prompts(
                 basket=basket,
                 falcon_summary=falcon_summary,
                 episode_meta=_sco_episode,
+                canonical_groups=canonical_groups,
             )
             manifest_user_prompt = sco_user_prompt_only
         except Exception:

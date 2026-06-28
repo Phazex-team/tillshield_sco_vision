@@ -34,6 +34,14 @@ _SYSTEM_PROMPT = (
     "  * Quantity reporting in v1 is presence-only. If you see more "
     "than two of the same item class, report \"multiple\" rather "
     "than a number.\n"
+    "  * You are reviewing CANONICAL ITEM GROUPS, not raw detections. "
+    "Each group represents one physical object that the tracker has "
+    "already de-duplicated across frames and across detector labels. "
+    "Do NOT count the same item again if it appears in multiple "
+    "frames or under both a POS-specific label and a generic product "
+    "label — the grouper has already collapsed those into one group. "
+    "Only call something an \"extra\" if it is listed below as an "
+    "extra candidate group (matched_pos_item: null).\n"
     "  * If the episode is flagged ambiguous, downgrade confidence to "
     "at most \"medium\" and explain the ambiguity in your narrative.\n"
     "  * If the video is unusable, set basket_match=\"uncertain\" and "
@@ -50,10 +58,18 @@ POS bill items for this transaction:
 Falcon detector evidence summary (single pass on the wide POS window):
 {falcon_summary_block}
 
+Canonical item groups (tracker-deduplicated; each group = one physical item):
+{groups_block}
+
 Selected customer episode (anchor: POS transaction time):
 {episode_block}
 
 Compare what is VISIBLE in the audit-zone frames to the POS bill above.
+Treat the canonical item groups as the authoritative count of distinct
+physical items in the episode. Do NOT add to "extras" anything that
+appears as a POS-matched canonical group; only items appearing as
+"extra candidate" groups (or items you can see in frames that are not
+in ANY canonical group) belong in "extras".
 
 Return EXACTLY this JSON shape, no extra keys, no trailing text:
 
@@ -87,11 +103,15 @@ Hard rules to obey:
 def build_user_prompt(*,
                       basket: Optional[Iterable[dict]],
                       falcon_summary: Optional[dict] = None,
-                      episode_meta: Optional[dict] = None) -> str:
-    """Render the user prompt with POS items + Falcon summary + episode."""
+                      episode_meta: Optional[dict] = None,
+                      canonical_groups: Optional[Iterable[dict]] = None
+                      ) -> str:
+    """Render the user prompt with POS items + Falcon summary +
+    canonical item groups + episode."""
     return _USER_TEMPLATE.format(
         pos_items_block=_format_items_block(basket),
         falcon_summary_block=_format_falcon_block(falcon_summary or {}),
+        groups_block=_format_groups_block(canonical_groups or []),
         episode_block=_format_episode_block(episode_meta or {}),
     )
 
@@ -103,13 +123,15 @@ def build_system_prompt() -> str:
 def build_sco_prompts(*,
                       basket: Optional[Iterable[dict]] = None,
                       falcon_summary: Optional[dict] = None,
-                      episode_meta: Optional[dict] = None
+                      episode_meta: Optional[dict] = None,
+                      canonical_groups: Optional[Iterable[dict]] = None
                       ) -> tuple[str, str]:
     """Convenience: returns (system_prompt, user_prompt)."""
     return (build_system_prompt(),
             build_user_prompt(basket=basket,
                               falcon_summary=falcon_summary,
-                              episode_meta=episode_meta))
+                              episode_meta=episode_meta,
+                              canonical_groups=canonical_groups))
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +180,44 @@ def _format_falcon_block(falcon_summary: dict) -> str:
         lines.append(f"  queries Falcon ran: {shown}{more}")
     return "\n".join(lines) if lines \
         else "  (Falcon ran but produced no summary fields.)"
+
+
+def _format_groups_block(groups: Iterable[dict]) -> str:
+    """Render the canonical-groups section. Splits into POS-matched and
+    extra-candidate sub-blocks so the VLM cannot accidentally re-count
+    a POS group as an extra."""
+    glist = list(groups or [])
+    if not glist:
+        return ("  (No canonical groups produced — the grouper saw no "
+                "trackable items in the audit zone.)")
+    matched = [g for g in glist if not g.get("is_extra_candidate")]
+    extras = [g for g in glist if g.get("is_extra_candidate")]
+    lines = []
+    lines.append(f"  Matched POS groups ({len(matched)}):")
+    if matched:
+        for g in matched:
+            pos = g.get("matched_pos_item") or "(unknown POS line)"
+            labels = ", ".join(g.get("source_labels") or [])
+            conf = g.get("confidence") or "low"
+            lines.append(
+                f"    - {g.get('group_id', '?')}: pos_item={pos!r}; "
+                f"source_labels=[{labels}]; confidence={conf}"
+            )
+    else:
+        lines.append("    (none)")
+    lines.append(f"  Extra candidate groups ({len(extras)}) — "
+                 "items NOT matched to any POS line:")
+    if extras:
+        for g in extras:
+            labels = ", ".join(g.get("source_labels") or [])
+            conf = g.get("confidence") or "low"
+            lines.append(
+                f"    - {g.get('group_id', '?')}: "
+                f"source_labels=[{labels}]; confidence={conf}"
+            )
+    else:
+        lines.append("    (none)")
+    return "\n".join(lines)
 
 
 def _format_episode_block(episode: dict) -> str:

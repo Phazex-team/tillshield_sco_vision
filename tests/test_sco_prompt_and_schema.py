@@ -88,6 +88,59 @@ def test_user_prompt_schema_keys_match_pydantic_schema():
 
 
 # ---------------------------------------------------------------------------
+# Canonical groups (v1.1 de-dup)
+# ---------------------------------------------------------------------------
+
+def test_prompt_renders_canonical_groups_split_into_matched_and_extras():
+    from reasoning.prompts.sco_basket_match import build_user_prompt
+    groups = [
+        {
+            "group_id": "sco_group_001",
+            "matched_pos_item": "Biriyani Hot Food",
+            "source_labels": ["sco_item_000", "sco_generic_products"],
+            "confidence": "high",
+            "is_extra_candidate": False,
+        },
+        {
+            "group_id": "sco_group_002",
+            "matched_pos_item": None,
+            "source_labels": ["sco_generic_products"],
+            "confidence": "low",
+            "is_extra_candidate": True,
+        },
+    ]
+    out = build_user_prompt(basket=[{"description": "Biriyani Hot Food"}],
+                             canonical_groups=groups)
+    # Both groups are rendered, in their respective sections
+    assert "Matched POS groups (1)" in out
+    assert "Extra candidate groups (1)" in out
+    assert "sco_group_001" in out
+    assert "sco_group_002" in out
+    # Source labels surfaced for audit
+    assert "sco_item_000" in out
+    assert "sco_generic_products" in out
+    # POS item name surfaced on the matched line
+    assert "Biriyani Hot Food" in out
+
+
+def test_prompt_with_no_groups_emits_safe_placeholder():
+    from reasoning.prompts.sco_basket_match import build_user_prompt
+    out = build_user_prompt(basket=[], canonical_groups=[])
+    assert "No canonical groups produced" in out
+
+
+def test_system_prompt_tells_vlm_not_to_double_count_dedup_groups():
+    """The de-dup contract has to be in the system prompt, otherwise
+    the VLM can still re-introduce phantom extras at decode time."""
+    from reasoning.prompts.sco_basket_match import build_system_prompt
+    sys_p = build_system_prompt().lower()
+    assert "canonical" in sys_p
+    assert "do not count the same item again" in sys_p
+    # And specifically: don't double-count under both POS + generic.
+    assert "pos-specific label and a generic product label" in sys_p
+
+
+# ---------------------------------------------------------------------------
 # Output schema
 # ---------------------------------------------------------------------------
 
