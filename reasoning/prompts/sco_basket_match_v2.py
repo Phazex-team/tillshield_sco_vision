@@ -75,14 +75,25 @@ _USER_TEMPLATE = """\
 POS bill items for this transaction:
 {pos_items_block}
 
-Canonical item groups (tracker-deduplicated; each group = ONE physical item):
+Raw SAM-3 canonical groups (one entry per raw SAM-3 object id):
 {groups_block}
+
+Merged physical containers (after temporal/spatial de-fragmentation):
+{merged_groups_block}
+
+IMPORTANT — raw SAM-3 object IDs may FRAGMENT one physical
+container across an occlusion or a hand-pass. The merged section
+above is the de-fragmented best estimate. **Use the merged
+container count, not the raw SAM-3 id count, when reasoning about
+how many physical items are visible.** The merger emits a
+``visible_container_count_min`` and ``_max`` range; when the
+range is wide, treat it as count uncertainty.
 
 Selected customer episode (anchor: POS transaction time):
 {episode_block}
 
 Compare what is VISIBLE in the audit-zone frames to the POS bill above.
-Treat the canonical group count as the authoritative physical count.
+Treat the MERGED container count as the authoritative physical count.
 
 Return EXACTLY this JSON shape, no extra keys, no trailing text:
 
@@ -153,10 +164,14 @@ Hard rules to obey when filling the schema:
 def build_user_prompt_v2(*,
                           basket: Optional[Iterable[dict]],
                           canonical_groups: Optional[Iterable[dict]] = None,
+                          merged_container_groups: Optional[Iterable[dict]] = None,
+                          container_merge_meta: Optional[dict] = None,
                           episode_meta: Optional[dict] = None) -> str:
     return _USER_TEMPLATE.format(
         pos_items_block=_format_items_block(basket),
         groups_block=_format_groups_block(canonical_groups or []),
+        merged_groups_block=_format_merged_groups_block(
+            merged_container_groups, container_merge_meta),
         episode_block=_format_episode_block(episode_meta or {}),
     )
 
@@ -168,12 +183,17 @@ def build_system_prompt_v2() -> str:
 def build_sco_prompts_v2(*,
                           basket: Optional[Iterable[dict]] = None,
                           canonical_groups: Optional[Iterable[dict]] = None,
+                          merged_container_groups: Optional[Iterable[dict]] = None,
+                          container_merge_meta: Optional[dict] = None,
                           episode_meta: Optional[dict] = None
                           ) -> tuple[str, str]:
     return (build_system_prompt_v2(),
-            build_user_prompt_v2(basket=basket,
-                                  canonical_groups=canonical_groups,
-                                  episode_meta=episode_meta))
+            build_user_prompt_v2(
+                basket=basket,
+                canonical_groups=canonical_groups,
+                merged_container_groups=merged_container_groups,
+                container_merge_meta=container_merge_meta,
+                episode_meta=episode_meta))
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +258,53 @@ def _format_groups_block(groups: Iterable[dict]) -> str:
     else:
         lines.append("    (none)")
     return "\n".join(lines)
+
+
+def _format_merged_groups_block(groups: Optional[Iterable[dict]],
+                                 meta: Optional[dict]) -> str:
+    glist = list(groups or [])
+    meta = meta or {}
+    if not glist and not meta:
+        return ("  (No merged-container data available — fall back to "
+                "the raw SAM-3 group count above, but TREAT IT AS "
+                "UNCERTAIN.)")
+    lines = []
+    cmin = meta.get("count_min")
+    cmax = meta.get("count_max")
+    if cmin is not None and cmax is not None:
+        lines.append(
+            f"  visible_container_count_min: {cmin}")
+        lines.append(
+            f"  visible_container_count_max: {cmax}")
+    if "count_confidence" in meta:
+        lines.append(f"  count_confidence:            "
+                     f"{meta.get('count_confidence')}")
+    if meta.get("fragmentation_suspected"):
+        lines.append("  fragmentation_suspected:     true "
+                     "(same container appeared under multiple SAM-3 "
+                     "object IDs across the episode)")
+    if meta.get("missed_container_possible"):
+        lines.append("  missed_container_possible:   true "
+                     "(POS basket size > visible_container_count_max)")
+    if glist:
+        lines.append("")
+        lines.append(f"  Merged container groups ({len(glist)}):")
+        for g in glist:
+            merged_from = g.get("merged_from") or [g.get("group_id")]
+            raw = g.get("raw_group_count") or 1
+            note = ""
+            if raw > 1:
+                note = f" (merged from {raw} raw SAM-3 groups: " \
+                       f"{', '.join(str(x) for x in merged_from)})"
+            pos = g.get("matched_pos_item") or "(unmatched)"
+            labels = ", ".join(g.get("source_labels") or [])
+            conf = g.get("confidence") or "low"
+            lines.append(
+                f"    - {g.get('group_id', '?')}: pos_item={pos!r}; "
+                f"source_labels=[{labels}]; merged_confidence={conf}"
+                f"{note}"
+            )
+    return "\n".join(lines) if lines else "  (no merge metadata)"
 
 
 def _format_episode_block(episode: dict) -> str:

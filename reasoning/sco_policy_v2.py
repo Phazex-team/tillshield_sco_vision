@@ -73,7 +73,18 @@ def decide_sco_v2(vlm: Optional[ScoBasketMatchV2],
                   episode_meta: Optional[dict] = None,
                   *,
                   min_episode_coverage: float = MIN_EPISODE_COVERAGE,
+                  container_merge_meta: Optional[dict] = None,
+                  pos_basket_size: Optional[int] = None,
                   ) -> PolicyDecision:
+    """Decide the SCO outcome.
+
+    ``container_merge_meta`` (optional, post-SAM3): when present,
+    physical-count gates honour the merged count range
+    (``count_min``..``count_max``) and the ``fragmentation_suspected``
+    / ``missed_container_possible`` flags. Without it (Falcon-only,
+    legacy callers), physical-count behaviour is unchanged from
+    v1 of this policy.
+    """
     if vlm is None:
         return PolicyDecision(
             outcome=OUTCOME_REVIEW, risk_score=0.5,
@@ -113,12 +124,69 @@ def decide_sco_v2(vlm: Optional[ScoBasketMatchV2],
         reasons.append(f"VLM confidence is {vlm.confidence!r}")
 
     # ---- Gate 5: physical count ----
-    if vlm.physical_count_match == "no":
-        tags.append(TAG_BASKET_MISMATCH)
-        reasons.append("physical item count does not match POS basket")
-    elif vlm.physical_count_match == "uncertain":
-        tags.append(TAG_COUNT_UNCERTAIN)
-        reasons.append("physical item count uncertain")
+    # When container-merge metadata is present, the merger's count
+    # range + confidence is the ground truth for the COUNT signal.
+    # The VLM's physical_count_match is treated as a secondary
+    # opinion: it can downgrade certainty but cannot upgrade a
+    # "wide-range / fragmented" merger result to a confident match.
+    if container_merge_meta is not None:
+        cmin = container_merge_meta.get("count_min")
+        cmax = container_merge_meta.get("count_max")
+        conf = (container_merge_meta.get("count_confidence")
+                or "low").lower()
+        frag = bool(container_merge_meta.get("fragmentation_suspected"))
+        missed = bool(container_merge_meta.get("missed_container_possible"))
+        if pos_basket_size is not None and pos_basket_size >= 0 \
+                and isinstance(cmin, int) and isinstance(cmax, int):
+            # Only flag a CONFIDENT mismatch when:
+            #   * the merger has medium/high confidence in its count,
+            #   * AND the POS basket size is OUTSIDE the merger's
+            #     count range by more than 1 in either direction,
+            #   * AND the VLM did not actively contradict the
+            #     mismatch claim by saying physical_count_match=yes.
+            # Otherwise this is count uncertainty, not mismatch.
+            outside_range = (pos_basket_size + 1 < cmin
+                             or pos_basket_size - 1 > cmax)
+            merger_confident = conf in ("high", "medium")
+            vlm_contradicts = (vlm.physical_count_match == "yes")
+            if outside_range and merger_confident and not vlm_contradicts:
+                tags.append(TAG_BASKET_MISMATCH)
+                reasons.append(
+                    f"physical item count {cmin}-{cmax} does not "
+                    f"match POS basket size {pos_basket_size} "
+                    f"(merger_confidence={conf})")
+            elif cmax > cmin or frag or conf == "low":
+                tags.append(TAG_COUNT_UNCERTAIN)
+                detail = []
+                if cmax > cmin:
+                    detail.append(
+                        f"merged count range {cmin}-{cmax}")
+                if frag:
+                    detail.append("fragmentation suspected")
+                if missed:
+                    detail.append("missed container possible")
+                if conf == "low":
+                    detail.append("merger confidence low")
+                reasons.append("physical item count uncertain: "
+                               + "; ".join(detail))
+        else:
+            # No POS size or no usable range → defer to VLM signal.
+            if vlm.physical_count_match == "no":
+                tags.append(TAG_BASKET_MISMATCH)
+                reasons.append(
+                    "physical item count does not match POS basket")
+            elif vlm.physical_count_match == "uncertain":
+                tags.append(TAG_COUNT_UNCERTAIN)
+                reasons.append("physical item count uncertain")
+    else:
+        # Legacy / Falcon-only callers: physical-count signal comes
+        # purely from the VLM (the v1 policy behaviour for this gate).
+        if vlm.physical_count_match == "no":
+            tags.append(TAG_BASKET_MISMATCH)
+            reasons.append("physical item count does not match POS basket")
+        elif vlm.physical_count_match == "uncertain":
+            tags.append(TAG_COUNT_UNCERTAIN)
+            reasons.append("physical item count uncertain")
 
     # ---- Gate 6: semantic identity ----
     # The critical v2 split. semantic_identity_match=uncertain is

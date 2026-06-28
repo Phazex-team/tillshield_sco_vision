@@ -114,6 +114,62 @@ def test_v2_garbage_input_returns_uncertain_low():
     assert obj.confidence == "low"
 
 
+def test_prompt_v2_renders_merged_container_section():
+    from reasoning.prompts.sco_basket_match_v2 import build_user_prompt_v2
+    merged_groups = [{
+        "group_id": "sco_group_001+sco_group_002",
+        "matched_pos_item": None,
+        "source_labels": ["sco_generic_food_container",
+                          "sco_generic_plastic_food_box"],
+        "confidence": "medium",
+        "is_extra_candidate": True,
+        "merged_from": ["sco_group_001", "sco_group_002"],
+        "raw_group_count": 2,
+    }]
+    meta = {
+        "count_min": 1, "count_max": 2,
+        "count_confidence": "medium",
+        "fragmentation_suspected": True,
+        "missed_container_possible": False,
+    }
+    out = build_user_prompt_v2(
+        basket=[{"description": "Biriyani Hot Food"}],
+        canonical_groups=[
+            {"group_id": "sco_group_001", "matched_pos_item": None,
+             "source_labels": ["sco_generic_food_container"],
+             "confidence": "low", "is_extra_candidate": True},
+            {"group_id": "sco_group_002", "matched_pos_item": None,
+             "source_labels": ["sco_generic_plastic_food_box"],
+             "confidence": "low", "is_extra_candidate": True},
+        ],
+        merged_container_groups=merged_groups,
+        container_merge_meta=meta,
+    )
+    # Anti-fragmentation note present
+    assert "raw SAM-3 object IDs may FRAGMENT" in out
+    assert "merged container count" in out.lower()
+    assert "merged_groups for count" in out.lower() \
+        or "merged container count" in out.lower()
+    # Merger meta surfaced
+    assert "visible_container_count_min: 1" in out
+    assert "visible_container_count_max: 2" in out
+    assert "count_confidence:" in out
+    assert "fragmentation_suspected:     true" in out
+    # Merged group cites its raw lineage
+    assert "merged from 2 raw SAM-3 groups" in out
+
+
+def test_prompt_v2_renders_empty_merge_when_no_meta():
+    from reasoning.prompts.sco_basket_match_v2 import build_user_prompt_v2
+    out = build_user_prompt_v2(
+        basket=[{"description": "X"}],
+        canonical_groups=[],
+        merged_container_groups=None,
+        container_merge_meta=None,
+    )
+    assert "No merged-container data available" in out
+
+
 def test_v2_schema_tolerates_json_null_for_optional_strings():
     """Real Gemma emits JSON null for group_id when it cannot tie a
     POS line to a specific canonical group. The pre-fix schema

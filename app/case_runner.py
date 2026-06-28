@@ -441,10 +441,39 @@ def analyze_case(session: Session,
                 from reasoning.prompts.sco_basket_match_v2 import (
                     build_sco_prompts_v2,
                 )
+                # SAM3 container de-fragmentation step (between
+                # canonical grouping and the VLM). Raw SAM3 object
+                # IDs commonly fragment one physical container; the
+                # merger collapses them into one merged group when
+                # they share container family, sizes/aspects, time
+                # continuity, and never co-exist in the same frame.
+                merged_meta: dict = {}
+                merged_groups = list(canonical_groups)
+                try:
+                    from perception.container_merge import (
+                        merge_sam3_containers,
+                    )
+                    _coverage = float(
+                        (_sco_episode or {}).get("coverage_ratio") or 0.0
+                    )
+                    _merge_res = merge_sam3_containers(
+                        canonical_groups,
+                        (perception_result or {}).get("detections") or [],
+                        pos_basket_size=len(basket) if basket else None,
+                        episode_coverage_ratio=_coverage,
+                    )
+                    merged_meta = _merge_res.to_dict()
+                    merged_groups = merged_meta["merged_groups"]
+                except Exception:
+                    log.exception("SAM3 container merge failed; "
+                                  "VLM will see raw canonical groups only")
+                manifest_meta["sco_container_merge"] = merged_meta
                 manifest_system_prompt, sco_user_prompt_only = (
                     build_sco_prompts_v2(
                         basket=basket,
                         canonical_groups=canonical_groups,
+                        merged_container_groups=merged_groups,
+                        container_merge_meta=merged_meta,
                         episode_meta=_sco_episode,
                     )
                 )
@@ -592,7 +621,19 @@ def analyze_case(session: Session,
                 sco_vlm = parse_or_fallback_v2({})
             else:
                 sco_vlm = parse_or_fallback_v2(parsed_vlm)
-            decision = decide_sco_v2(sco_vlm, _sco_episode)
+            # Hand the merger meta + POS basket size to the policy
+            # so physical-count gating honours merged-count range,
+            # not raw SAM3 id count.
+            _basket_for_policy = ((pos.raw_payload or {}).get("items")
+                                   if pos.raw_payload else None) or []
+            _container_merge_meta = manifest_meta.get(
+                "sco_container_merge") or None
+            decision = decide_sco_v2(
+                sco_vlm, _sco_episode,
+                container_merge_meta=_container_merge_meta,
+                pos_basket_size=(len(_basket_for_policy)
+                                 if _basket_for_policy else None),
+            )
             class _SummaryShim:
                 customer_present = False
                 contradictions: list = []
