@@ -85,6 +85,7 @@ def select_sco_episode(tracks: Iterable[dict],
                        merge_gap_sec: float = MERGE_GAP_SEC,
                        max_episode_sec: float = MAX_EPISODE_SEC,
                        anchor_tolerance_sec: float = POS_ANCHOR_TOLERANCE_SEC,
+                       allow_item_occupancy_fallback: bool = True,
                        ) -> EpisodeWindow:
     """Pick the customer episode inside ``roi_name`` for the POS event
     at ``pos_time``. Defensive: never raises, returns a usable window
@@ -94,9 +95,30 @@ def select_sco_episode(tracks: Iterable[dict],
     track dicts (case_runner persistence emits dicts). Each entry needs
     at least ``label``, ``zones`` (list[str]), ``first_seen_ts``,
     ``last_seen_ts``.
+
+    ``allow_item_occupancy_fallback`` (default True, v1.1): when no
+    person tracks are present in the zone (e.g. SAM3-only mode where
+    Falcon is off and SAM3 doesn't emit a generic "person" concept),
+    fall back to ITEM-track occupancy. Any non-person SCO track
+    (``sco_item_*``, ``sco_generic_*``, ``item``, ``sam3_*``) inside
+    the zone counts as activity. The episode reason is then tagged
+    ``item_occupancy`` so the policy can downgrade confidence
+    appropriately. When no item or person tracks exist, behaviour
+    is unchanged: ``no_activity`` / coverage 0.
     """
     window_secs = max((window_end - window_start).total_seconds(), 1e-6)
     person_in_zone = _select_person_tracks_in_zone(tracks, roi_name)
+    used_fallback = False
+    if not person_in_zone and allow_item_occupancy_fallback:
+        # SAM3-only mode (or any other Falcon-off run) has no person
+        # tracks. Use item occupancy as a proxy — if real items are
+        # moving in the audit zone around POS time, that IS the
+        # customer interaction we care about, even though we lack a
+        # bounded person track.
+        item_in_zone = _select_item_tracks_in_zone(tracks, roi_name)
+        if item_in_zone:
+            person_in_zone = item_in_zone
+            used_fallback = True
     if not person_in_zone:
         return EpisodeWindow(
             start=window_start, end=window_end,
@@ -145,9 +167,10 @@ def select_sco_episode(tracks: Iterable[dict],
             ambiguous=True, reason="long_continuous",
             coverage_ratio=min(1.0, duration / window_secs),
         )
+    reason = "item_occupancy" if used_fallback else "clean_episode"
     return EpisodeWindow(
         start=s, end=e,
-        ambiguous=False, reason="clean_episode",
+        ambiguous=False, reason=reason,
         coverage_ratio=min(1.0, duration / window_secs),
     )
 
@@ -155,6 +178,32 @@ def select_sco_episode(tracks: Iterable[dict],
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _select_item_tracks_in_zone(tracks: Iterable, roi_name: str
+                                ) -> list[dict]:
+    """Item-occupancy fallback used in SAM3-only mode. Any track
+    that is NOT a person and whose label looks like an item (SCO
+    prefix or Falcon's default 'item') and is in the zone counts."""
+    out: list[dict] = []
+    for t in (tracks or []):
+        first, last, label, zones = _track_fields(t)
+        if first is None or last is None:
+            continue
+        if _is_person_label(label):
+            continue
+        lower = label.lower()
+        # Item-ish labels: SCO prefixes, default Falcon 'item',
+        # SAM3 native track labels (sam3_*).
+        if not (lower.startswith("sco_")
+                or lower == "item"
+                or lower.startswith("sam3_")):
+            continue
+        if roi_name not in zones:
+            continue
+        out.append({"first": first, "last": last,
+                    "label": label, "zones": zones})
+    return out
+
 
 def _select_person_tracks_in_zone(tracks: Iterable, roi_name: str
                                   ) -> list[dict]:

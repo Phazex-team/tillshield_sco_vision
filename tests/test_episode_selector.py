@@ -129,14 +129,51 @@ def test_person_in_a_different_zone_is_ignored():
     assert ep.reason == "no_activity"
 
 
-def test_item_track_in_zone_is_not_a_person():
-    """sco_item_* / sco_generic_* tracks are NOT persons."""
+def test_item_track_in_zone_is_not_a_person_but_drives_item_occupancy():
+    """sco_item_* / sco_generic_* tracks are NOT persons, but they do
+    drive the v1.1 item-occupancy fallback (SAM3-only mode has no
+    Falcon person tracks)."""
     tracks = [
         _track("sco_generic_products", ROI, t0_off=130, t1_off=170),
         _track("sco_item_001", ROI, t0_off=130, t1_off=170),
     ]
     ep = _select(tracks)
+    assert ep.reason == "item_occupancy"
+    assert ep.ambiguous is False
+    # Coverage = 40s / 300s
+    assert 0.13 < ep.coverage_ratio < 0.14
+
+
+def test_item_occupancy_fallback_can_be_disabled():
+    """Callers that want the pre-v1.1 behaviour pass
+    allow_item_occupancy_fallback=False."""
+    from perception.episode_selector import select_sco_episode
+    tracks = [_track("sco_item_001", ROI, t0_off=130, t1_off=170)]
+    ep = select_sco_episode(
+        tracks, pos_time=POS_TIME, roi_name=ROI,
+        window_start=WINDOW_START, window_end=WINDOW_END,
+        allow_item_occupancy_fallback=False,
+    )
     assert ep.reason == "no_activity"
+    assert ep.coverage_ratio == 0.0
+
+
+def test_person_tracks_take_priority_over_item_fallback():
+    """When BOTH person and item tracks exist, the person path wins —
+    fallback is only consulted when no person tracks are in zone."""
+    tracks = [
+        _track("person", ROI, t0_off=140, t1_off=170),
+        _track("sco_item_001", ROI, t0_off=145, t1_off=165),
+    ]
+    ep = _select(tracks)
+    assert ep.reason == "clean_episode"
+
+
+def test_item_occupancy_outside_anchor_tolerance_does_not_qualify():
+    """An item track far from pos_time still doesn't make an episode."""
+    tracks = [_track("sco_item_001", ROI, t0_off=0, t1_off=10)]
+    ep = _select(tracks)
+    assert ep.reason == "anchor_outside_groups"
 
 
 # ---------------------------------------------------------------------------
@@ -168,12 +205,26 @@ def test_person_label_variants_are_recognised(label):
     assert ep.reason == "clean_episode"
 
 
-@pytest.mark.parametrize("label", ["bag", "product", "receipt", "item",
-                                    "sco_item_001"])
-def test_non_person_labels_are_ignored(label):
+@pytest.mark.parametrize("label", ["bag", "product", "receipt"])
+def test_non_item_non_person_labels_do_not_drive_an_episode(label):
+    """Labels that are neither person nor SCO-shaped item must not
+    qualify, even under the v1.1 item-occupancy fallback.
+    'receipt' is paperwork, 'bag'/'product' are bare Falcon defaults
+    we never use in SCO mode (we use sco_* prefixes)."""
     tracks = [_track(label, ROI, t0_off=140, t1_off=160)]
     ep = _select(tracks)
     assert ep.reason == "no_activity"
+
+
+@pytest.mark.parametrize("label", ["item", "sco_item_001",
+                                    "sco_generic_products",
+                                    "sam3_obj_0001"])
+def test_item_labels_drive_item_occupancy_episode(label):
+    """SCO-shaped item labels and SAM3 native labels trigger the
+    item-occupancy fallback when no person tracks exist."""
+    tracks = [_track(label, ROI, t0_off=140, t1_off=160)]
+    ep = _select(tracks)
+    assert ep.reason == "item_occupancy"
 
 
 # ---------------------------------------------------------------------------

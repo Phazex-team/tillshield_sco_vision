@@ -91,7 +91,9 @@ class GemmaProvider(VLMProvider):
         # Flip to schema-passthrough so the dict is returned verbatim.
         prompt_version = ((manifest.metadata or {}).get("prompt_version")
                           if isinstance(manifest.metadata, dict) else None)
-        schema_passthrough = (prompt_version == "sco_basket_match_v1")
+        schema_passthrough = prompt_version in (
+            "sco_basket_match_v1", "sco_basket_match_v2",
+        )
         t0 = time.time()
         try:
             parsed = self._client().reason(

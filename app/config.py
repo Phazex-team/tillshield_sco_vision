@@ -128,19 +128,53 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> AppConfig:
 
 def _repo_local_snapshot(model_name: str) -> Optional[str]:
     """Return the repo-local snapshot dir for ``model_name`` if one
-    exists under ``./models/hf/...``. The HF cache layout is
-    ``<repo>/<org>/<name>/<snapshot>/``, mirrored here."""
+    exists under ``./models/hf/...``.
+
+    Supports two layouts:
+
+      A. ``<repo>/<org>/<name>/<snapshot-hash>/<files>``
+         The HF cache layout (per-file fetch). The ``<name>``
+         directory has one or more snapshot subdirs and the actual
+         model files live one level deeper. Used by sam2-hiera-large,
+         the Qwen3-VL cache mirror, etc.
+
+      B. ``<repo>/<org>/<name>/<files>``
+         The flat layout (whole-snapshot copy into a single dir)
+         that operators tend to produce when staging weights by
+         hand. Model files live directly under ``<name>``, with at
+         most a ``.cache/`` sibling dir for HF bookkeeping.
+
+    The earlier implementation picked "largest subdir by content
+    size" unconditionally, which mis-resolved layout B to the
+    ``.cache`` sibling when no real snapshot subdir existed.
+    Symptom: SAM 3 resolver returned ``.../sam3/.cache`` and
+    ``from_pretrained`` failed.
+
+    Heuristic now:
+      * If the model files (``config.json``) are present directly
+        at the org/name level, return that path — layout B.
+      * Otherwise iterate subdirs, **skipping hidden dirs**
+        (``.cache``, ``.git``, ...), and pick the single subdir or
+        the largest one — layout A.
+    """
     if not model_name:
         return None
     parts = model_name.split("/")
     base = BUNDLE_ROOT.joinpath(*parts)
     if not base.is_dir():
         return None
-    snaps = [p for p in base.iterdir() if p.is_dir()]
+    # Layout B: model files at the base. The presence of
+    # ``config.json`` or ``model.safetensors`` is the unambiguous
+    # signal — both are HuggingFace conventions.
+    if (base / "config.json").exists() \
+            or (base / "model.safetensors").exists():
+        return str(base)
+    # Layout A: enumerate visible subdirs only. Hidden dirs
+    # (e.g. ``.cache``, ``.git``) are never model snapshots.
+    snaps = [p for p in base.iterdir()
+             if p.is_dir() and not p.name.startswith(".")]
     if not snaps:
         return None
-    # Single snapshot is the common case (the bundler picks one); if
-    # there are multiple, prefer the largest by content size.
     if len(snaps) == 1:
         return str(snaps[0])
     def _size(p: Path) -> int:

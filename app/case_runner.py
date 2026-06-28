@@ -406,26 +406,24 @@ def analyze_case(session: Session,
     if _sco_episode is not None:
         manifest_meta["sco_episode"] = _sco_episode
 
-    # SCO Phase 5: when the active prompt is sco_basket_match_v1, build
-    # the basket-match system + user prompts from POS + Falcon summary +
-    # episode metadata. The providers (Qwen3-VL, Gemma) honour
-    # manifest.system_prompt / manifest.user_prompt as overrides, so no
-    # provider-specific code change is needed here.
+    # SCO Phase 5: when the active prompt is sco_basket_match_v1 / _v2,
+    # build the basket-match system + user prompts from POS + Falcon
+    # summary + canonical SAM3/Falcon groups + episode metadata. The
+    # providers (Qwen3-VL, Gemma) honour manifest.system_prompt /
+    # manifest.user_prompt as overrides, so no provider-specific code
+    # change is needed here.
     sco_user_prompt_only: Optional[str] = None
-    if prompt_version == "sco_basket_match_v1":
+    if prompt_version in ("sco_basket_match_v1", "sco_basket_match_v2"):
         try:
-            from reasoning.prompts.sco_basket_match import build_sco_prompts
             basket = ((pos.raw_payload or {}).get("items")
                       if pos.raw_payload else None) or []
             falcon_summary = _summarise_falcon_for_sco(perception_result)
             manifest_meta["sco_falcon_summary"] = falcon_summary
-            # SCO v1.1: collapse re-detections of the same physical
-            # item into canonical groups BEFORE the VLM sees them.
-            # Without this, the same hot-food container detected once
-            # as sco_item_000 and once as sco_generic_products would
-            # be reported by the VLM as one matched item PLUS one
-            # extra candidate — sending an honest case to REVIEW for
-            # a phantom extra.
+            # Collapse re-detections of the same physical item into
+            # canonical groups BEFORE the VLM sees them. Works for
+            # both Falcon detections and SAM3 video propagation
+            # output — the grouper sees a uniform (detections,tracks)
+            # schema.
             try:
                 from perception.item_grouping import group_sco_items
                 canonical_groups = group_sco_items(
@@ -438,12 +436,30 @@ def analyze_case(session: Session,
                               "raw detections")
                 canonical_groups = []
             manifest_meta["sco_canonical_groups"] = canonical_groups
-            manifest_system_prompt, sco_user_prompt_only = build_sco_prompts(
-                basket=basket,
-                falcon_summary=falcon_summary,
-                episode_meta=_sco_episode,
-                canonical_groups=canonical_groups,
-            )
+
+            if prompt_version == "sco_basket_match_v2":
+                from reasoning.prompts.sco_basket_match_v2 import (
+                    build_sco_prompts_v2,
+                )
+                manifest_system_prompt, sco_user_prompt_only = (
+                    build_sco_prompts_v2(
+                        basket=basket,
+                        canonical_groups=canonical_groups,
+                        episode_meta=_sco_episode,
+                    )
+                )
+            else:
+                from reasoning.prompts.sco_basket_match import (
+                    build_sco_prompts,
+                )
+                manifest_system_prompt, sco_user_prompt_only = (
+                    build_sco_prompts(
+                        basket=basket,
+                        falcon_summary=falcon_summary,
+                        episode_meta=_sco_episode,
+                        canonical_groups=canonical_groups,
+                    )
+                )
             manifest_user_prompt = sco_user_prompt_only
         except Exception:
             log.exception("SCO prompt build failed; falling back to "
@@ -566,7 +582,22 @@ def analyze_case(session: Session,
     # stays on disk so future multi-scenario routing can re-activate it.
     _t = time.perf_counter()
     try:
-        if prompt_version == "sco_basket_match_v1":
+        if prompt_version == "sco_basket_match_v2":
+            from reasoning.schemas.sco_basket_match_v2 import (
+                parse_or_fallback_v2,
+            )
+            from reasoning.sco_policy_v2 import decide_sco_v2
+            parsed_vlm = vlm_result_dict.get("parsed") or {}
+            if vlm_result_dict.get("error"):
+                sco_vlm = parse_or_fallback_v2({})
+            else:
+                sco_vlm = parse_or_fallback_v2(parsed_vlm)
+            decision = decide_sco_v2(sco_vlm, _sco_episode)
+            class _SummaryShim:
+                customer_present = False
+                contradictions: list = []
+            summary = _SummaryShim()
+        elif prompt_version == "sco_basket_match_v1":
             from reasoning.schemas.sco_basket_match import parse_or_fallback
             from reasoning.sco_policy import decide_sco
             parsed_vlm = vlm_result_dict.get("parsed") or {}
