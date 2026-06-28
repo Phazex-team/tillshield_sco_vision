@@ -61,17 +61,36 @@ class MatchedItemV2(BaseModel):
     @classmethod
     def _v(cls, v): return _norm_count(v)
 
+    @field_validator("pos_item", "group_id", mode="before")
+    @classmethod
+    def _str_or_empty(cls, v):
+        # Real Gemma emits JSON `null` for group_id when it cannot
+        # tie a POS line to a specific canonical group; pydantic
+        # would otherwise fall back the whole schema. Coerce
+        # None -> "".
+        return "" if v is None else v
+
 
 class MissingItemV2(BaseModel):
     model_config = ConfigDict(extra="ignore")
     pos_item: str = ""
     reason: str = ""
 
+    @field_validator("pos_item", "reason", mode="before")
+    @classmethod
+    def _str_or_empty(cls, v):
+        return "" if v is None else v
+
 
 class ExtraItemV2(BaseModel):
     model_config = ConfigDict(extra="ignore")
     group_id: str = ""
     description: str = ""
+
+    @field_validator("group_id", "description", mode="before")
+    @classmethod
+    def _str_or_empty(cls, v):
+        return "" if v is None else v
 
 
 class ScoBasketMatchV2(BaseModel):
@@ -100,6 +119,13 @@ class ScoBasketMatchV2(BaseModel):
     @field_validator("confidence", mode="before")
     @classmethod
     def _c(cls, v): return _norm_conf(v)
+
+    @field_validator("uncertainty_reason", "narrative",
+                      mode="before")
+    @classmethod
+    def _str_or_empty(cls, v):
+        # VLMs occasionally emit JSON null for optional strings.
+        return "" if v is None else v
 
 
 def parse_or_fallback_v2(raw: dict) -> ScoBasketMatchV2:
