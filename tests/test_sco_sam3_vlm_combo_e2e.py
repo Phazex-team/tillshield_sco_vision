@@ -133,6 +133,88 @@ def _sam3_perception_two_closed_containers(base):
     }
 
 
+def _sam3_perception_three_fragments_two_containers(base):
+    """Synthetic SAM3 perception output: 3 raw container identities that
+    collapse to 2 physical containers under the merger's rules (similar
+    size, similar aspect, time-continuous, never co-existing in the
+    same frame). One container shown by two fragments (objects 5+6
+    appearing back-to-back at the same position); the second container
+    is a single stable identity (object 7).
+
+    The merger should produce::
+
+        count_min = 2  (two physical containers after fragmentation merge)
+        count_max = 3  (three raw SAM3 identities)
+        fragmentation_suspected = True
+        count_confidence = medium
+    """
+    # Two short-lived fragments of the SAME physical container, same
+    # bbox position and size, sequential in time (never co-existing).
+    frag_a = {
+        "label": "sco_generic_food_container", "score": 0.78,
+        "bbox_xyxy": [740, 510, 820, 580],
+        "frame_id": "frame_000200", "frame_idx": 200,
+        "ts": (base - timedelta(seconds=2)).isoformat(),
+        "sam3_object_id": 5, "query": "sco_generic_food_container",
+    }
+    frag_b = {
+        "label": "sco_generic_food_container", "score": 0.81,
+        "bbox_xyxy": [742, 512, 822, 582],
+        "frame_id": "frame_000260", "frame_idx": 260,
+        "ts": (base + timedelta(seconds=0.4)).isoformat(),
+        "sam3_object_id": 6, "query": "sco_generic_food_container",
+    }
+    # Separate, persistent second container at a different position.
+    cont_c = {
+        "label": "sco_generic_takeaway_container", "score": 0.74,
+        "bbox_xyxy": [900, 720, 960, 790],
+        "frame_id": "frame_000300", "frame_idx": 300,
+        "ts": (base + timedelta(seconds=1.5)).isoformat(),
+        "sam3_object_id": 7, "query": "sco_generic_takeaway_container",
+    }
+    tracks = [
+        {"track_id": "sam3_obj_0005",
+         "label": "sco_generic_food_container",
+         "first_seen_ts": (base - timedelta(seconds=4)).isoformat(),
+         "last_seen_ts": (base - timedelta(seconds=1)).isoformat(),
+         "detections": [0], "zones": ["sco_audit_zone"],
+         "events": [], "physical_item_candidate": True,
+         "receipt_candidate": False, "confidence": 0.78,
+         "sam3_object_id": 5},
+        {"track_id": "sam3_obj_0006",
+         "label": "sco_generic_food_container",
+         "first_seen_ts": base.isoformat(),
+         "last_seen_ts": (base + timedelta(seconds=2)).isoformat(),
+         "detections": [1], "zones": ["sco_audit_zone"],
+         "events": [], "physical_item_candidate": True,
+         "receipt_candidate": False, "confidence": 0.81,
+         "sam3_object_id": 6},
+        {"track_id": "sam3_obj_0007",
+         "label": "sco_generic_takeaway_container",
+         "first_seen_ts": (base - timedelta(seconds=2)).isoformat(),
+         "last_seen_ts": (base + timedelta(seconds=8)).isoformat(),
+         "detections": [2], "zones": ["sco_audit_zone"],
+         "events": [], "physical_item_candidate": True,
+         "receipt_candidate": False, "confidence": 0.74,
+         "sam3_object_id": 7},
+    ]
+    return {
+        "detections": [frag_a, frag_b, cont_c],
+        "tracks": tracks,
+        "masks": [], "keyframes": [], "ocr": [],
+        "limitations": ["falcon_disabled_by_config"],
+        "obstructed": False,
+        "timings_ms": {"total_ms": 1, "sam3_inference_ms": 15000},
+        "sam3_meta": {"object_ids": [5, 6, 7], "frame_count": 24,
+                      "prompt_to_obj_ids": {
+                          "sco_item_000": [],
+                          "sco_item_001": [],
+                          "sco_generic_food_container": [5, 6],
+                          "sco_generic_takeaway_container": [7],
+                      }},
+    }
+
+
 def _vlm_says_count_match_identity_uncertain(captured: dict):
     """Council-prescribed VLM behaviour for the closed-container case."""
 
@@ -273,6 +355,112 @@ def test_sam3_with_semantic_contradiction_still_flags_mismatch(
     reasons = result.get("reasons") or []
     assert "sco_basket_mismatch" in reasons
     assert "sco_extra_candidates" in reasons
+
+
+# ---------------------------------------------------------------------------
+# Hot-food replay: 3 fragmented SAM3 identities → 2 physical containers,
+# VLM says count=yes/identity=uncertain, policy suppresses false
+# extras / missing / mismatch.
+# ---------------------------------------------------------------------------
+
+def test_hot_food_replay_three_fragments_yields_review_no_false_extras(
+        fresh_db, tmp_path, monkeypatch):
+    """The exact replay blocker. POS: Biriyani + Curry. SAM3: three
+    raw identities (one container fragmented into two). Container
+    merger collapses them to 2 with fragmentation_suspected=True,
+    count_min=2, count_max=3, confidence=medium. Qwen returns
+    physical_count_match=yes, semantic_identity_match=uncertain plus
+    extras for the unmatched generic container groups.
+
+    Required outcome: REVIEW with sco_identity_uncertain (and
+    sco_count_uncertain from the merger range). NOT
+    sco_basket_mismatch. NOT sco_missing_items. NOT
+    sco_extra_candidates."""
+    SM = fresh_db
+    pos_time = datetime(2026, 6, 28, 14, 0, 30)
+    _seed_segment(SM, tmp_path / "storage",
+                  start_at=pos_time - timedelta(seconds=120))
+    _post_event(pos_time)
+
+    from db.models import Case
+    with SM() as s:
+        case_id = s.query(Case).first().id
+
+    def _perception(session, case, window):
+        return _sam3_perception_three_fragments_two_containers(pos_time)
+
+    def _vlm_stub(session, case, window, manifest=None):
+        # Capture the merger metadata the case_runner computed and
+        # pushed into the manifest, so the assertions below can verify
+        # the policy received the expected count range.
+        cm = ((manifest.metadata or {}).get("sco_container_merge")
+              if manifest else None) or {}
+        return {
+            "provider": "qwen3_vl", "model_name": "stub",
+            "parsed": {
+                "physical_count_match": "yes",
+                "semantic_identity_match": "uncertain",
+                "matched_items": [
+                    {"pos_item": "Biriyani Hot Food",
+                     "group_id": "sco_group_001",
+                     "visible_count_class": "one"},
+                    {"pos_item": "Curry Hot Food",
+                     "group_id": "sco_group_002",
+                     "visible_count_class": "one"},
+                ],
+                "missing_visible_items": [],
+                # The replay produced exactly this kind of "extras"
+                # noise — unmatched generic container groups the VLM
+                # surfaced because the SAM3 identities weren't tied
+                # to either POS line.
+                "extra_visible_items": [
+                    {"group_id": "sco_group_003",
+                     "description": "takeaway container"},
+                ],
+                "uncertainty_reason":
+                    "items inside closed takeaway containers",
+                "video_usable": True,
+                "confidence": "high",
+                "narrative": "Two takeaway containers visible; contents "
+                             "not legible from this angle.",
+                # Surface the merger meta on the stub return so the
+                # assertions below can introspect it without poking
+                # captured-state plumbing.
+                "_test_container_merge_meta": cm,
+            },
+            "latency_ms": 1, "error": None,
+        }
+
+    from app.case_runner import analyze_case
+    with SM() as s:
+        result = analyze_case(s, case_id,
+                               perception_runner=_perception,
+                               vlm_runner=_vlm_stub,
+                               prompt_version="sco_basket_match_v2")
+
+    assert result["outcome"] == "REVIEW"
+    reasons = result.get("reasons") or []
+    assert "sco_identity_uncertain" in reasons, reasons
+    # The headline assertions — no false mismatch / missing / extras tags
+    assert "sco_basket_mismatch" not in reasons, (
+        f"hot-food replay must not flag basket_mismatch; reasons={reasons}")
+    assert "sco_missing_items" not in reasons, (
+        f"hot-food replay must not flag missing_items; reasons={reasons}")
+    assert "sco_extra_candidates" not in reasons, (
+        f"hot-food replay must not flag extra_candidates from generic "
+        f"container groups; reasons={reasons}")
+
+    # Verify the merger actually produced the expected range so the
+    # policy was exercised under the right conditions. The merger meta
+    # surfaces through the VLM stub's parsed dict.
+    from db.models import VlmRun
+    with SM() as s:
+        run = s.query(VlmRun).filter(VlmRun.case_id == case_id).first()
+        cm = (run.output_json or {}).get("_test_container_merge_meta") or {}
+    assert cm.get("count_min") == 2, cm
+    assert cm.get("count_max") == 3, cm
+    assert cm.get("fragmentation_suspected") is True, cm
+    assert cm.get("count_confidence") in ("medium", "high"), cm
 
 
 # ---------------------------------------------------------------------------

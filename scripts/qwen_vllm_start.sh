@@ -41,7 +41,14 @@ QWEN_MOE_BACKEND="${QWEN_MOE_BACKEND:-triton}"
 QWEN_ENFORCE_EAGER="${QWEN_ENFORCE_EAGER:-1}"     # 1 = pass --enforce-eager
 QWEN_DISABLE_FLASHINFER_AUTOTUNE="${QWEN_DISABLE_FLASHINFER_AUTOTUNE:-1}"
 QWEN_GPU_MEM_UTIL="${QWEN_GPU_MEM_UTIL:-0.70}"
-QWEN_MAX_MODEL_LEN="${QWEN_MAX_MODEL_LEN:-}"      # leave empty to use vLLM default
+# vLLM default for Qwen3-VL-30B is 262144 tokens; on this DGX Spark
+# that needs 24 GiB of KV cache but the GPU only has ~22 GiB free
+# after the model weights are loaded, so the server aborts with
+# "ValueError: KV cache needed 24.0 GiB, available 21.84 GiB.".
+# 65536 fits and is more than enough for a single SCO clip + POS bill
+# turn. Operators with a larger card / different model can override
+# by exporting QWEN_MAX_MODEL_LEN before launch.
+QWEN_MAX_MODEL_LEN="${QWEN_MAX_MODEL_LEN:-65536}"
 
 mkdir -p "$(dirname "$QWEN_LOG")" "$(dirname "$QWEN_PID_FILE")"
 

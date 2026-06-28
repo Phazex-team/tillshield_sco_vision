@@ -177,6 +177,115 @@ def test_extras_with_count_match_still_flag_extras():
     assert TAG_EXTRA_CANDIDATES in d.reasons
 
 
+# ---------------------------------------------------------------------------
+# Closed-container suppression (post-replay hot-food fix)
+# ---------------------------------------------------------------------------
+
+def test_closed_container_with_extras_does_not_flag_extras():
+    """Hot-food replay: SAM3 fragmented 2 takeaway containers into 3
+    raw groups. VLM said count matches POS basket and identity is
+    uncertain (closed boxes). The two unmatched generic container
+    groups must NOT be promoted to sco_extra_candidates — they are
+    perception artefacts, not POS-vs-video mismatches."""
+    from reasoning.sco_policy_v2 import (
+        decide_sco_v2, OUTCOME_REVIEW,
+        TAG_EXTRA_CANDIDATES, TAG_MISSING_ITEMS, TAG_BASKET_MISMATCH,
+        TAG_IDENTITY_UNCERTAIN,
+    )
+    vlm = _vlm(
+        physical_count_match="yes",
+        semantic_identity_match="uncertain",
+        extra_visible_items=[
+            {"group_id": "sco_group_002", "description": "takeaway container"},
+            {"group_id": "sco_group_003", "description": "takeaway container"},
+        ],
+        uncertainty_reason="items inside closed takeaway containers",
+        narrative="Two takeaway containers visible; contents not legible.",
+    )
+    d = decide_sco_v2(vlm, _ep())
+    assert d.outcome == OUTCOME_REVIEW
+    assert TAG_IDENTITY_UNCERTAIN in d.reasons
+    assert TAG_EXTRA_CANDIDATES not in d.reasons, (
+        "closed-container case must not be tagged as extra candidates")
+    assert TAG_MISSING_ITEMS not in d.reasons
+    assert TAG_BASKET_MISMATCH not in d.reasons
+
+
+def test_closed_container_with_merger_range_does_not_flag_mismatch():
+    """Same scenario but with container_merge_meta: merger reports a
+    2-3 range (fragmentation suspected). Policy must still NOT emit
+    basket_mismatch / extra_candidates / missing_items — only the
+    identity_uncertain (+ optional count_uncertain) tags."""
+    from reasoning.sco_policy_v2 import (
+        decide_sco_v2, OUTCOME_REVIEW,
+        TAG_BASKET_MISMATCH, TAG_EXTRA_CANDIDATES, TAG_MISSING_ITEMS,
+        TAG_IDENTITY_UNCERTAIN, TAG_COUNT_UNCERTAIN,
+    )
+    vlm = _vlm(
+        physical_count_match="yes",
+        semantic_identity_match="uncertain",
+        extra_visible_items=[
+            {"group_id": "sco_group_002", "description": "takeaway container"},
+        ],
+        uncertainty_reason="items inside closed takeaway containers",
+        narrative="Two takeaway containers visible; contents not legible.",
+    )
+    merge_meta = {
+        "count_min": 2, "count_max": 3,
+        "count_confidence": "medium",
+        "fragmentation_suspected": True,
+        "missed_container_possible": False,
+    }
+    d = decide_sco_v2(vlm, _ep(),
+                      container_merge_meta=merge_meta,
+                      pos_basket_size=2)
+    assert d.outcome == OUTCOME_REVIEW
+    assert TAG_IDENTITY_UNCERTAIN in d.reasons
+    assert TAG_COUNT_UNCERTAIN in d.reasons
+    assert TAG_BASKET_MISMATCH not in d.reasons
+    assert TAG_EXTRA_CANDIDATES not in d.reasons
+    assert TAG_MISSING_ITEMS not in d.reasons
+
+
+def test_genuine_semantic_mismatch_still_flags_basket_mismatch():
+    """Regression guard: identity=no is still a mismatch, suppression
+    only fires when identity=uncertain."""
+    from reasoning.sco_policy_v2 import (
+        decide_sco_v2, OUTCOME_REVIEW,
+        TAG_BASKET_MISMATCH, TAG_EXTRA_CANDIDATES,
+    )
+    vlm = _vlm(
+        physical_count_match="yes",
+        semantic_identity_match="no",
+        extra_visible_items=[{"group_id": "g", "description": "bottle"}],
+        uncertainty_reason="VLM observed electronics; POS says food",
+    )
+    d = decide_sco_v2(vlm, _ep())
+    assert d.outcome == OUTCOME_REVIEW
+    assert TAG_BASKET_MISMATCH in d.reasons
+    # extras still flagged here because suppression is gated on
+    # identity=="uncertain" only
+    assert TAG_EXTRA_CANDIDATES in d.reasons
+
+
+def test_genuine_extras_with_identity_yes_still_flag_extras():
+    """Genuine extras (identity=yes, count=yes, but VLM lists an
+    extra it confidently identified) must still flag extras."""
+    from reasoning.sco_policy_v2 import (
+        decide_sco_v2, OUTCOME_REVIEW, TAG_EXTRA_CANDIDATES,
+    )
+    vlm = _vlm(
+        physical_count_match="yes",
+        semantic_identity_match="yes",
+        extra_visible_items=[
+            {"group_id": "g", "description": "chocolate bar"},
+        ],
+    )
+    d = decide_sco_v2(vlm, _ep())
+    assert d.outcome == OUTCOME_REVIEW
+    assert TAG_EXTRA_CANDIDATES in d.reasons
+
+
 def test_no_vlm_output_yields_review():
     from reasoning.sco_policy_v2 import decide_sco_v2, TAG_NO_VLM
     d = decide_sco_v2(None, _ep())

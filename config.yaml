@@ -2,7 +2,7 @@ cameras:
 - id: cam_01
   name: "SCO Audit Camera — cam_01"
   rtsp_url: rtsp://127.0.0.1:8554/CS_COUNTER_ch15
-  classifier: return_review
+  classifier: sco_checkout
   token_budget: 1120
   enable_thinking: ''
   max_frames: ''
@@ -73,9 +73,9 @@ cameras:
       caption: ''
   prompts: {}
 - id: cam_return_01
-  name: Return Counter 01
+  name: "SCO Audit Camera — cam_return_01"
   rtsp_url: ${CAM_RETURN_01_RTSP_URL}
-  classifier: return_review
+  classifier: sco_checkout
   token_budget: 1120
   enable_thinking: ''
   max_frames: ''
@@ -184,6 +184,14 @@ cameras:
       margin_pct: 0.0
       include_full_frame_overview: true
       caption: ''
+    sam3:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: union_crop
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
 settings:
   rtsp_reconnect_sec: 10
   motion_threshold: 25
@@ -285,9 +293,11 @@ reasoning:
   # fallback default is gated.
   fallback_provider: null
   warm_fallback: false
-  # SCO mode: default to the basket-match prompt for new cases. Tests
-  # and operators can override per-case via analyze_case(prompt_version=...).
-  prompt_version: sco_basket_match_v1
+  # SCO mode: default to the v2 basket-match prompt for new cases.
+  # v2 separates physical count from semantic identity and routes
+  # closed-container cases to REVIEW + sco_identity_uncertain instead
+  # of false basket mismatches.
+  prompt_version: sco_basket_match_v2
   auto_analyze_enabled: false
 gpu:
   max_loaded_big_vlms: 1
@@ -304,7 +314,8 @@ storage:
 sco_checkout:
   # SCO mode acceptance gate. Every direct API ingest
   # (POST /api/v1/pos/returns/event) and every TillShield row is
-  # normalised against this list. The check is case-insensitive,
+  # normalised against this list. The legacy route name is only a
+  # compatibility alias; semantics are SCO checkout. The check is case-insensitive,
   # whitespace-stripped, and treats "-"/" " as "_".
   #
   # Strictly SCO-checkout aliases only. Legacy refund tokens
@@ -312,7 +323,7 @@ sco_checkout:
   # are conceptually a different event class and should not silently
   # canonicalise to SALE. Operators with a POS that emits a
   # non-listed alias for checkout should add it here (and to
-  # integrations.tillshield.return_event_types below).
+  # integrations.tillshield.accepted_event_types below).
   accept_event_types:
     - SALE
     - SCO_SALE
@@ -330,7 +341,7 @@ integrations:
     # Must stay in lock-step with sco_checkout.accept_event_types above.
     # Drift between the TillShield filter and the SCO normaliser is
     # what produces the "passes the poller but opens no case" leak.
-    return_event_types:
+    accepted_event_types:
     - SALE
     - SCO_SALE
     - CHECKOUT
@@ -354,14 +365,11 @@ integrations:
       # sco_audit_zone defined now, so re-mapping back to it later is
       # a safe one-line config change.
       '52': cam_01
-  # Outbound: push analysis RESULTS (+ boxed/face-masked clip) to the refund
-  # agent. One-way export; never affects our analysis/evidence. Same host we
-  # already poll; location may change so base_url is configurable.
+  # Disabled legacy outbound exporter. One-way export; never affects
+  # our analysis/evidence.
   refund_agent:
-    # SCO Phase 7a: refund-agent export is the legacy refund-flow
-    # exporter. In SCO mode (default for this repo) it MUST stay
-    # disabled — the SCO exporter is deferred to v1.1. Flip to true
-    # only after rolling back to refund mode.
+    # In SCO mode this MUST stay disabled. The SCO exporter is a
+    # separate future module.
     enabled: false
     base_url: http://localhost:8081
     create_path: /events/refund

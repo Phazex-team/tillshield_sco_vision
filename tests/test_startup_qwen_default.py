@@ -188,6 +188,113 @@ def test_qwen_launcher_uses_the_known_good_flags():
     assert 'QWEN_DISABLE_FLASHINFER_AUTOTUNE:-1' in src
 
 
+def test_qwen_launcher_defaults_max_model_len_to_65536():
+    """vLLM's Qwen3-VL default 262144 needs ~24 GiB of KV cache, which
+    won't fit after weights load on this DGX Spark. 65536 is the
+    largest value that fits in the ~22 GiB free; it's the operator
+    default. Operators can override with QWEN_MAX_MODEL_LEN=N."""
+    src = QWEN_LAUNCHER.read_text()
+    # Default literal must be embedded in the launcher
+    assert 'QWEN_MAX_MODEL_LEN:-65536' in src, (
+        "qwen_vllm_start.sh must default QWEN_MAX_MODEL_LEN to 65536")
+    # The flag still has to actually be appended to the vllm serve argv
+    assert '--max-model-len' in src
+    # Override path is preserved: the default is wrapped in the
+    # ${VAR:-DEFAULT} idiom so an explicit export still wins.
+    assert 'QWEN_MAX_MODEL_LEN="${QWEN_MAX_MODEL_LEN:-65536}"' in src
+
+
+def test_qwen_launcher_emits_max_model_len_in_default_invocation(tmp_path,
+                                                                  monkeypatch):
+    """Smoke-run the launcher with a stub ``vllm`` on PATH and verify
+    the resolved argv contains ``--max-model-len 65536``. Catches
+    regressions where the default literal is updated but the conditional
+    that appends the flag is broken (or vice-versa)."""
+    import shutil
+    import subprocess
+    import textwrap
+
+    # Stub `vllm`: print the argv to a file and exit 0 immediately so
+    # the launcher's health gate sees the process exit and we skip the
+    # long wait loop.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    argv_log = tmp_path / "vllm_argv.txt"
+    vllm_stub = bin_dir / "vllm"
+    vllm_stub.write_text(textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        printf '%s\\n' "$@" > {argv_log}
+        # exit 1 so the launcher does NOT linger in the health loop.
+        exit 1
+    """))
+    vllm_stub.chmod(0o755)
+
+    # Stub `curl` to always fail health (so launcher doesn't think the
+    # already-running probe passed).
+    curl_stub = bin_dir / "curl"
+    curl_stub.write_text("#!/usr/bin/env bash\nexit 22\n")
+    curl_stub.chmod(0o755)
+
+    # Run launcher with PATH pointing at our stubs first.
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env.get('PATH','')}"
+    env["QWEN_HEALTH_TIMEOUT_SEC"] = "2"
+    env["QWEN_LOG"] = str(tmp_path / "qwen.log")
+    env["QWEN_PID_FILE"] = str(tmp_path / "qwen.pid")
+    # No venv in tmp_path → launcher will exit 1. Create a stub one.
+    (ROOT / "venv").mkdir(exist_ok=True)
+    # Run from a temp checkout to avoid mutating the real run/logs.
+    res = subprocess.run(["bash", str(QWEN_LAUNCHER)],
+                          env=env, capture_output=True, text=True,
+                          timeout=30)
+    # We don't care about the exit code (stub vllm exits non-zero so
+    # launcher reports failure) — only that argv was captured before
+    # exit and contains the max-model-len flag.
+    assert argv_log.exists(), (
+        f"vllm stub never invoked; launcher stderr:\n{res.stderr}")
+    captured = argv_log.read_text().splitlines()
+    assert "--max-model-len" in captured, (
+        f"launcher did not pass --max-model-len; argv={captured}")
+    i = captured.index("--max-model-len")
+    assert captured[i + 1] == "65536", (
+        f"default --max-model-len value should be 65536; got "
+        f"{captured[i+1]!r} (full argv={captured})")
+
+
+def test_qwen_launcher_max_model_len_override_wins(tmp_path):
+    """An operator export of QWEN_MAX_MODEL_LEN replaces the 65536
+    default."""
+    import subprocess
+    import textwrap
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    argv_log = tmp_path / "vllm_argv.txt"
+    vllm_stub = bin_dir / "vllm"
+    vllm_stub.write_text(textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        printf '%s\\n' "$@" > {argv_log}
+        exit 1
+    """))
+    vllm_stub.chmod(0o755)
+    curl_stub = bin_dir / "curl"
+    curl_stub.write_text("#!/usr/bin/env bash\nexit 22\n")
+    curl_stub.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env.get('PATH','')}"
+    env["QWEN_HEALTH_TIMEOUT_SEC"] = "2"
+    env["QWEN_LOG"] = str(tmp_path / "qwen.log")
+    env["QWEN_PID_FILE"] = str(tmp_path / "qwen.pid")
+    env["QWEN_MAX_MODEL_LEN"] = "32768"
+    (ROOT / "venv").mkdir(exist_ok=True)
+    subprocess.run(["bash", str(QWEN_LAUNCHER)],
+                    env=env, capture_output=True, text=True, timeout=30)
+    captured = argv_log.read_text().splitlines()
+    i = captured.index("--max-model-len")
+    assert captured[i + 1] == "32768"
+
+
 def test_qwen_launcher_two_stage_health_gate():
     """/health is liveness; /v1/models is readiness. Both required."""
     src = QWEN_LAUNCHER.read_text()
@@ -256,3 +363,8 @@ def test_startup_doc_exists_and_documents_known_good_flags():
     assert "/static/review.html" in text
     # Default policy documented
     assert "Qwen-only" in text or "fallback_provider: null" in text
+    # QWEN_MAX_MODEL_LEN default documented (including the KV-cache
+    # explanation that motivates the 65536 value).
+    assert "QWEN_MAX_MODEL_LEN" in text
+    assert "65536" in text
+    assert "KV cache" in text

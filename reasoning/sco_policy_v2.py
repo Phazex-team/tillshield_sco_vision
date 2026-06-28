@@ -95,6 +95,26 @@ def decide_sco_v2(vlm: Optional[ScoBasketMatchV2],
     tags: list[str] = []
     reasons: list[str] = []
 
+    # Closed-container suppression gate. When the VLM says the physical
+    # count matches the POS basket BUT it cannot confirm semantic
+    # identity (closed/opaque/packaged/takeaway containers, obscured
+    # labels, or otherwise not visually confirmable), generic SAM3
+    # container groups must NOT be promoted to "missing" / "extra" /
+    # "basket mismatch" tags. The case still routes to REVIEW via the
+    # identity-uncertain signal, but without false mismatch noise.
+    # Reasoning:
+    #   * physical_count_match=="yes" means the visible item count is
+    #     consistent with the POS basket size — extras/missing derived
+    #     from generic container groups are perception fragmentation
+    #     artefacts, not POS-vs-video discrepancies.
+    #   * semantic_identity_match=="uncertain" means we cannot pair
+    #     visible containers to POS line identities — projecting that
+    #     uncertainty into mismatch tags is dishonest.
+    _identity_uncertain_with_matched_count = (
+        vlm.physical_count_match == "yes"
+        and vlm.semantic_identity_match == "uncertain"
+    )
+
     # ---- Gate 1: video usable ----
     if not vlm.video_usable:
         return PolicyDecision(
@@ -149,7 +169,8 @@ def decide_sco_v2(vlm: Optional[ScoBasketMatchV2],
                              or pos_basket_size - 1 > cmax)
             merger_confident = conf in ("high", "medium")
             vlm_contradicts = (vlm.physical_count_match == "yes")
-            if outside_range and merger_confident and not vlm_contradicts:
+            if (outside_range and merger_confident and not vlm_contradicts
+                    and not _identity_uncertain_with_matched_count):
                 tags.append(TAG_BASKET_MISMATCH)
                 reasons.append(
                     f"physical item count {cmin}-{cmax} does not "
@@ -211,7 +232,15 @@ def decide_sco_v2(vlm: Optional[ScoBasketMatchV2],
         reasons.append(
             f"{len(vlm.missing_visible_items)} POS item(s) "
             "not visibly confirmed")
-    if vlm.extra_visible_items:
+    # Suppress extra_visible_items in the closed-container case
+    # (count matches POS but identity is uncertain). Those entries
+    # are generic SAM3 container groups the VLM could not pair to a
+    # POS line — they are NOT genuine extras. Genuine extras
+    # accompany physical_count_match=="no" (or "yes" with
+    # semantic_identity_match=="yes"/"no"), both of which fall
+    # through this guard.
+    if vlm.extra_visible_items \
+            and not _identity_uncertain_with_matched_count:
         tags.append(TAG_EXTRA_CANDIDATES)
         reasons.append(
             f"{len(vlm.extra_visible_items)} extra candidate(s) "

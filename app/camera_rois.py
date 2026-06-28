@@ -26,6 +26,10 @@ match the actual pipeline consumers:
   * ``qwen3_vl`` / ``gemma`` — VLM ROI for ``labeled_crops`` (case
     runner attaches labeled ROI crops as additional manifest frames
     and injects the captions into the user prompt).
+  * ``sam3``   — concept-prompted segmenter ROI for ``union_crop``
+    (SAM 3 runs on the cropped union of the assigned ROIs; container
+    masks are translated back to full-frame coordinates by the
+    perception pipeline).
 
 If a model entry is missing or has no valid ROI ids, the runtime
 preserves its current full-frame behavior. No fake controls.
@@ -41,7 +45,7 @@ from typing import Any, Optional
 
 # Models the runtime actually consumes (rejected by validation otherwise).
 SUPPORTED_MODELS: tuple[str, ...] = (
-    "falcon", "sam2", "ocr", "qwen3_vl", "gemma",
+    "falcon", "sam2", "ocr", "qwen3_vl", "gemma", "sam3",
 )
 
 # How each model uses an ROI assignment. Validation enforces this set.
@@ -53,6 +57,10 @@ SUPPORTED_MODES: dict[str, tuple[str, ...]] = {
     "ocr":      ("filter_candidate_crops",),
     "qwen3_vl": ("labeled_crops",),
     "gemma":    ("labeled_crops",),
+    # SAM 3 runs concept-prompted segmentation on the SCO audit zone
+    # crop. Same crop semantics as Falcon: union of the assigned ROIs,
+    # optionally widened by margin_pct.
+    "sam3":     ("union_crop",),
 }
 
 # Models that consume labeled crops in a VLM manifest. For these the

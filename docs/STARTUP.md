@@ -75,7 +75,7 @@ Operator tunables (env or `.env`):
 | `QWEN_ENFORCE_EAGER` | `1` | Disables CUDA graphs. Set `0` only after re-verifying the launch. |
 | `QWEN_DISABLE_FLASHINFER_AUTOTUNE` | `1` | Disables the JIT autotune that crashes the model load. |
 | `QWEN_GPU_MEM_UTIL` | `0.70` | vLLM `--gpu-memory-utilization`. |
-| `QWEN_MAX_MODEL_LEN` | (empty) | Override max context if needed; leave empty to take the model default. |
+| `QWEN_MAX_MODEL_LEN` | `65536` | Max context window. The vLLM default for Qwen3-VL-30B is 262144, which requires ~24 GiB of KV cache. On this DGX Spark only ~22 GiB is free after weights load, so the server aborts on launch (`ValueError: KV cache needed 24.0 GiB, available 21.84 GiB.`). 65536 fits and is more than enough for a single SCO clip + POS bill turn. Override by exporting `QWEN_MAX_MODEL_LEN=N` before launch. |
 | `QWEN_EXTRA_ARGS` | (empty) | Free-form extra args appended to the `vllm serve` command. |
 
 ## Cold-start expectations
@@ -161,6 +161,7 @@ still alive. PID files in `run/` are cleared on success.
 |---|---|---|
 | `qwen: did not reach /v1/models within Ns` | Cold load took longer than `QWEN_HEALTH_TIMEOUT_SEC` (default 1800s) | Bump the timeout, or check `logs/qwen.log` for the actual cause |
 | Qwen exits 137 (SIGKILL) at JIT compile | Wrong flag set — FlashInfer autotune still on | Confirm `QWEN_DISABLE_FLASHINFER_AUTOTUNE=1` is in env, or run `scripts/qwen_vllm_start.sh` directly (it sets the right flags) |
+| Qwen aborts on launch with `ValueError: KV cache needed 24.0 GiB, available 21.84 GiB.` | `QWEN_MAX_MODEL_LEN` was overridden too high for this GPU | Unset the override and let the launcher use its default (65536), or lower the value to fit free memory |
 | App refuses to call Qwen even though `:8000` is up | Stale memory_guard state from a previous run | Hit `/api/v1/memory` to read state; external HTTP providers should never be blocked but in-process providers are. See `app/memory_guard.py` and `reasoning/providers/chain.py` per-provider gate. |
 | Case shows `Vision did not run / all providers errored` | Qwen down (no fallback configured) | Restart Qwen (`bash scripts/qwen_vllm_start.sh`) or temporarily enable Gemma fallback in config + start the Gemma server |
 | Qwen launcher refuses to start a second instance | Existing PID file points at a healthy or stuck process | `bash stop.sh` first, or remove `run/qwen.pid` if you know the process is gone |
