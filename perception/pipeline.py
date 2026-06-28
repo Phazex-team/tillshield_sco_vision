@@ -46,7 +46,10 @@ DEFAULT_FALCON_QUERY = (
 
 
 def run_perception(session, case, window, *, cfg=None,
-                   falcon_categories: Optional[dict[str, str]] = None) -> dict:
+                   falcon_categories: Optional[dict[str, str]] = None,
+                   sam3_concepts: Optional[list] = None,
+                   sam3_roi_crop: Optional[tuple[int, int, int, int]] = None,
+                   ) -> dict:
     """Default production runner. Reads the window MP4 from disk,
     samples frames, and drives the perception pipeline.
 
@@ -60,6 +63,15 @@ def run_perception(session, case, window, *, cfg=None,
     ``perception.sku_translator.build_falcon_categories_from_pos``.
     They are MERGED with FalconClient's defaults — reserved keys
     (item/person/receipt) cannot be overwritten.
+
+    ``sam3_concepts`` (SCO SAM-3 backend) is a list of
+    ``perception.sam3_client.Sam3Concept`` records. When SAM-3 is
+    enabled, these drive the concept-prompted video propagation.
+    Independent of Falcon: SAM-3 does not need Falcon boxes.
+
+    ``sam3_roi_crop`` is the optional pixel-coordinate crop the SAM-3
+    backend operates on (already scaled to the actual decoded
+    resolution). When None, SAM-3 sees the full frame.
     """
     from app.config import load_config, resolve_model_path
 
@@ -86,6 +98,24 @@ def run_perception(session, case, window, *, cfg=None,
                         enabled=True, extra=sam2_raw_entry),
             production_mode=False,
         )
+
+    # SAM 3 (independent video-concept backend, optional).
+    sam3_raw_entry = cfg.raw.get("models", {}).get("sam3") or {}
+    sam3_model_cfg = cfg.models.get("sam3")
+    sam3_enabled = bool(sam3_model_cfg.enabled) if sam3_model_cfg else \
+        bool(sam3_raw_entry.get("enabled", False))
+    sam3_path = None
+    if sam3_enabled and sam3_raw_entry:
+        from app.config import ModelConfig
+        try:
+            sam3_path = resolve_model_path(
+                ModelConfig(name=sam3_raw_entry.get(
+                    "name", "facebook/sam3"),
+                            enabled=True, extra=sam3_raw_entry),
+                production_mode=False,
+            )
+        except Exception:
+            sam3_path = None
 
     ocr_raw_entry = cfg.raw.get("models", {}).get("falcon_ocr") or {}
     ocr_model_cfg = cfg.models.get("falcon_ocr")
@@ -115,6 +145,21 @@ def run_perception(session, case, window, *, cfg=None,
         if falcon_enabled else None
     sam2_client = Sam2Client(model_path=sam2_path) if sam2_enabled else None
     ocr_engine = OcrEngine(model_path=ocr_path) if ocr_enabled else None
+
+    # SAM 3 instantiation is lazy — the client checks has_capability()
+    # before loading weights, so the constructor stays cheap when
+    # SAM 3 is enabled-but-uninstalled.
+    sam3_client = None
+    if sam3_enabled:
+        from .sam3_client import Sam3Client
+        sam3_dtype = str(sam3_raw_entry.get("dtype", "bfloat16"))
+        sam3_score_threshold = float(
+            sam3_raw_entry.get("score_threshold", 0.3))
+        sam3_client = Sam3Client(model_path=sam3_path,
+                                  device="cuda",
+                                  dtype=sam3_dtype,
+                                  score_threshold=sam3_score_threshold)
+
     try:
         return run_perception_on_window(
             window_path=window.path,
@@ -124,14 +169,19 @@ def run_perception(session, case, window, *, cfg=None,
             falcon_client=falcon_client,
             sam2_client=sam2_client,
             ocr_engine=ocr_engine,
+            sam3_client=sam3_client,
             sampling=SamplingPolicy(),
             falcon_categories=falcon_categories,
             falcon_roi_view=model_view(cfg, case.camera_id, "falcon"),
             sam2_roi_view=model_view(cfg, case.camera_id, "sam2"),
             ocr_roi_view=model_view(cfg, case.camera_id, "ocr"),
+            sam3_roi_view=model_view(cfg, case.camera_id, "sam3"),
+            sam3_concepts=sam3_concepts,
+            sam3_roi_crop=sam3_roi_crop,
             falcon_enabled=falcon_enabled,
             sam2_enabled=sam2_enabled,
             ocr_enabled=ocr_enabled,
+            sam3_enabled=sam3_enabled,
         )
     finally:
         # Free perception GPU memory before the caller proceeds to the VLM
@@ -141,7 +191,7 @@ def run_perception(session, case, window, *, cfg=None,
         # (hard-limit). Explicitly unload + empty_cache returns that memory
         # to the unified pool so gemma can load. This matters most with a
         # large union ROI crop, which inflates Falcon's footprint ~30G+.
-        for _c in (falcon_client, sam2_client, ocr_engine):
+        for _c in (falcon_client, sam2_client, ocr_engine, sam3_client):
             try:
                 if _c is not None and hasattr(_c, "unload"):
                     _c.unload()
@@ -166,14 +216,19 @@ def run_perception_on_window(*,
                              sampling: SamplingPolicy,
                              window_start_ts: Optional[datetime] = None,
                              ocr_engine: Optional[OcrEngine] = None,
+                             sam3_client=None,
                              falcon_query: str = DEFAULT_FALCON_QUERY,
                              falcon_categories: Optional[dict[str, str]] = None,
                              falcon_roi_view: Optional[dict] = None,
                              sam2_roi_view: Optional[dict] = None,
                              ocr_roi_view: Optional[dict] = None,
+                             sam3_roi_view: Optional[dict] = None,
+                             sam3_concepts: Optional[list] = None,
+                             sam3_roi_crop: Optional[tuple[int, int, int, int]] = None,
                              falcon_enabled: bool = True,
                              sam2_enabled: bool = True,
                              ocr_enabled: bool = True,
+                             sam3_enabled: bool = False,
                              ) -> dict:
     """Decode + run perception on a single video window. ``window_path``
     may be ``None`` in offline / synthetic test mode — in that case the
@@ -183,11 +238,56 @@ def run_perception_on_window(*,
     ``window_start_ts`` anchors every detection / track / keyframe
     timestamp to real CCTV wall-clock time. Callers must pass it for
     real-world correctness; tests may omit it (and a limitation is
-    emitted noting the fallback)."""
+    emitted noting the fallback).
+
+    SAM 3 (``sam3_enabled=True``) runs on the video window directly
+    with the supplied ``sam3_concepts``. It is independent of Falcon
+    — when SAM 3 is on and Falcon is off, this function returns the
+    SAM-3 output without invoking Falcon at all. When SAM 3 is off,
+    behaviour is unchanged from prior versions."""
     import time as _time
     limitations: list[str] = []
     detections: list[Detection] = []
     frames_for_ocr: dict[int, object] = {}
+
+    # ---- SAM 3 path (independent of Falcon) -------------------------
+    # When sam3_enabled and a window path is available, SAM 3 runs
+    # directly on the video. It does NOT need Falcon detections.
+    # When SAM 3 is the active backend AND Falcon is off, we return
+    # the SAM-3 result here so Falcon is never invoked.
+    if sam3_enabled and sam3_client is not None and window_path:
+        t0_sam3 = _time.perf_counter()
+        try:
+            sam3_result = sam3_client.process_window(
+                window_path,
+                concepts=sam3_concepts or [],
+                window_start_ts=window_start_ts,
+                fps_hint=fps,
+                roi_crop_xyxy=sam3_roi_crop,
+            )
+        except Exception:
+            log.exception("sam3 process_window raised")
+            sam3_result = None
+        if sam3_result is not None and not falcon_enabled:
+            # SAM-only mode: skip Falcon/SAM2/OCR entirely. Tag the
+            # limitations so downstream knows Falcon was deliberately
+            # off this run, not a runtime failure.
+            sam3_result.setdefault("limitations", []).append(
+                "falcon_disabled_by_config")
+            sam3_result["timings_ms"].setdefault(
+                "total_ms", int((_time.perf_counter() - t0_sam3) * 1000))
+            return sam3_result
+        if sam3_result is not None and falcon_enabled:
+            # A/B mode (Falcon ON + SAM 3 ON): both run; SAM-3 output
+            # is appended after the Falcon section completes. For v1
+            # we keep this simple — we attach SAM-3 detections /
+            # tracks to the Falcon result so the grouper sees both,
+            # and the grouper's spatial collapse de-dupes overlaps.
+            _pending_sam3_result = sam3_result
+        else:
+            _pending_sam3_result = None
+    else:
+        _pending_sam3_result = None
     # Per-stage timings (perf_counter, integer ms). Skipped stages are
     # OMITTED rather than reported as 0 so the operator can tell apart
     # "ran in <1ms" from "didn't run at all". ``total_ms`` is always
@@ -332,7 +432,7 @@ def run_perception_on_window(*,
     timings["keyframes_ms"] = _ms_since(t_kf)
     obstructed = any("obstruct" in l.lower() for l in limitations)
     timings["total_ms"] = _ms_since(t0)
-    return {
+    result = {
         "detections": [_d_dict(d) for d in detections],
         "tracks": [_t_dict(t) for t in tracks],
         "keyframes": [_kf_dict(k) for k in keyframes],
@@ -342,6 +442,19 @@ def run_perception_on_window(*,
         "obstructed": obstructed,
         "timings_ms": timings,
     }
+    # A/B merge: when SAM-3 ran alongside Falcon, append SAM-3
+    # detections/tracks so the grouper sees both. (SAM-only mode
+    # has already returned earlier with falcon disabled.)
+    if _pending_sam3_result is not None:
+        result["detections"].extend(_pending_sam3_result.get("detections") or [])
+        result["tracks"].extend(_pending_sam3_result.get("tracks") or [])
+        result["limitations"].extend(_pending_sam3_result.get("limitations") or [])
+        result["sam3_meta"] = _pending_sam3_result.get("sam3_meta") or {}
+        # Merge SAM-3 timings under a sub-key so the operator can see
+        # both backends' costs separately.
+        result["timings_ms"]["sam3"] = (
+            _pending_sam3_result.get("timings_ms") or {})
+    return result
 
 
 def _sample_frames(window_path: Optional[str], fps: int,

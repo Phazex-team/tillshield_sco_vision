@@ -63,6 +63,14 @@ cameras:
       margin_pct: 0.0
       include_full_frame_overview: true
       caption: ''
+    sam3:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: union_crop
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
   prompts: {}
 - id: cam_return_01
   name: Return Counter 01
@@ -239,6 +247,22 @@ models:
   sam2:
     name: facebook/sam2-hiera-large
     enabled: false
+  # SCO SAM-3 experiment (independent, concept-prompted video backend).
+  # When sam3.enabled=true the perception pipeline runs Meta SAM-3
+  # directly on the video window with POS-derived text concepts.
+  # When falcon.enabled=false at the same time, Falcon is NOT invoked
+  # at all (SAM-only mode). Switching this back to false restores the
+  # Falcon-only behaviour with zero other config churn.
+  sam3:
+    name: facebook/sam3
+    enabled: false
+    dtype: bfloat16
+    # Threshold tuned upward after the v1 hot-food simulation: 0.3 over-fired
+    # on POS-station hardware. 0.5 cuts the noise floor and only loses food
+    # containers we couldn't trust anyway. Drop to 0.4 if recall is too low.
+    score_threshold: 0.5
+    # local_path is auto-resolved by app.config.resolve_model_path from
+    # models/hf/facebook/sam3/<snapshot> when run with FRAUD_OFFLINE_MODE=1.
   falcon_ocr:
     name: tiiuae/Falcon-OCR
     enabled: false

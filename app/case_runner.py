@@ -252,9 +252,42 @@ def analyze_case(session: Session,
                               "defaults only")
                 _sco_falcon_categories = None
 
+            # SCO SAM-3 experiment: build text concept prompts from the
+            # same POS basket. Independent of Falcon: when sam3 is the
+            # only backend enabled in config, perception runs SAM-3
+            # only and never invokes Falcon. Resolving the ROI crop
+            # for SAM-3 follows the same model_roi_views shape Falcon
+            # uses.
+            _sco_sam3_concepts = None
+            _sco_sam3_roi_crop = None
+            try:
+                from perception.sam3_client import build_concepts_from_pos
+                _sco_sam3_concepts = build_concepts_from_pos(pos)
+            except Exception:
+                log.exception("sam3 concept build failed")
+            try:
+                from app.camera_rois import model_view
+                _sam3_view = model_view(cfg, case.camera_id, "sam3")
+                # Use the first resolved zone as the crop window. SAM-3
+                # is concept-prompted so it benefits from a tight ROI.
+                if _sam3_view and _sam3_view.get("resolved_zones"):
+                    z = _sam3_view["resolved_zones"][0]
+                    _sco_sam3_roi_crop = (
+                        int(z["x"]), int(z["y"]),
+                        int(z["x"]) + int(z["w"]),
+                        int(z["y"]) + int(z["h"]),
+                    )
+            except Exception:
+                log.exception("sam3 ROI resolution failed (continuing "
+                              "without crop)")
+
             def _bound_perception(s, c, w):
-                return run_perception(s, c, w, cfg=_cfg_snapshot,
-                                      falcon_categories=_sco_falcon_categories)
+                return run_perception(
+                    s, c, w, cfg=_cfg_snapshot,
+                    falcon_categories=_sco_falcon_categories,
+                    sam3_concepts=_sco_sam3_concepts,
+                    sam3_roi_crop=_sco_sam3_roi_crop,
+                )
             perception_runner = _bound_perception
         except Exception as exc:
             log.warning("perception pipeline unavailable: %s", exc)
