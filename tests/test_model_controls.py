@@ -64,19 +64,24 @@ def client(tmp_path, monkeypatch):
 # GET /admin/model-controls
 # ---------------------------------------------------------------------
 
-def test_get_model_controls_returns_all_five_with_metadata(client):
+def test_get_model_controls_returns_all_six_with_metadata(client):
     r = client.get("/api/v1/admin/model-controls")
     assert r.status_code == 200, r.text
     body = r.json()
+    # Six toggles after the SAM 3 rebrand: falcon, sam2, ocr, qwen3_vl,
+    # gemma, sam3. SAM 3 is independent (does NOT require Falcon) and
+    # defaults OFF in active config.
     assert set(body["state"].keys()) == \
-        {"falcon", "sam2", "ocr", "qwen3_vl", "gemma"}
+        {"falcon", "sam2", "ocr", "qwen3_vl", "gemma", "sam3"}
     ids = {m["id"] for m in body["models"]}
-    assert ids == {"falcon", "sam2", "ocr", "qwen3_vl", "gemma"}
+    assert ids == {"falcon", "sam2", "ocr", "qwen3_vl", "gemma", "sam3"}
     by_id = {m["id"]: m for m in body["models"]}
     assert by_id["sam2"]["dependencies"] == ["falcon"]
     assert by_id["ocr"]["dependencies"] == ["falcon"]
+    assert by_id["sam3"]["dependencies"] == []
     assert by_id["falcon"]["independent"] is True
     assert by_id["sam2"]["independent"] is False
+    assert by_id["sam3"]["independent"] is True
     assert by_id["qwen3_vl"]["independent"] is True
     # Operator-facing copy is the same wording as the UI captions. (Model
     # names are deliberately hidden behind the client-facing scheme:
@@ -99,12 +104,13 @@ def test_get_model_controls_returns_all_five_with_metadata(client):
 def test_patch_persists_into_config_yaml(client):
     r = client.patch("/api/v1/admin/model-controls", json={
         "falcon": True, "sam2": False, "ocr": False,
-        "qwen3_vl": True, "gemma": False,
+        "qwen3_vl": True, "gemma": False, "sam3": True,
     })
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["state"] == {"falcon": True, "sam2": False, "ocr": False,
-                              "qwen3_vl": True, "gemma": False}
+                              "qwen3_vl": True, "gemma": False,
+                              "sam3": True}
     # Round-trip via GET (re-reads config.yaml).
     r2 = client.get("/api/v1/admin/model-controls")
     assert r2.json()["state"] == body["state"]
@@ -116,6 +122,7 @@ def test_patch_persists_into_config_yaml(client):
     assert data["models"]["falcon_ocr"]["enabled"] is False
     assert data["models"]["qwen3_vl"]["enabled"] is True
     assert data["models"]["gemma"]["enabled"] is False
+    assert data["models"]["sam3"]["enabled"] is True
 
 
 def test_patch_writes_audit_log(client):
@@ -129,11 +136,11 @@ def test_patch_writes_audit_log(client):
             AuditLog.action == "admin.model_controls_update").all()
     assert rows
     row = rows[-1]
-    # Audit row contains BEFORE + AFTER for the five flags only —
-    # no secrets, no unrelated config keys.
+    # Audit row contains BEFORE + AFTER for the six flags only —
+    # no secrets, no unrelated config keys. (Now six: SAM 3 added.)
     after = row.after_json or {}
     assert set(after.keys()) == \
-        {"falcon", "sam2", "ocr", "qwen3_vl", "gemma"}
+        {"falcon", "sam2", "ocr", "qwen3_vl", "gemma", "sam3"}
     assert after["gemma"] is False
 
 

@@ -189,7 +189,8 @@ def test_every_runtime_status_pill_class_has_a_style_rule():
 def test_review_safe_labels_are_intact():
     src = _html()
     for label in (
-        "Return / Refund Visual Review",   # header H1
+        # Header H1 rebranded with the SCO UI conversion.
+        "SCO Vision — Self-Checkout Reviewer",
         "Case Queue",                     # cases panel title
         "Pipeline status",                # pipeline tab title
         "Prompt editor",                  # prompts tab title
@@ -207,9 +208,12 @@ def test_review_safe_reviewer_actions_all_have_human_text():
     src = _html()
     # Each ``data-action`` button has a visible label after the
     # checkbox-style emoji prefix. We pin the text strings the
-    # operator clicks.
+    # operator clicks. The verified-action label was rebranded from
+    # "Verified physical return" → "Verified — basket matches" with
+    # the SCO UI rebrand; the data-action attribute is unchanged so
+    # historical audit rows keep their meaning.
     for visible in (
-        "Verified physical return",
+        "Verified — basket matches",
         "Needs review",
         "High-risk review",
         "Invalid video",

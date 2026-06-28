@@ -108,7 +108,11 @@ def test_static_dashboard_user_visible_text_is_review_safe():
             )
     review_src = (ROOT / "static" / "review.html").read_text().lower()
     assert "needs review" in review_src
-    assert "return / refund visual review" in review_src
+    # UI rebrand: header reads "SCO Vision — Self-Checkout Reviewer".
+    # The pre-rebrand "Return / Refund Visual Review" header is gone.
+    assert "sco vision" in review_src
+    assert "self-checkout reviewer" in review_src
+    assert "return / refund visual review" not in review_src
 
 
 def test_no_legacy_classifier_default_in_static_ui():

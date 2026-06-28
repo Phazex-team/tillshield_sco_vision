@@ -744,6 +744,24 @@ MODEL_CONTROL_SPECS: tuple[dict, ...] = (
                     "Vision Primary (Q) failure then has no fallback."),
         "default_when_missing": True,
     },
+    {
+        # SAM 3 (concept-prompted video backend). Independent of
+        # Falcon — when enabled it runs DIRECTLY on the window with
+        # POS-derived text concepts and the case_runner threads its
+        # canonical groups into the SCO v2 prompt/policy. Toggling
+        # this OFF restores the Falcon-only perception path. Default
+        # OFF — this is still an opt-in experimental backend.
+        "id": "sam3", "config_key": "sam3",
+        "label": "SAM 3 (concept perception)",
+        "role": "perception_concept_backend",
+        "dependencies": [],
+        "independent": True,
+        "caption": ("Optional SAM 3 video-concept backend. When ON, "
+                    "runs alongside (or instead of) Perception (FL) "
+                    "and emits canonical container groups. Safe to "
+                    "leave OFF — Falcon is the default perception path."),
+        "default_when_missing": False,
+    },
 )
 
 ALLOWED_MODEL_CONTROL_KEYS: frozenset = frozenset(
@@ -772,10 +790,16 @@ def _model_control_warnings(state: dict) -> list[str]:
     flag combination. These mirror the UI tooltips so backend + UI
     cannot drift."""
     warnings: list[str] = []
-    if not state.get("falcon"):
+    if not state.get("falcon") and not state.get("sam3"):
         warnings.append(
-            "Perception (FL) disabled: no perception track evidence will "
-            "exist, so cases will likely fall through to REVIEW.")
+            "Both perception backends disabled (Perception (FL) and SAM 3): "
+            "no perception evidence will exist, so cases will likely fall "
+            "through to REVIEW.")
+    elif not state.get("falcon") and state.get("sam3"):
+        warnings.append(
+            "Perception (FL) disabled, SAM 3 ON: SCO checkout cases will "
+            "use SAM 3 only. Refund-flow callers that still rely on "
+            "Falcon track gating will fall through to REVIEW.")
     if not state.get("qwen3_vl") and not state.get("gemma"):
         warnings.append(
             "Both vision providers disabled: the provider chain will return "
@@ -847,11 +871,16 @@ def _validate_model_control_update(payload: dict, current: dict) -> dict:
                 "error": f"value for {k!r} must be a boolean (got "
                           f"{type(v).__name__})"})
         new_state[k] = v
+    # An independent source must remain enabled. SAM 3 counts as an
+    # independent perception backend (it does not require Falcon),
+    # so a deployment running SAM 3 + a VLM can disable Falcon
+    # safely. Without SAM 3, the legacy rule (FL OR Q OR G) still
+    # applies.
     if not (new_state.get("falcon") or new_state.get("qwen3_vl")
-            or new_state.get("gemma")):
+            or new_state.get("gemma") or new_state.get("sam3")):
         raise HTTPException(status_code=400, detail={
             "error": "at least one independent source must remain enabled: "
-                      "Perception (FL), Vision Primary (Q), or "
+                      "Perception (FL), SAM 3, Vision Primary (Q), or "
                       "Vision Fallback (G)"})
     if new_state.get("sam2") and not new_state.get("falcon"):
         raise HTTPException(status_code=400, detail={

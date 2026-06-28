@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Return / Refund Visual Review — Case Queue</title>
+  <title>SCO Vision — Self-Checkout Reviewer</title>
   <style>
     :root {
       --bg: #0d1117;
@@ -179,7 +179,7 @@
   <div class="brand">
     <img class="brand-logo" src="/assets/tillshield-icon-white.png"
          alt="TillShield" />
-    <h1>Return / Refund Visual Review</h1>
+    <h1>SCO Vision — Self-Checkout Reviewer</h1>
   </div>
   <span class="badge">operator console</span>
   <span class="grow"></span>
@@ -243,7 +243,7 @@
             <option value="no">no</option>
           </select>
         </label>
-        <label class="field">
+        <label class="field" title="Legacy refund-flow signal: kept for back-compat. SCO cases use the SCO risk-reason filters below.">
           Handover
           <select id="filter-handover">
             <option value="">any</option>
@@ -252,11 +252,27 @@
           </select>
         </label>
         <label class="field">
-          Item
+          Item visible
           <select id="filter-item">
             <option value="">any</option>
             <option value="yes">yes</option>
             <option value="no">no</option>
+          </select>
+        </label>
+        <label class="field" title="Filter cases by SCO risk reason emitted by the v2 policy.">
+          SCO reason
+          <select id="filter-sco-reason">
+            <option value="">any</option>
+            <option value="sco_basket_match">basket match (verified)</option>
+            <option value="sco_basket_mismatch">basket mismatch</option>
+            <option value="sco_identity_uncertain">identity uncertain</option>
+            <option value="sco_count_uncertain">count uncertain</option>
+            <option value="sco_extra_candidates">extra candidates</option>
+            <option value="sco_missing_items">missing items</option>
+            <option value="sco_episode_ambiguous">episode ambiguous</option>
+            <option value="sco_episode_short">episode short</option>
+            <option value="sco_low_confidence">low VLM confidence</option>
+            <option value="sco_bad_footage">bad footage</option>
           </select>
         </label>
         <label class="field">
@@ -274,6 +290,7 @@
             <th>Amount</th>
             <th>POS time</th>
             <th>Verdict</th>
+            <th>SCO reasons</th>
             <th>Customer</th>
             <th>Handover</th>
             <th>Item</th>
@@ -358,8 +375,9 @@
 
       <h3 style="font-size:13px;margin:24px 0 10px 0">Reviewer Decision</h3>
       <div class="reviewer-actions" id="reviewer-actions">
-        <button data-action="verified_physical_return" data-outcome="VERIFIED">
-          ✅ Verified physical return</button>
+        <button data-action="verified_physical_return" data-outcome="VERIFIED"
+                title="Mark this SCO checkout as visually consistent with the POS basket.">
+          ✅ Verified — basket matches</button>
         <button data-action="needs_review" data-outcome="REVIEW">
           🔎 Needs review</button>
         <button data-action="high_risk_review" data-outcome="HIGH_RISK_REVIEW">
@@ -746,6 +764,7 @@ function _caseMatchesFilters(row) {
   const handover = v("filter-handover");
   const item = v("filter-item");
   const search = v("filter-search").toLowerCase();
+  const scoReason = v("filter-sco-reason");
   const posDate = (p.pos_event_at || "").slice(0, 10);  // YYYY-MM-DD
   if (dFrom && posDate && posDate < dFrom) return false;
   if (dTo && posDate && posDate > dTo) return false;
@@ -756,11 +775,50 @@ function _caseMatchesFilters(row) {
   if (handover === "no" && row.handover_occurred !== false) return false;
   if (item === "yes" && row.item_presented !== true) return false;
   if (item === "no" && row.item_presented !== false) return false;
+  if (scoReason) {
+    const reasons = Array.isArray(row.risk_reasons) ? row.risk_reasons : [];
+    if (!reasons.some(r => String(r).startsWith(scoReason))) return false;
+  }
   if (search) {
     const hay = (row.id + " " + (p.transaction_id || "")).toLowerCase();
     if (!hay.includes(search)) return false;
   }
   return true;
+}
+
+// SCO risk-reason tag → human-readable label. Tags are stable
+// machine identifiers (reasoning.sco_policy_v2.TAG_*); this map is
+// the UI-facing rename. Unknown tags pass through verbatim.
+const SCO_TAG_LABELS = {
+  sco_basket_match:        "basket match",
+  sco_basket_mismatch:     "basket mismatch",
+  sco_identity_uncertain:  "identity uncertain",
+  sco_count_uncertain:     "count uncertain",
+  sco_extra_candidates:    "extra candidates",
+  sco_missing_items:       "missing items",
+  sco_episode_ambiguous:   "episode ambiguous",
+  sco_episode_short:       "episode short",
+  sco_low_confidence:      "low VLM confidence",
+  sco_bad_footage:         "bad footage",
+  sco_no_vlm_output:       "no VLM output",
+};
+function scoReasonPills(reasons) {
+  if (!Array.isArray(reasons) || !reasons.length) return "";
+  const seen = new Set();
+  const out = [];
+  for (const r of reasons) {
+    const s = String(r || "");
+    if (!s.startsWith("sco_")) continue;        // only render SCO tags here
+    if (seen.has(s)) continue;
+    seen.add(s);
+    const label = SCO_TAG_LABELS[s] || s;
+    out.push(`<span class="pill" title="${escapeHtml(s)}"
+                     style="background:#1f2733;color:var(--accent);
+                            font-size:11px;padding:2px 6px;margin:1px 2px;
+                            display:inline-block">
+                ${escapeHtml(label)}</span>`);
+  }
+  return out.join("");
 }
 
 async function refreshCases() {
@@ -793,6 +851,7 @@ async function refreshCases() {
       <td>${p.amount ? `${p.currency || ""} ${p.amount}` : "—"}</td>
       <td>${p.pos_event_at || "—"}</td>
       <td>${pill(row.outcome || "—")}</td>
+      <td>${scoReasonPills(row.risk_reasons) || '<span style="color:var(--muted)">—</span>'}</td>
       <td>${boolCell(row.customer_present)}</td>
       <td>${boolCell(row.handover_occurred)}</td>
       <td>${boolCell(row.item_presented)}</td>
@@ -1006,11 +1065,36 @@ function renderCaseSummary(pkg, c, window_) {
   if (run) {
     const out = _vlmOut(run);
     const attempts = out._chain_attempts || [];
+    // Render is SCO-shape-aware. v2 SCO output carries
+    // physical_count_match / semantic_identity_match / matched_items
+    // / extra_visible_items; legacy refund output carries
+    // handover_occurred / item_count. Pick whichever is present so
+    // back-compat with old cases is preserved.
+    const isSco = (out.physical_count_match !== undefined
+                   || out.semantic_identity_match !== undefined);
     const ran = run.status === "SUCCEEDED" &&
-                (out.narrative || out.handover_occurred !== undefined);
+                (out.narrative
+                 || out.handover_occurred !== undefined
+                 || isSco);
     if (!ran && attempts.length && attempts.every(a => /=err|err:/i.test(a))) {
       vlmHtml = '<span class="pill ERROR">Vision did not run</span> all providers errored';
+    } else if (isSco) {
+      const pc = out.physical_count_match || "?";
+      const si = out.semantic_identity_match || "?";
+      const matched = Array.isArray(out.matched_items) ? out.matched_items.length : 0;
+      const extras  = Array.isArray(out.extra_visible_items) ? out.extra_visible_items.length : 0;
+      const missing = Array.isArray(out.missing_visible_items) ? out.missing_visible_items.length : 0;
+      vlmHtml =
+        `provider <strong>${escapeHtml(visionLabel(run.provider))}</strong> · ` +
+        `physical count <strong>${escapeHtml(String(pc))}</strong> · ` +
+        `identity <strong>${escapeHtml(String(si))}</strong> · ` +
+        `matched <strong>${matched}</strong>, extras <strong>${extras}</strong>, missing <strong>${missing}</strong>` +
+        (out.confidence ? ` · conf ${escapeHtml(String(out.confidence))}` : "") +
+        (out.uncertainty_reason ? `<div style="margin-top:5px;color:var(--muted)">uncertainty: ${escapeHtml(out.uncertainty_reason)}</div>` : "") +
+        (out.narrative ? `<div style="margin-top:5px;color:var(--muted)">“${escapeHtml(out.narrative)}”</div>` : "");
     } else {
+      // Legacy refund-shaped output (kept for back-compat with
+      // historical cases analysed under prompt_version=return_review_v1).
       const ho = out.handover_occurred;
       const items = (out.item_count != null) ? out.item_count
         : (Array.isArray(out.items_handed_over) ? out.items_handed_over.length : null);
@@ -2573,9 +2657,9 @@ function _modelControlsLocalValidation(state) {
   // Mirror backend rules so the operator sees the rejection before
   // they hit Save. Never mutate state here.
   const issues = [];
-  if (!state.falcon && !state.qwen3_vl && !state.gemma) {
-    issues.push("At least one of Perception (FL) / Vision Primary (Q) / "
-                + "Vision Fallback (G) must remain enabled (an independent "
+  if (!state.falcon && !state.qwen3_vl && !state.gemma && !state.sam3) {
+    issues.push("At least one of Perception (FL) / SAM 3 / Vision Primary (Q) "
+                + "/ Vision Fallback (G) must remain enabled (an independent "
                 + "source is required).");
   }
   if (state.sam2 && !state.falcon) {
@@ -2590,9 +2674,14 @@ function _modelControlsLocalValidation(state) {
 }
 function _modelControlsAdvisoryWarnings(state) {
   const warnings = [];
-  if (!state.falcon) {
-    warnings.push("Perception (FL) disabled: no track evidence will exist, "
-                  + "so cases will likely fall through to REVIEW.");
+  if (!state.falcon && !state.sam3) {
+    warnings.push("Both perception backends disabled (Perception (FL) and "
+                  + "SAM 3): no perception evidence will exist, so cases "
+                  + "will likely fall through to REVIEW.");
+  } else if (!state.falcon && state.sam3) {
+    warnings.push("Perception (FL) disabled, SAM 3 ON: SCO checkout cases "
+                  + "will use SAM 3 only. Refund-flow callers that still "
+                  + "rely on Falcon track gating will fall through to REVIEW.");
   }
   if (!_vlmEnabled(state)) {
     warnings.push("Both vision providers disabled: provider chain will "
@@ -2693,6 +2782,7 @@ document.getElementById("model-controls-save").onclick = async () => {
   const payload = {
     falcon:   !!state.falcon,
     sam2:     !!state.sam2,
+    sam3:     !!state.sam3,
     ocr:      !!state.ocr,
     qwen3_vl: !!state.qwen3_vl,
     gemma:    !!state.gemma,

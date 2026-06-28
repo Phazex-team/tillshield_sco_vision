@@ -83,7 +83,7 @@ async def _lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Return / Refund Visual Review",
+        title="SCO Vision — Self-Checkout Reviewer",
         version="3.0.0",
         docs_url="/api/v1/docs",
         openapi_url="/api/v1/openapi.json",
