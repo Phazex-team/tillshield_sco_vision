@@ -49,6 +49,13 @@ class GemmaProvider(VLMProvider):
         keeps weights warm; the local provider object stays cheap."""
         self._client_cache = None
 
+    def is_external_http(self) -> bool:
+        # GemmaProvider always talks to transformers_server.py (or the
+        # vLLM Gemma server) over HTTP. The model weights live in a
+        # different process, so the app's memory_guard should not
+        # block this provider on app-process RAM headroom.
+        return True
+
     def _client(self):
         if self._client_cache is not None:
             return self._client_cache

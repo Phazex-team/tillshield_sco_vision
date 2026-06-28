@@ -73,6 +73,23 @@ class VLMProvider:
                               healthy=self.enabled,
                               detail="not implemented")
 
+    def is_external_http(self) -> bool:
+        """Does this provider talk to a model in a SEPARATE process via HTTP?
+
+        Returning True tells the memory guard NOT to gate this provider
+        on the app process's RAM headroom: its weights live in another
+        process (vLLM / transformers-server). The default is False
+        (in-process model — guard applies).
+
+        Concrete subclasses override this when configured for a remote
+        HTTP backend (e.g. ``Qwen3VLProvider(provider="vllm_openai")``,
+        ``GemmaProvider`` whose ``GemmaVideoReasoner`` is just an HTTP
+        client). Local / in-process backends (e.g.
+        ``Qwen3VLProvider(provider="local_transformers")``) must keep
+        the default False.
+        """
+        return False
+
 
 _REGISTRY: dict[str, Callable[..., VLMProvider]] = {}
 

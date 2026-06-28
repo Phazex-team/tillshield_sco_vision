@@ -72,21 +72,28 @@ class ChainProvider(VLMProvider):
 
         policy = get_policy()
         status = policy.poll()
-        if not status.inference_allowed:
-            return VLMResult(
-                provider="chain", model_name="chain",
-                error=(f"inference deferred: memory state {status.state}; "
-                       f"reason={status.degraded_reason}"),
-                parsed={"_memory_state": status.state,
-                        "_memory_used_gb": status.used_gb,
-                        "_chain_attempts": ["chain=deferred"]},
-            )
+
+        # Memory-guard scope:
+        #
+        # Only IN-PROCESS providers care about the app's RAM headroom.
+        # EXTERNAL-HTTP providers (Qwen vLLM, Gemma HTTP bridge) keep
+        # their weights in a SEPARATE process and the app's RAM
+        # ceiling has no bearing on their ability to serve. So the
+        # gate is applied PER-PROVIDER, not chain-wide: an in-process
+        # provider is skipped (deferred) when the gate is closed; an
+        # external-HTTP provider is always attempted. The chain-wide
+        # short-circuit was wrong because it blocked the external
+        # fallback even when one in-process primary failed gating.
 
         last_result: VLMResult | None = None
         attempts: list[str] = []
         for idx, p in enumerate(self.providers):
             if not p.enabled:
                 attempts.append(f"{p.name}=disabled")
+                continue
+            if not p.is_external_http() and not status.inference_allowed:
+                attempts.append(
+                    f"{p.name}=deferred:memory_state={status.state}")
                 continue
             # NOTE: mutual exclusion between primary + fallback is
             # enforced on the error path below — we unload the failed
@@ -121,6 +128,23 @@ class ChainProvider(VLMProvider):
             _try_unload(p, policy)
 
         if last_result is None:
+            # No provider ran a real attempt. If everything was
+            # deferred under memory pressure, surface that as the
+            # chain-level error so the upstream decision policy can
+            # tell apart "nothing configured" from "everything
+            # blocked by RAM gate".
+            all_deferred = bool(attempts) and all(
+                "=deferred:" in a for a in attempts)
+            if all_deferred:
+                return VLMResult(
+                    provider="chain", model_name="chain",
+                    error=(f"inference deferred: memory state "
+                           f"{status.state}; reason="
+                           f"{status.degraded_reason}"),
+                    parsed={"_memory_state": status.state,
+                            "_memory_used_gb": status.used_gb,
+                            "_chain_attempts": attempts},
+                )
             return VLMResult(
                 provider="chain", model_name="chain",
                 error="no enabled providers in chain",

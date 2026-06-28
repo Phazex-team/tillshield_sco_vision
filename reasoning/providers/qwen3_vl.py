@@ -179,6 +179,12 @@ class Qwen3VLProvider(VLMProvider):
     def has_local_weights(self) -> bool:
         return bool(self.local_path) and os.path.isdir(self.local_path)
 
+    def is_external_http(self) -> bool:
+        # vllm_openai backend talks to a separate vLLM process over HTTP;
+        # local_transformers loads weights INTO this process and must
+        # honour the memory guard.
+        return self.provider_backend == "vllm_openai"
+
     def analyze_evidence(self, manifest: EvidenceManifest) -> VLMResult:
         if not self.enabled:
             return VLMResult(provider=self.name,

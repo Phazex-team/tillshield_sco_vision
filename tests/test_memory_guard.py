@@ -143,15 +143,22 @@ def test_qwen_and_gemma_not_loaded_simultaneously_by_default():
     assert p.warm_fallback is False
 
 
-def test_chain_deferred_when_memory_above_soft_limit(monkeypatch, tmp_path):
-    """When the memory guard reports a degraded state, the chain must
-    return a structured error so the decision policy can degrade the
-    case to REVIEW upstream — without ever loading a model."""
-    import app.config as ac
-    fake_root = tmp_path / "models" / "hf"
-    qwen_snap = fake_root / "Qwen/Qwen3-VL-30B-A3B-Instruct" / "snap"
-    qwen_snap.mkdir(parents=True)
-    monkeypatch.setattr(ac, "BUNDLE_ROOT", fake_root)
+def test_in_process_chain_deferred_when_memory_above_soft_limit(
+        monkeypatch, tmp_path):
+    """When the memory guard reports a degraded state AND every provider
+    in the chain is IN-PROCESS, the chain returns a structured error
+    so the decision policy can degrade the case to REVIEW upstream —
+    without loading a model.
+
+    Updated for the per-provider memory gate: external HTTP providers
+    are NOT blocked even under memory pressure (their weights live in
+    a different process and the app's RAM ceiling does not bound
+    them). To pin the gate's intended behaviour we therefore force an
+    all-in-process chain by configuring Qwen with local_transformers
+    backend and disabling Gemma (which is always external HTTP)."""
+    from reasoning.providers.qwen3_vl import Qwen3VLProvider
+    from reasoning.providers.chain import ChainProvider
+    from reasoning.providers.base import EvidenceManifest
 
     p = MemoryPolicy(MemoryPolicyConfig(soft_gb=90, hard_gb=100,
                                         emergency_gb=110,
@@ -159,9 +166,13 @@ def test_chain_deferred_when_memory_above_soft_limit(monkeypatch, tmp_path):
                      probe=_fake_probe(120.0, 95.0))
     set_policy_for_test(p)
     try:
-        from reasoning.providers import build_active_provider
-        from reasoning.providers.base import EvidenceManifest
-        chain = build_active_provider(ac.load_config())
+        qwen_local = Qwen3VLProvider(
+            model_name="qwen-local", enabled=True,
+            provider="local_transformers",
+            local_path=str(tmp_path / "does/not/exist"),
+        )
+        assert qwen_local.is_external_http() is False
+        chain = ChainProvider(providers=[qwen_local])
         manifest = EvidenceManifest(
             case_id="c0", camera_id="cam_01",
             window_start_ts="2026-06-15T14:00:00Z",
@@ -171,8 +182,52 @@ def test_chain_deferred_when_memory_above_soft_limit(monkeypatch, tmp_path):
         result = chain.analyze_evidence(manifest)
         assert result.error is not None
         assert "inference deferred" in result.error
-        # Crucially, the providers were not loaded.
-        assert chain.providers[0]._model is None
+        # Crucially, the provider was not loaded.
+        assert qwen_local._model is None
+        # And the per-provider deferral surfaced in the audit trail.
+        attempts = (result.parsed or {}).get("_chain_attempts") or []
+        assert any("qwen3_vl=deferred" in a for a in attempts), attempts
+    finally:
+        p.reset_for_test()
+
+
+def test_external_http_chain_NOT_deferred_when_memory_above_soft_limit(
+        monkeypatch, tmp_path):
+    """The complement of the in-process test: when every provider in
+    the chain is EXTERNAL HTTP, memory pressure does not defer the
+    chain. The external server's weights live in another process and
+    the app's RAM ceiling has no bearing on its ability to serve."""
+    from reasoning.providers.qwen3_vl import Qwen3VLProvider
+    from reasoning.providers.gemma import GemmaProvider
+    from reasoning.providers.chain import ChainProvider
+    from reasoning.providers.base import EvidenceManifest, VLMResult
+
+    p = MemoryPolicy(MemoryPolicyConfig(soft_gb=90, hard_gb=100,
+                                        emergency_gb=110,
+                                        poll_interval_sec=999),
+                     probe=_fake_probe(120.0, 95.0))
+    set_policy_for_test(p)
+    try:
+        qwen = Qwen3VLProvider(
+            model_name="qwen", enabled=True,
+            provider="vllm_openai",
+            base_url="http://127.0.0.1:8000/v1",
+            served_model_name="qwen3_vl",
+        )
+        # Stub the HTTP path so this test doesn't need a real server.
+        monkeypatch.setattr(qwen, "_analyze_vllm",
+                            lambda m: VLMResult(provider="qwen3_vl",
+                                                  model_name="qwen3_vl",
+                                                  parsed={"ok": True}))
+        gemma = GemmaProvider(model_name="gemma", enabled=True,
+                               vllm_url="http://localhost:8001")
+        chain = ChainProvider(providers=[qwen, gemma])
+        manifest = EvidenceManifest(
+            case_id="c0", camera_id="cam_01",
+            window_start_ts="x", window_end_ts="y", frames=[])
+        result = chain.analyze_evidence(manifest)
+        assert result.error is None, result.error
+        assert result.provider == "qwen3_vl"
     finally:
         p.reset_for_test()
 
