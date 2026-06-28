@@ -79,6 +79,19 @@ class GemmaProvider(VLMProvider):
                 error="no frames in manifest",
             )
         start_objects, action_objects = _summarize_tracks(manifest.tracks)
+        # SCO Phase 5 fix: when the active prompt is the SCO basket-match
+        # template, Gemma's response JSON has SCO-shaped keys
+        # (basket_match / matched / missing / extras / video_usable /
+        # confidence / narrative). The legacy refund parser in
+        # gemma_reasoner._parse_json would silently project that onto
+        # refund fields (handover_occurred / item_count / ...) and drop
+        # the SCO keys, so downstream the SCO schema parser sees no
+        # basket_match and falls back to uncertain/low — turning a
+        # legitimate Gemma answer into REVIEW with sco_low_confidence.
+        # Flip to schema-passthrough so the dict is returned verbatim.
+        prompt_version = ((manifest.metadata or {}).get("prompt_version")
+                          if isinstance(manifest.metadata, dict) else None)
+        schema_passthrough = (prompt_version == "sco_basket_match_v1")
         t0 = time.time()
         try:
             parsed = self._client().reason(
@@ -89,6 +102,7 @@ class GemmaProvider(VLMProvider):
                 user_prompt=manifest.user_prompt or None,
                 camera_id=manifest.camera_id,
                 session_id=manifest.case_id,
+                schema_passthrough=schema_passthrough,
             )
         except Exception as exc:
             return VLMResult(

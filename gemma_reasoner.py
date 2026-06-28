@@ -100,7 +100,22 @@ class GemmaVideoReasoner:
                enable_thinking: Optional[bool] = None,
                max_frames: Optional[int] = None,
                camera_id: Optional[str] = None,
-               session_id: Optional[str] = None) -> dict:
+               session_id: Optional[str] = None,
+               schema_passthrough: bool = False) -> dict:
+        """Run the Gemma video reasoner and return a parsed dict.
+
+        ``schema_passthrough`` (SCO Phase 5): when True, the response
+        JSON is returned **verbatim** (tolerant extract + json.loads
+        + metadata keys appended) instead of being projected onto the
+        legacy refund schema (handover_occurred / items_handed_over /
+        item_count / ...). Required for any prompt whose response
+        shape is not refund — e.g. ``sco_basket_match_v1`` returns
+        basket_match / matched / missing / extras, which the legacy
+        parser would silently drop.
+
+        Legacy (refund) prompts keep ``schema_passthrough=False`` so
+        their output shape is unchanged.
+        """
         if not frames:
             return _fallback("no frames provided")
 
@@ -154,7 +169,8 @@ class GemmaVideoReasoner:
         t0 = time.time()
         text = self._post_chat(payload)
         latency_ms = int((time.time() - t0) * 1000)
-        parsed = _parse_json(text)
+        parsed = (_parse_json_passthrough(text) if schema_passthrough
+                  else _parse_json(text))
         parsed["_num_frames"] = num_frames
         parsed["_latency_ms"] = latency_ms
 
@@ -371,3 +387,43 @@ def _fallback(text: Optional[str]) -> dict:
         "item_presented": False,
         "objects_detected": [],
     }
+
+
+def _parse_json_passthrough(text: str) -> dict:
+    """Tolerant JSON extractor that returns the model's dict verbatim.
+
+    Same fence/think-tag stripping + regex extraction + single-quote
+    rescue path as ``_parse_json``, but performs NO field projection.
+    Used by SCO mode (and any future scenario) where the response
+    schema is not refund.
+
+    On unparsable input returns ``{"_unparsable": True, "_raw": ...,
+    "narrative": <msg>, "confidence": "low"}`` so downstream tolerant
+    parsers (e.g. ``reasoning.schemas.sco_basket_match.parse_or_fallback``)
+    can route to their own uncertain/low fallback rather than crash.
+    """
+    if not text:
+        return {"_unparsable": True, "_raw": "",
+                "narrative": "no model output", "confidence": "low"}
+    cleaned = _THINK_RE.sub("", text)
+    cleaned = _FENCE_RE.sub("", cleaned).strip()
+    match = _JSON_RE.search(cleaned)
+    if not match:
+        return {"_unparsable": True, "_raw": text[:400],
+                "narrative": f"unparsable model output: {text[:180]}",
+                "confidence": "low"}
+    blob = match.group(0)
+    try:
+        data = json.loads(blob)
+    except json.JSONDecodeError:
+        try:
+            data = json.loads(blob.replace("'", '"'))
+        except json.JSONDecodeError:
+            return {"_unparsable": True, "_raw": text[:400],
+                    "narrative": f"unparsable model output: {text[:180]}",
+                    "confidence": "low"}
+    if not isinstance(data, dict):
+        return {"_unparsable": True, "_raw": text[:400],
+                "narrative": "model output was not a JSON object",
+                "confidence": "low"}
+    return data
