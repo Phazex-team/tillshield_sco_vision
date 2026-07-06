@@ -58,7 +58,9 @@ x-common-env: &common-env
 # torch/vLLM stack (see Dockerfile — it is mounted, not reinstalled).
 x-common-volumes: &common-volumes
   - ./venv:/app/venv
-  - ./config.yaml:/app/config.yaml:ro
+  # config.yaml is read-WRITE: the admin API (update_camera_settings)
+  # persists camera/zone edits by rewriting this file in place.
+  - ./config.yaml:/app/config.yaml
   - ./models:/app/models
   - ./logs:/app/logs
   - ./run:/app/run
