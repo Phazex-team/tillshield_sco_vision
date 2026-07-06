@@ -1,0 +1,197 @@
+# SCO Vision — containerised stack.
+#
+#   app      FastAPI + reviewer UI            :3902   (default)
+#   qwen     Qwen3-VL vLLM (primary VLM)       :8000   (default)
+#   gemma    Gemma BF16 fallback VLM           :8001   (profile: gemma)
+#   phoenix  Arize Phoenix telemetry           :6006   (profile: phoenix)
+#
+# Networking: every service uses `network_mode: host`. This is a
+# single-node GPU appliance — the app reaches Qwen/Gemma/Phoenix over
+# localhost (exactly the URLs hard-coded in config.yaml) and the poller
+# reaches LAN RTSP cameras (192.168.x.x) directly. Because of host
+# networking, `ports:` are intentionally omitted; the service ports above
+# are published straight onto the host.
+#
+# GPU: requires nvidia-container-toolkit on the host. Verified on DGX
+# Spark (GB10 / sm_121). All CUDA services request every visible GPU; the
+# in-app memory gate (config.yaml `gpu:`) arbitrates who loads weights.
+#
+# Bind mounts keep the 117 GB model bundle and the SQLite DB on the host,
+# outside the image. First run:
+#   1) cp .env.example .env   # fill in NVR/RTSP secrets
+#   2) mkdir -p logs run videos storage evidence
+#   3) # to keep an existing DB: cp sco_vision.sqlite storage/
+#   4) docker compose up -d --build         # app + qwen
+#      docker compose --profile gemma up -d          # + gemma fallback
+#      docker compose --profile phoenix up -d        # + telemetry
+
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: sco_vision:latest
+
+# Reserve all NVIDIA GPUs for a service.
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+# Env shared by every service. Offline-first, repo-local model bundle.
+# NOTE: HF_HOME is deliberately NOT set. The bundle under ./models/hf is
+# in <repo-id>/<snapshot-hash>/ form, not the HF *hub* cache layout
+# (hub/models--org--name/snapshots/...), so pointing HF_HOME at it would
+# not resolve. The app resolves weights via its own BUNDLE_ROOT logic,
+# and the model servers below are handed explicit snapshot paths.
+x-common-env: &common-env
+  FRAUD_CONFIG: /app/config.yaml
+  FRAUD_OFFLINE_MODE: "1"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+# Mounts shared by every service. ./venv carries the exact tested
+# torch/vLLM stack (see Dockerfile — it is mounted, not reinstalled).
+x-common-volumes: &common-volumes
+  - ./venv:/app/venv
+  - ./config.yaml:/app/config.yaml:ro
+  - ./models:/app/models
+  - ./logs:/app/logs
+  - ./run:/app/run
+  - ./videos:/app/videos
+  - ./storage:/app/storage
+  - ./evidence:/app/evidence
+
+services:
+  # ---- Qwen3-VL vLLM: primary VLM on :8000 -------------------------
+  # Flags mirror scripts/qwen_vllm_start.sh: Triton MoE backend, eager
+  # mode, FlashInfer autotune off, KV cache capped — the set GB10/sm_121
+  # actually tolerates. Override via the environment if your card differs.
+  qwen:
+    <<: [*app-image, *gpu]
+    network_mode: host
+    environment:
+      <<: *common-env
+    volumes: *common-volumes
+    # Serve the explicit local snapshot dir (globbed so the commit hash
+    # isn't hard-coded; .cache siblings are filtered out). The served
+    # name stays `qwen3_vl` to match config.yaml's base_url/model id.
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        M=$$(ls -d /app/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/*/ \
+              | grep -v '/\.cache/' | head -1)
+        [ -n "$$M" ] || { echo "Qwen snapshot not found under /app/models/hf" >&2; exit 1; }
+        echo "qwen: serving $$M"
+        exec vllm serve "$$M" \
+          --host 0.0.0.0 --port 8000 \
+          --served-model-name qwen3_vl \
+          --moe-backend triton \
+          --gpu-memory-utilization 0.70 \
+          --no-enable-prefix-caching \
+          --enforce-eager \
+          --no-enable-flashinfer-autotune \
+          --max-model-len 65536
+    healthcheck:
+      # Readiness = /v1/models (weights loaded), not just /health.
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 60          # ~30 min budget for BF16/FP8 weight load
+      start_period: 300s
+    restart: unless-stopped
+
+  # ---- FastAPI app + reviewer UI on :3902 --------------------------
+  # Needs the GPU too (Falcon perception / SAM run in-process). Waits for
+  # Qwen to be ready before serving so the analysis chain never 500s.
+  app:
+    <<: [*app-image, *gpu]
+    network_mode: host
+    environment:
+      <<: *common-env
+      APP_PORT: "3902"
+      APP_HOST: 0.0.0.0
+      VLLM_URL: http://localhost:8001
+      # Keep the SQLite DB on the mounted host volume (not the ephemeral
+      # container root). To reuse an existing DB, copy it into ./storage/.
+      DATABASE_URL: sqlite:////app/storage/sco_vision.sqlite
+    volumes: *common-volumes
+    command:
+      - python
+      - scripts/run_app.py
+      - --host=0.0.0.0
+      - --port=3902
+    depends_on:
+      qwen:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:3902/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # ---- Gemma BF16 fallback VLM on :8001 (opt-in) -------------------
+  # Enable with:  docker compose --profile gemma up -d
+  # and set reasoning.fallback_provider: gemma in config.yaml.
+  gemma:
+    <<: [*app-image, *gpu]
+    profiles: [gemma]
+    network_mode: host
+    environment:
+      <<: *common-env
+      VLLM_PORT: "8001"
+    volumes: *common-volumes
+    # Apply the idempotent vLLM gemma4.py patch (into the mounted venv),
+    # then load the explicit local snapshot dir (globbed).
+    # transformers_server ignores the request `model` field, so the app
+    # can keep sending model="google/gemma-4-26B-A4B-it" with no mismatch.
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        python gemma4_patched.py apply || echo "gemma4 patch skipped"
+        M=$$(ls -d /app/models/hf/google/gemma-4-26B-A4B-it/*/ \
+              | grep -v '/\.cache/' | head -1)
+        [ -n "$$M" ] || { echo "Gemma snapshot not found under /app/models/hf" >&2; exit 1; }
+        echo "gemma: serving $$M"
+        exec python transformers_server.py --port 8001 --model "$$M"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 60
+      start_period: 300s
+    restart: unless-stopped
+
+  # ---- Phoenix telemetry on :6006 (opt-in) -------------------------
+  # Enable with:  docker compose --profile phoenix up -d
+  # No GPU. config.yaml observability.phoenix_url already points here.
+  phoenix:
+    <<: *app-image
+    profiles: [phoenix]
+    network_mode: host
+    environment:
+      <<: *common-env
+    volumes: *common-volumes
+    command:
+      - python
+      - -m
+      - phoenix.server.main
+      - serve
+      - --port=6006
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:6006/"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped

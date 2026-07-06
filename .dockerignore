@@ -1,0 +1,49 @@
+# Keep the build context small and fast. wheelhouse/ is deliberately
+# NOT ignored — the offline install in the Dockerfile needs it.
+
+# 117 GB of model weights — bind-mounted at runtime, never in the image.
+models/
+
+# Host virtualenv — the image builds its own at /opt/venv.
+venv/
+.venv/
+env/
+
+# Runtime artifacts / local state.
+logs/
+run/
+videos/
+storage/
+evidence/
+*.pid
+*.log
+
+# Databases — bind-mounted at runtime.
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.db
+
+# Secrets — provided via env_file/.env at runtime, not baked in.
+.env
+.env.local
+*.pem
+*.key
+
+# VCS / caches / editor.
+.git/
+.gitignore
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.claude/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Backups.
+sco_vision.backup.*.tar.gz
