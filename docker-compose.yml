@@ -115,6 +115,12 @@ services:
   app:
     <<: [*app-image, *gpu]
     network_mode: host
+    # Load .env so config.yaml's ${CAM_*_RTSP_URL} / NVR_USERNAME /
+    # NVR_PASSWORD placeholders resolve (start.sh sources .env the same
+    # way). `environment:` below still wins over any dup keys in .env.
+    env_file:
+      - path: .env
+        required: false
     environment:
       <<: *common-env
       APP_PORT: "4001"
@@ -138,6 +144,29 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    restart: unless-stopped
+
+  # ---- Segment recorder (records every configured camera) ----------
+  # Standalone process (scripts/run_segment_recorder.py): opens each
+  # camera's RTSP and writes 60s MP4 segments under storage/cctv/ plus a
+  # VideoSegment DB row. This is what lets the ROI editor / ops status
+  # find a recent frame. No GPU (never consults the memory guard, stays
+  # alive when inference is degraded). Independent of qwen — no depends_on.
+  recorder:
+    <<: *app-image
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      # MUST match the app's DB so recorded segments are visible to it.
+      DATABASE_URL: sqlite:////app/storage/sco_vision.sqlite
+    volumes: *common-volumes
+    command:
+      - python
+      - scripts/run_segment_recorder.py
+      - --segment-duration-sec=60
     restart: unless-stopped
 
   # ---- Gemma BF16 fallback VLM on :8001 (opt-in) -------------------
