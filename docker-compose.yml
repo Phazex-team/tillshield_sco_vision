@@ -1,6 +1,6 @@
 # SCO Vision — containerised stack.
 #
-#   app      FastAPI + reviewer UI            :3902   (default)
+#   app      FastAPI + reviewer UI            :4001   (default)
 #   qwen     Qwen3-VL vLLM (primary VLM)       :8000   (default)
 #   gemma    Gemma BF16 fallback VLM           :8001   (profile: gemma)
 #   phoenix  Arize Phoenix telemetry           :6006   (profile: phoenix)
@@ -107,7 +107,7 @@ services:
       start_period: 300s
     restart: unless-stopped
 
-  # ---- FastAPI app + reviewer UI on :3902 --------------------------
+  # ---- FastAPI app + reviewer UI on :4001 --------------------------
   # Needs the GPU too (Falcon perception / SAM run in-process). Waits for
   # Qwen to be ready before serving so the analysis chain never 500s.
   app:
@@ -115,7 +115,7 @@ services:
     network_mode: host
     environment:
       <<: *common-env
-      APP_PORT: "3902"
+      APP_PORT: "4001"
       APP_HOST: 0.0.0.0
       VLLM_URL: http://localhost:8001
       # Keep the SQLite DB on the mounted host volume (not the ephemeral
@@ -126,12 +126,12 @@ services:
       - python
       - scripts/run_app.py
       - --host=0.0.0.0
-      - --port=3902
+      - --port=4001
     depends_on:
       qwen:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:3902/api/v1/health"]
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:4001/api/v1/health"]
       interval: 30s
       timeout: 5s
       retries: 5
