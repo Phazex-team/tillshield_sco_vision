@@ -497,7 +497,8 @@
           <input id="cam-workstation" type="text" style="width:240px" placeholder="e.g. 52"/>
         </label>
       </div>
-      <div class="row" style="margin-top:12px;justify-content:flex-end">
+      <div class="row" style="margin-top:12px;justify-content:space-between">
+        <button id="cam-remove" style="color:#b91c1c">Remove camera…</button>
         <button id="cam-save" class="primary">Save camera settings</button>
       </div>
       <div class="save-status" id="cam-save-status"></div>
@@ -1880,6 +1881,19 @@ document.getElementById("camera-preview-autorefresh").onchange =
 // ===================== PROMPTS TAB =====================
 // ---- Camera source settings (RTSP URL + POS workstation) ----
 let _cameraCache = {};  // camera_id -> row
+// Render the endpoint's live-apply `runtime` block into a short factual
+// suffix: whether the app applied the change and where the recorder stands.
+function _runtimeMsg(payload) {
+  const rt = payload && payload.runtime;
+  if (!rt) return "";
+  const app = rt.app && rt.app.applied ? "app: live" : "app: NOT applied";
+  const rec = rt.recorder || {};
+  let recMsg;
+  if (rec.available === false) recMsg = "recorder: heartbeat unavailable";
+  else if (rec.caught_up) recMsg = "recorder: applied";
+  else recMsg = "recorder: applying…";
+  return ` [${app}; ${recMsg}]`;
+}
 async function refreshCameras() {
   const ss = document.getElementById("cam-save-status");
   try {
@@ -1942,7 +1956,7 @@ document.getElementById("cam-save").onclick = async () => {
     try { payload = JSON.parse(txt); } catch (_) { /* keep raw text */ }
     if (r.ok) {
       ss.className = "save-status ok";
-      ss.textContent = `saved: ${JSON.stringify(payload?.updated_fields || [])} — ${payload?.note || ""}`;
+      ss.textContent = `saved: ${JSON.stringify(payload?.updated_fields || [])} — ${payload?.note || ""}${_runtimeMsg(payload)}`;
       refreshCameras();
     } else {
       ss.className = "save-status";
@@ -1950,6 +1964,53 @@ document.getElementById("cam-save").onclick = async () => {
     }
   } catch (e) {
     ss.className = "save-status"; ss.textContent = `save failed: ${e}`;
+  }
+};
+document.getElementById("cam-remove").onclick = async () => {
+  const id = document.getElementById("cam-select").value;
+  if (!id) return;
+  const ss = document.getElementById("cam-save-status");
+  if (!confirm(`Remove camera "${id}"? It will stop recording and disappear `
+      + `from the live lists. config.yaml is the source of truth; this `
+      + `rewrites it.`)) return;
+  const headers = {};
+  const tok = document.getElementById("cam-admin-token").value.trim();
+  if (tok) headers["X-PhazeX-Admin-Token"] = tok;
+  const doDelete = async (clear) => clear
+    ? fetch(`${API}/admin/cameras/${encodeURIComponent(id)}?clear_workstation_mappings=true`,
+            { method: "DELETE", headers })
+    : fetch(`${API}/admin/cameras/${encodeURIComponent(id)}`,
+            { method: "DELETE", headers });
+  ss.className = "save-status"; ss.textContent = "removing…";
+  try {
+    let r = await doDelete(false);
+    let txt = await r.text();
+    let payload = null; try { payload = JSON.parse(txt); } catch (_) {}
+    // 409 = still mapped to a workstation; offer to clear and retry.
+    if (r.status === 409) {
+      const ws = payload?.detail?.workstations || [];
+      if (!confirm(`Camera "${id}" is still mapped to POS workstation(s) `
+          + `${JSON.stringify(ws)}. Clear that mapping and remove anyway?`)) {
+        ss.className = "save-status";
+        ss.textContent = `remove cancelled — still mapped to ${JSON.stringify(ws)}`;
+        return;
+      }
+      r = await doDelete(true);
+      txt = await r.text();
+      try { payload = JSON.parse(txt); } catch (_) {}
+    }
+    if (r.ok) {
+      ss.className = "save-status ok";
+      const cleared = payload?.cleared_workstations?.length
+        ? ` (cleared workstations ${JSON.stringify(payload.cleared_workstations)})` : "";
+      ss.textContent = `removed ${id}${cleared} — ${payload?.note || ""}${_runtimeMsg(payload)}`;
+      refreshCameras();
+    } else {
+      ss.className = "save-status";
+      ss.textContent = `remove failed: ${r.status} ${typeof payload?.detail === "string" ? payload.detail : txt}`;
+    }
+  } catch (e) {
+    ss.className = "save-status"; ss.textContent = `remove failed: ${e}`;
   }
 };
 document.getElementById("cam-new-create").onclick = async () => {
@@ -1979,7 +2040,7 @@ document.getElementById("cam-new-create").onclick = async () => {
       ss.className = "save-status ok";
       const reassigned = payload?.workstation_reassigned_from
         ? ` (workstation taken over from ${payload.workstation_reassigned_from})` : "";
-      ss.textContent = `created ${payload?.camera_id}${reassigned} — ${payload?.note || ""}`;
+      ss.textContent = `created ${payload?.camera_id}${reassigned} — ${payload?.note || ""}${_runtimeMsg(payload)}`;
       document.getElementById("cam-new-id").value = "";
       document.getElementById("cam-new-name").value = "";
       document.getElementById("cam-new-rtsp").value = "";

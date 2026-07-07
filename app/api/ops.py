@@ -359,6 +359,45 @@ def _collect_warnings(panels: dict) -> list[str]:
     return warnings
 
 
+def _recorder_panel(cfg) -> dict:
+    """Live recorder state from its heartbeat: which cameras it is
+    actually recording and whether it has caught up to the current
+    config.yaml. Lets ops see hot-apply status without a restart."""
+    import json
+    import os
+
+    from app.config import DEFAULT_CONFIG_PATH
+    from video.recorder_supervisor import default_state_path
+    try:
+        state = json.loads(default_state_path().read_text())
+    except FileNotFoundError:
+        return {"pill": UNKNOWN, "available": False,
+                "detail": "recorder heartbeat not found; recorder may be "
+                          "starting or not running"}
+    except Exception as exc:
+        return {"pill": UNKNOWN, "available": False,
+                "detail": f"heartbeat unreadable: {exc}"}
+    seen = state.get("config_mtime")
+    try:
+        current = os.path.getmtime(DEFAULT_CONFIG_PATH)
+    except OSError:
+        current = None
+    caught_up = (seen is not None and current is not None
+                 and seen >= current - 0.001)
+    configured = {c.get("id") for c in (cfg.cameras or [])} if cfg else set()
+    active = set(state.get("active_cameras") or [])
+    pill = OK if caught_up and active == configured else WARNING
+    return {
+        "pill": pill,
+        "available": True,
+        "active_cameras": sorted(active),
+        "configured_cameras": sorted(configured),
+        "caught_up": caught_up,
+        "updated_at": state.get("updated_at"),
+        "last_reconcile": state.get("last_reconcile"),
+    }
+
+
 @router.get("/status")
 def ops_status() -> dict:
     """Aggregate read-only pipeline status. Never raises — every
@@ -391,6 +430,7 @@ def ops_status() -> dict:
             {"pill": UNKNOWN, "detail": "config unavailable",
              "error": cfg_err}
         cameras = _camera_segment_freshness(session, cfg) if cfg else []
+        recorder = _recorder_panel(cfg)
         cases = _cases_panel(session)
 
         panels = {
@@ -416,6 +456,7 @@ def ops_status() -> dict:
             "qwen_vllm": qwen_vllm,
             "gemma": gemma,
             "cameras": cameras,
+            "recorder": recorder,
             "cases": cases,
             "warnings": warnings,
             "config_error": cfg_err,

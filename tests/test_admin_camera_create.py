@@ -30,6 +30,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("ADMIN_EDIT_TOKEN", raising=False)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'t.sqlite'}")
     monkeypatch.setenv("STORAGE_ROOT", str(tmp_path / "storage"))
+    monkeypatch.setenv("RECORDER_STATE_PATH", str(tmp_path / "rec_state.json"))
 
     # Sandbox config.yaml — the endpoint rewrites it in place; restore after.
     cfg_path = ROOT / "config.yaml"
@@ -168,6 +169,59 @@ def test_create_writes_audit_log(client):
     assert rows and rows[0].entity_id == "cam_audit"
 
 
+def test_create_reports_live_runtime_apply(client):
+    r = client.post("/api/v1/admin/cameras",
+                    json={"camera_id": "cam_rt", "rtsp_url": "rtsp://h/s"})
+    assert r.status_code == 200, r.text
+    runtime = r.json()["runtime"]
+    assert runtime["config_written"] is True
+    assert runtime["ok"] is True
+    assert runtime["app"]["applied"] is True
+    # Recorder heartbeat is isolated + absent in the test -> reported
+    # unavailable, not crashed.
+    assert runtime["recorder"]["available"] is False
+
+
+def test_runtime_partial_success_when_app_reload_fails(monkeypatch, tmp_path):
+    # Config write must succeed even if the in-process runtime apply fails;
+    # the response must say so (config_written True, app applied False).
+    monkeypatch.setenv("ADMIN_EDIT_TOKEN", "tok")  # short-circuits _admin_token
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'t.sqlite'}")
+    monkeypatch.setenv("STORAGE_ROOT", str(tmp_path / "storage"))
+    monkeypatch.setenv("RECORDER_STATE_PATH", str(tmp_path / "rec_state.json"))
+    cfg_path = ROOT / "config.yaml"
+    backup = tmp_path / "config_backup.yaml"
+    shutil.copy(cfg_path, backup)
+    import db.session as ds
+    ds._ENGINE = None
+    ds._SESSION_FACTORY = None
+    ds.init_schema()
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    c = TestClient(create_app())
+    try:
+        import app.config as ac
+
+        def _boom(*a, **k):
+            raise RuntimeError("simulated reload failure")
+        # Only the runtime-report path calls load_config in this request
+        # (token check is short-circuited by the env token).
+        monkeypatch.setattr(ac, "load_config", _boom)
+        r = c.post("/api/v1/admin/cameras",
+                   json={"camera_id": "cam_fail", "rtsp_url": "rtsp://h/s"},
+                   headers={"X-PhazeX-Admin-Token": "tok"})
+        assert r.status_code == 200, r.text
+        runtime = r.json()["runtime"]
+        assert runtime["config_written"] is True
+        assert runtime["ok"] is False
+        assert runtime["app"]["applied"] is False
+        assert "reload failed" in runtime["app"]["detail"]
+        # Despite the runtime failure, the camera IS in config.yaml.
+        assert "cam_fail" in [cc["id"] for cc in _cfg()["cameras"]]
+    finally:
+        shutil.copy(backup, cfg_path)
+
+
 def test_created_camera_is_editable(client):
     client.post("/api/v1/admin/cameras",
                 json={"camera_id": "cam_edit", "rtsp_url": "rtsp://h/s"})
@@ -178,3 +232,26 @@ def test_created_camera_is_editable(client):
     assert r.status_code == 200, r.text
     cam = next(c for c in _cfg()["cameras"] if c["id"] == "cam_edit")
     assert cam["name"] == "Renamed" and cam["rtsp_url"] == "rtsp://h2/s2"
+
+
+def test_edit_rtsp_reports_recorder_recreate(client):
+    client.post("/api/v1/admin/cameras",
+                json={"camera_id": "cam_e2", "rtsp_url": "rtsp://old"})
+    r = client.patch("/api/v1/admin/cameras/cam_e2",
+                     json={"rtsp_url": "rtsp://new"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["runtime"]["config_written"] is True
+    assert body["runtime"]["app"]["applied"] is True
+    assert "recreates" in body["note"]  # recorder recreate expected
+
+
+def test_edit_name_only_reports_no_recorder_change(client):
+    client.post("/api/v1/admin/cameras",
+                json={"camera_id": "cam_e3", "rtsp_url": "rtsp://h/s"})
+    r = client.patch("/api/v1/admin/cameras/cam_e3",
+                     json={"name": "New Name"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["runtime"]["config_written"] is True
+    assert "no recorder change" in body["note"]

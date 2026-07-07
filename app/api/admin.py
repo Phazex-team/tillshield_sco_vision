@@ -332,6 +332,129 @@ def _workstation_for_camera(raw: dict, camera_id: str) -> Optional[str]:
     return None
 
 
+def _workstations_for_camera(raw: dict, camera_id: str) -> list[str]:
+    """All POS workstation ids currently mapped to ``camera_id``."""
+    ws_map = _tillshield_block(raw).get("workstation_camera_map") or {}
+    return sorted(str(ws) for ws, cam in ws_map.items() if cam == camera_id)
+
+
+def _write_config_atomic(path, data) -> None:
+    """Persist ``config.yaml`` as safely as the filesystem allows.
+
+    Preferred path: write a sibling temp file, ``fsync`` it, then
+    ``os.replace`` it into place — a truly atomic swap, so a concurrent
+    reader (the recorder watches this file's mtime) sees either the old
+    or the new bytes, never a truncated middle.
+
+    Fallback: in production ``config.yaml`` is a *single-file bind mount*
+    inside the container, and you cannot rename over a bind-mount point
+    (``os.replace`` -> EBUSY/EXDEV). There we write in place with a single
+    buffered write + fsync. The swap window is sub-millisecond, and the
+    recorder tolerates a transient parse error (it simply reconciles again
+    on its next poll), so no camera change is lost."""
+    import os as _os
+    from pathlib import Path
+
+    import yaml as _yaml
+
+    path = Path(path)
+    payload = _yaml.safe_dump(data, sort_keys=False)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with open(tmp, "w") as f:
+            f.write(payload)
+            f.flush()
+            _os.fsync(f.fileno())
+        _os.replace(tmp, path)
+    except OSError:
+        # Bind-mounted target (or cross-device temp): write in place.
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        with open(path, "w") as f:
+            f.write(payload)
+            f.flush()
+            _os.fsync(f.fileno())
+
+
+def _read_recorder_runtime() -> dict:
+    """Read the recorder's heartbeat (``run/recorder_state.json``, written
+    after each reconcile) so the admin API can report — factually, across
+    the process boundary — the recorder's live camera set and whether it
+    has caught up to the current ``config.yaml``.
+
+    The recorder reconciles asynchronously (it polls the config mtime), so
+    right after a write ``caught_up`` is typically false; it flips true
+    within the recorder's reconcile interval. Never raises."""
+    import json as _json
+    import os as _os
+
+    from app.config import DEFAULT_CONFIG_PATH
+    from video.recorder_supervisor import default_state_path
+
+    try:
+        state = _json.loads(default_state_path().read_text())
+    except FileNotFoundError:
+        return {"available": False,
+                "detail": "recorder heartbeat not found; the recorder may "
+                          "be starting or not running"}
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"available": False, "detail": f"heartbeat unreadable: {exc}"}
+
+    seen = state.get("config_mtime")
+    try:
+        current = _os.path.getmtime(DEFAULT_CONFIG_PATH)
+    except OSError:  # pragma: no cover - defensive
+        current = None
+    caught_up = (seen is not None and current is not None
+                 and seen >= current - 0.001)
+    return {
+        "available": True,
+        "mode": "auto-reconcile (recorder watches config.yaml)",
+        "active_cameras": state.get("active_cameras"),
+        "config_mtime_applied": seen,
+        "config_mtime_current": current,
+        "caught_up": caught_up,
+        "updated_at": state.get("updated_at"),
+    }
+
+
+def _runtime_apply_report() -> dict:
+    """Report whether the config change hot-applied to the live runtime.
+
+    * ``app``: the app reads ``config.yaml`` per request (no cache), so
+      camera lists / ops-status reflect the change immediately. We
+      re-load here to confirm the just-written file parses; a parse
+      failure is surfaced as a runtime-apply failure (config was still
+      written — partial success).
+    * ``recorder``: reconciles itself; we report its heartbeat state.
+    """
+    from app.config import load_config
+
+    app_status: dict
+    try:
+        load_config()
+        app_status = {"applied": True,
+                      "detail": "app reads config.yaml per request; camera "
+                                "lists are live immediately"}
+    except Exception as exc:
+        app_status = {"applied": False,
+                      "detail": f"config reload failed: {exc}"}
+
+    recorder = _read_recorder_runtime()
+    # ``ok`` reflects the synchronous, app-side apply (the part we can
+    # confirm in-process). The recorder applies asynchronously, so its
+    # ``caught_up`` is reported for visibility but does not gate ``ok``.
+    return {
+        "config_written": True,
+        "ok": bool(app_status["applied"]),
+        "app": app_status,
+        "recorder": recorder,
+    }
+
+
 @router.get("/cameras")
 def list_camera_settings() -> dict:
     """Return each camera's source settings (RTSP URL + mapped POS
@@ -438,7 +561,7 @@ def update_camera_settings(
     if not updated_fields:
         raise HTTPException(status_code=400, detail="no fields to update")
 
-    raw_path.write_text(_yaml.safe_dump(data, sort_keys=False))
+    _write_config_atomic(raw_path, data)
 
     after = {
         "name": target.get("name"),
@@ -457,11 +580,19 @@ def update_camera_settings(
         )
         s.commit()
 
+    # An rtsp_url change recreates the recorder worker on reconcile; a
+    # name/workstation-only change needs no recorder action.
+    rtsp_changed = "rtsp_url" in updated_fields
     return {"camera_id": camera_id,
             "updated_fields": updated_fields,
             "settings": after,
-            "note": ("config.yaml updated; restart/reload the segment "
-                     "recorder for an rtsp_url change to take effect.")}
+            "runtime": _runtime_apply_report(),
+            "note": ("config.yaml updated. The app reflects the edit "
+                     "immediately; " + ("the segment recorder recreates "
+                     "this camera's worker with the new RTSP within its "
+                     "reconcile interval — no restart required."
+                     if rtsp_changed else "no recorder change is needed "
+                     "for a name/workstation edit."))}
 
 
 @router.post("/cameras")
@@ -537,7 +668,7 @@ def create_camera(
         if new_ws not in [str(x) for x in allowed]:
             allowed.append(new_ws)
 
-    raw_path.write_text(_yaml.safe_dump(data, sort_keys=False))
+    _write_config_atomic(raw_path, data)
 
     after = {
         "camera_id": camera_id,
@@ -560,9 +691,96 @@ def create_camera(
     return {"camera_id": camera_id,
             "created": after,
             "workstation_reassigned_from": workstation_reassigned_from,
-            "note": ("config.yaml updated; restart/reload the app and "
-                     "segment recorder to start recording the new "
-                     "camera's RTSP source.")}
+            "runtime": _runtime_apply_report(),
+            "note": ("config.yaml updated. The app reflects the new camera "
+                     "immediately; the segment recorder hot-applies it "
+                     "(starts recording) within its reconcile interval — "
+                     "no restart required.")}
+
+
+@router.delete("/cameras/{camera_id}")
+def delete_camera(
+    camera_id: str,
+    request: Request,
+    clear_workstation_mappings: bool = Query(
+        False,
+        description="If the camera is still mapped to a POS workstation, "
+                    "the delete is refused (409) unless this is true, which "
+                    "clears those mappings as part of the delete."),
+    x_phazex_admin_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Remove a camera from ``config.yaml``. Token-gated and audited
+    (``admin.camera_deleted``). The recorder stops its worker and the app
+    drops it from camera lists on the next reconcile — no restart.
+
+    Safety: a camera still mapped to a POS workstation cannot be deleted
+    (409) — that mapping must be explicitly cleared or reassigned first,
+    or pass ``clear_workstation_mappings=true`` to clear it here.
+    """
+    _check_admin_token(x_phazex_admin_token)
+
+    from pathlib import Path
+
+    from app import audit
+    from app.config import DEFAULT_CONFIG_PATH
+    from db.session import get_sessionmaker
+
+    raw_path = Path(DEFAULT_CONFIG_PATH)
+    import yaml as _yaml
+    data = _yaml.safe_load(raw_path.read_text()) or {}
+    cameras = data.get("cameras") or []
+    target = next((c for c in cameras if c.get("id") == camera_id), None)
+    if target is None:
+        raise HTTPException(status_code=404,
+                            detail=f"camera {camera_id!r} not in config.yaml")
+
+    mapped_ws = _workstations_for_camera(data, camera_id)
+    if mapped_ws and not clear_workstation_mappings:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "camera is still mapped to POS workstation(s); "
+                          "clear or reassign the mapping first, or pass "
+                          "clear_workstation_mappings=true",
+                "workstations": mapped_ws,
+            })
+
+    # Remove the camera.
+    data["cameras"] = [c for c in cameras if c.get("id") != camera_id]
+
+    cleared: list[str] = []
+    if mapped_ws and clear_workstation_mappings:
+        ws_map = _tillshield_block(data).get("workstation_camera_map") or {}
+        for ws in mapped_ws:
+            if ws_map.pop(ws, None) is not None:
+                cleared.append(ws)
+
+    _write_config_atomic(raw_path, data)
+
+    before = {"camera_id": camera_id,
+              "name": target.get("name"),
+              "workstations": mapped_ws}
+    SM = get_sessionmaker()
+    with SM() as s:
+        audit.record(
+            s, action="admin.camera_deleted",
+            entity_type="camera", entity_id=camera_id,
+            actor_type="admin_api",
+            before=before,
+            after={"cleared_workstations": cleared},
+            ip=(request.client.host if request.client else None),
+            user_agent=request.headers.get("user-agent"),
+        )
+        s.commit()
+
+    return {"camera_id": camera_id,
+            "deleted": True,
+            "cleared_workstations": cleared,
+            "runtime": _runtime_apply_report(),
+            "note": ("config.yaml updated. The app drops the camera from "
+                     "its lists immediately; the segment recorder stops "
+                     "its worker within the reconcile interval — no "
+                     "restart required.")}
 
 
 # ---------------------------------------------------------------------------
