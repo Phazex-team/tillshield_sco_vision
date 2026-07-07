@@ -160,7 +160,8 @@ reasoning:
   fallback_provider: null
   warm_fallback: false
   prompt_version: sco_basket_match_v2
-  auto_analyze_enabled: false
+  auto_analyze_enabled: true
+  chunked_analysis: true
 gpu:
   max_loaded_big_vlms: 1
   soft_memory_limit_gb: 90

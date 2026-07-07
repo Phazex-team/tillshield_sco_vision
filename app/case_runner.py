@@ -367,6 +367,8 @@ def analyze_case(session: Session,
     # peak past 100G and got the VLM deferred, with no accuracy gain).
     # Bounded to [24, 64]. An explicit ``manifest_max_frames`` (e.g. from
     # tests) overrides this auto behaviour.
+    _chunked_analysis = bool(
+        (cfg.raw.get("reasoning") or {}).get("chunked_analysis"))
     if manifest_max_frames is None:
         if build.actual_start_at and build.actual_end_at:
             _win_secs = (build.actual_end_at
@@ -374,7 +376,15 @@ def analyze_case(session: Session,
         else:
             _win_secs = (plan.requested_end
                          - plan.requested_start).total_seconds()
-        manifest_max_frames = max(24, min(64, int(round((_win_secs or 0) / 2))))
+        if _chunked_analysis:
+            # Chunked mode samples denser than single-pass (each chunk is a
+            # separate small in-budget VLM call), but capped so cv2 frame
+            # extraction (random-seek per frame) stays fast. ~0.7 fps, max 96.
+            manifest_max_frames = max(24,
+                                      min(96, int(round((_win_secs or 0) * 0.7))))
+        else:
+            manifest_max_frames = max(24, min(64,
+                                              int(round((_win_secs or 0) / 2))))
     _t = time.perf_counter()
     try:
         sampled_frames = _extract_keyframe_data_urls(
@@ -552,12 +562,54 @@ def analyze_case(session: Session,
             # Production / new-style runners take (session, case, window,
             # manifest). Old test-style runners take (session, case,
             # window); fall back transparently.
-            try:
+            def _call_vlm(m):
                 try:
-                    vlm_result_dict = vlm_runner(session, case, window,
-                                                 manifest) or {}
+                    return vlm_runner(session, case, window, m) or {}
                 except TypeError:
-                    vlm_result_dict = vlm_runner(session, case, window) or {}
+                    return vlm_runner(session, case, window) or {}
+
+            try:
+                _CHUNK_FRAMES = 32
+                _frames = list(manifest.frames or [])
+                _is_sco = prompt_version in ("sco_basket_match_v1",
+                                             "sco_basket_match_v2")
+                if (_chunked_analysis and _is_sco
+                        and len(_frames) > _CHUNK_FRAMES):
+                    # Watch the window in short overlapping chunks (each a
+                    # small in-budget call), then aggregate + guard.
+                    import dataclasses
+
+                    from reasoning.chunk_aggregate import (
+                        aggregate_chunk_verdicts, partition_frames)
+                    frame_chunks = partition_frames(
+                        _frames, chunk_frames=_CHUNK_FRAMES, overlap=4)
+                    chunk_results = []
+                    for _cf in frame_chunks:
+                        _cm = dataclasses.replace(manifest, frames=_cf)
+                        try:
+                            chunk_results.append(_call_vlm(_cm))
+                        except Exception as exc:
+                            chunk_results.append({"error": str(exc)})
+                    _basket = ((pos.raw_payload or {}).get("items")
+                               if pos.raw_payload else None) or []
+                    _basket_desc = [
+                        (it.get("description") or it.get("name"))
+                        for it in _basket
+                        if isinstance(it, dict)
+                        and (it.get("description") or it.get("name"))]
+                    vlm_result_dict = aggregate_chunk_verdicts(
+                        chunk_results, basket_descriptions=_basket_desc or None)
+                    # Carry provider/model metadata from the first good chunk.
+                    for _r in chunk_results:
+                        if isinstance(_r, dict) and not _r.get("error"):
+                            for _k in ("provider", "model_name",
+                                       "model_snapshot", "latency_ms"):
+                                vlm_result_dict.setdefault(_k, _r.get(_k))
+                            break
+                    log.info("chunked VLM: %d chunks over %d frames",
+                             len(frame_chunks), len(_frames))
+                else:
+                    vlm_result_dict = _call_vlm(manifest)
             except Exception as exc:
                 log.exception("VLM run raised")
                 vlm_result_dict = {"error": str(exc),
