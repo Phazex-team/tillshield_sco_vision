@@ -92,6 +92,26 @@ def test_all_chunks_failed_returns_first():
     assert agg.get("error") == "boom"
 
 
+def test_enveloped_parsed_shape_is_aggregated_and_rewrapped():
+    # Production chunk dicts are _adapt_vlm_result envelopes: the verdict
+    # lives in ["parsed"]. Aggregation must read/write parsed and keep the
+    # envelope so downstream recording preserves the aggregate + _chunked.
+    chunks = [
+        {"provider": "qwen3_vl", "model_name": "qwen3_vl", "error": None,
+         "parsed": {"customer_present": False, "matched_items": []}},
+        {"provider": "qwen3_vl", "model_name": "qwen3_vl", "error": None,
+         "parsed": {"customer_present": True,
+                    "matched_items": [{"pos_item": "Milk"}]}},
+    ]
+    agg = aggregate_chunk_verdicts(chunks, basket_descriptions=["Milk", "Eggs"])
+    assert agg["provider"] == "qwen3_vl"          # envelope preserved
+    p = agg["parsed"]
+    assert p["customer_present"] is True          # guard, from parsed
+    assert [m["pos_item"] for m in p["matched_items"]] == ["Milk"]
+    assert [m["pos_item"] for m in p["missing_visible_items"]] == ["Eggs"]
+    assert p["_chunked"]["chunks"] == 2
+
+
 def test_narrative_joins_distinct():
     chunks = [
         {"customer_present": True, "narrative": "Customer scans milk."},

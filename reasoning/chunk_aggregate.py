@@ -79,15 +79,29 @@ def aggregate_chunk_verdicts(chunk_dicts: list[dict],
     * ``_chunked`` — audit block: chunk count + whether chunks disagreed on
       customer presence (guard fired).
     """
-    valid = [c for c in (chunk_dicts or [])
+    dicts = chunk_dicts or []
+    valid = [c for c in dicts
              if isinstance(c, dict) and not c.get("error")]
     if not valid:
         # Every chunk errored — surface the first so the failure is visible.
-        return (chunk_dicts or [{}])[0] or {}
+        return (dicts or [{}])[0] or {}
+
+    # Each chunk dict is an ``_adapt_vlm_result`` envelope with the SCO
+    # verdict inside ``["parsed"]`` (production), OR a flat verdict dict
+    # (unit tests). Aggregate over the VERDICTS either way, and re-wrap the
+    # result in the same shape so downstream recording (which reads
+    # ``["parsed"]``) preserves the aggregate + the _chunked block.
+    _enveloped = isinstance(valid[0].get("parsed"), dict)
+
+    def _verdict(c: dict) -> dict:
+        p = c.get("parsed")
+        return p if isinstance(p, dict) else c
+
+    verdicts = [_verdict(c) for c in valid]
 
     matched, extra = [], []
     seen_matched, seen_extra = set(), set()
-    for c in valid:
+    for c in verdicts:
         for it in (c.get("matched_items") or []):
             k = _item_key(it)
             if k and k not in seen_matched:
@@ -99,7 +113,7 @@ def aggregate_chunk_verdicts(chunk_dicts: list[dict],
                 seen_extra.add(k)
                 extra.append(it)
 
-    presents = [bool(c.get("customer_present")) for c in valid]
+    presents = [bool(c.get("customer_present")) for c in verdicts]
     customer_present = any(presents)
     disagreement = (True in presents) and (False in presents)
 
@@ -111,7 +125,7 @@ def aggregate_chunk_verdicts(chunk_dicts: list[dict],
                                 "reason": "not visible in any chunk"})
     else:
         seen_missing = set()
-        for c in valid:
+        for c in verdicts:
             for it in (c.get("missing_visible_items") or []):
                 k = _item_key(it)
                 if k and k not in seen_matched and k not in seen_missing:
@@ -120,29 +134,37 @@ def aggregate_chunk_verdicts(chunk_dicts: list[dict],
 
     # Representative chunk for the residual match verdicts: the one that saw
     # the most (customer present, then most matched items).
-    rep = max(valid, key=lambda c: (bool(c.get("customer_present")),
+    rep = max(verdicts, key=lambda c: (bool(c.get("customer_present")),
                                     len(c.get("matched_items") or [])))
     physical = "no" if (missing or extra) else rep.get("physical_count_match")
 
     narratives = []
-    for c in valid:
+    for c in verdicts:
         nv = (c.get("narrative") or "").strip()
         if nv and nv not in narratives:
             narratives.append(nv)
 
-    result = dict(rep)
-    result.update({
+    verdict = dict(rep)
+    verdict.update({
         "customer_present": customer_present,
         "matched_items": matched,
         "extra_visible_items": extra,
         "missing_visible_items": missing,
         "physical_count_match": physical,
-        "video_usable": any(bool(c.get("video_usable")) for c in valid),
+        "video_usable": any(bool(c.get("video_usable")) for c in verdicts),
         "narrative": " | ".join(narratives),
         "_chunked": {
-            "chunks": len(valid),
+            "chunks": len(verdicts),
             "customer_present_disagreement": disagreement,
             "guard_applied_customer_present": disagreement and customer_present,
         },
     })
-    return result
+    if _enveloped:
+        # Re-wrap in the _adapt_vlm_result envelope (provider/model_name/…)
+        # with the aggregated verdict in ["parsed"] so downstream recording
+        # (which reads ["parsed"] -> output_json) keeps the aggregate +
+        # the _chunked audit block.
+        env = {k: v for k, v in valid[0].items() if k != "parsed"}
+        env["parsed"] = verdict
+        return env
+    return verdict
