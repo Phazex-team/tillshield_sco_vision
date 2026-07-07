@@ -173,6 +173,42 @@
       background: var(--panel, #1b1f27); color: var(--muted); border: 1px solid #333;
       border-radius: 4px; padding: 2px 8px; cursor: pointer; }
     .video-expand-btn:hover { color: #fff; border-color: #555; }
+
+    /* ---- Collapsible case-detail sections (accordions) ------------- */
+    details.acc { border: 1px solid var(--border); border-radius: 6px;
+      margin: 8px 0; background: var(--panel); overflow: hidden; }
+    details.acc > summary { cursor: pointer; padding: 9px 12px; font-size: 13px;
+      font-weight: 600; list-style: none; display: flex; align-items: center;
+      gap: 8px; user-select: none; }
+    details.acc > summary::-webkit-details-marker { display: none; }
+    details.acc > summary::before { content: "\25B8"; color: var(--muted);
+      font-weight: 400; transition: transform .15s ease; }
+    details.acc[open] > summary::before { transform: rotate(90deg); }
+    details.acc > summary:hover { background: rgba(255,255,255,.03); }
+    .acc-count { color: var(--muted); font-weight: 400; font-size: 11px;
+      font-family: ui-monospace, monospace; }
+    .acc-expand { margin-left: auto; font-size: 11px; color: var(--muted);
+      background: transparent; border: 1px solid var(--border);
+      border-radius: 4px; padding: 1px 7px; cursor: pointer; }
+    .acc-expand:hover { color: var(--text); border-color: #555; }
+    details.acc > .acc-body { padding: 4px 12px 12px 12px; }
+
+    /* ---- Full-view modal (any section, enlarged) ------------------- */
+    .acc-modal { position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,.6); display: flex; align-items: center;
+      justify-content: center; padding: 24px; }
+    .acc-modal[hidden] { display: none; }
+    .acc-modal-box { background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; width: min(920px, 96vw); max-height: 88vh;
+      display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+    .acc-modal-head { display: flex; align-items: center; gap: 10px;
+      padding: 12px 16px; border-bottom: 1px solid var(--border); }
+    .acc-modal-head h3 { margin: 0; font-size: 14px; flex: 1; }
+    .acc-modal-close { background: transparent; border: 1px solid var(--border);
+      color: var(--muted); border-radius: 4px; padding: 2px 9px; cursor: pointer;
+      font-size: 14px; }
+    .acc-modal-close:hover { color: var(--text); border-color: #555; }
+    .acc-modal-body { padding: 14px 16px; overflow: auto; }
   </style>
 </head>
 <body>
@@ -349,30 +385,59 @@
             <button type="button" id="video-expand" class="video-expand-btn" title="Expand (keeps detection boxes)">⛶ Expand</button>
           </label>
           <div class="empty" id="no-video">No window available yet.</div>
-          <h3 style="font-size:13px;margin:14px 0 6px 0">Evidence source</h3>
-          <div id="evidence-source" style="font-size:12px"></div>
+          <details class="acc" id="acc-evidence">
+            <summary>Evidence source <span class="acc-count" id="cnt-evidence"></span>
+              <button type="button" class="acc-expand" data-acc-expand="acc-evidence" data-acc-title="Evidence source">⤢ full</button></summary>
+            <div class="acc-body"><div id="evidence-source" style="font-size:12px"></div></div>
+          </details>
           <h3 style="font-size:13px;margin:16px 0 8px 0">Keyframes</h3>
           <div class="keyframes" id="keyframes"></div>
         </div>
       </div>
-      <h3 style="font-size:13px;margin:18px 0 8px 0">Timeline</h3>
-      <div class="timeline" id="timeline"></div>
-      <h3 style="font-size:13px;margin:18px 0 8px 0">Processing timings</h3>
-      <div style="font-size:11px;color:var(--muted);margin:0 0 6px 0">
-        Read-only timings recorded by the backend. Missing values render
-        as <code>—</code>. Decision policy never reads these.
-      </div>
-      <table id="timings-table" style="font-size:12px">
-        <thead><tr><th>Stage</th><th>ms</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <details class="acc" id="acc-timeline">
+        <summary>Timeline <span class="acc-count" id="cnt-timeline"></span>
+          <button type="button" class="acc-expand" data-acc-expand="acc-timeline" data-acc-title="Timeline">⤢ full</button></summary>
+        <div class="acc-body"><div class="timeline" id="timeline"></div></div>
+      </details>
 
-      <h3 style="font-size:13px;margin:18px 0 8px 0">Model Claims</h3>
-      <div class="kv" id="claims"></div>
-      <h3 style="font-size:13px;margin:18px 0 8px 0">Limitations</h3>
-      <ul class="kv" id="limitations"></ul>
-      <h3 style="font-size:13px;margin:18px 0 8px 0">Audit Trail</h3>
-      <div class="timeline" id="audit"></div>
+      <details class="acc" id="acc-timings">
+        <summary>Processing timings <span class="acc-count" id="cnt-timings"></span>
+          <button type="button" class="acc-expand" data-acc-expand="acc-timings" data-acc-title="Processing timings">⤢ full</button></summary>
+        <div class="acc-body">
+          <div style="font-size:11px;color:var(--muted);margin:0 0 6px 0">
+            Read-only timings recorded by the backend. Missing values render
+            as <code>—</code>. Decision policy never reads these.
+          </div>
+          <table id="timings-table" style="font-size:12px">
+            <thead><tr><th>Stage</th><th>ms</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </details>
+
+      <details class="acc" id="acc-claims">
+        <summary>Model Claims <span class="acc-count" id="cnt-claims"></span>
+          <button type="button" class="acc-expand" data-acc-expand="acc-claims" data-acc-title="Model Claims">⤢ full</button></summary>
+        <div class="acc-body"><div class="kv" id="claims"></div></div>
+      </details>
+
+      <details class="acc" id="acc-tracks">
+        <summary>Tracks <span class="acc-count" id="cnt-tracks"></span>
+          <button type="button" class="acc-expand" data-acc-expand="acc-tracks" data-acc-title="Tracks">⤢ full</button></summary>
+        <div class="acc-body"><div class="kv" id="tracks"></div></div>
+      </details>
+
+      <details class="acc" id="acc-limitations">
+        <summary>Limitations <span class="acc-count" id="cnt-limitations"></span>
+          <button type="button" class="acc-expand" data-acc-expand="acc-limitations" data-acc-title="Limitations">⤢ full</button></summary>
+        <div class="acc-body"><ul class="kv" id="limitations"></ul></div>
+      </details>
+
+      <details class="acc" id="acc-audit">
+        <summary>Audit Trail <span class="acc-count" id="cnt-audit"></span>
+          <button type="button" class="acc-expand" data-acc-expand="acc-audit" data-acc-title="Audit Trail">⤢ full</button></summary>
+        <div class="acc-body"><div class="timeline" id="audit"></div></div>
+      </details>
 
       <h3 style="font-size:13px;margin:24px 0 10px 0">Reviewer Decision</h3>
       <div class="reviewer-actions" id="reviewer-actions">
@@ -757,6 +822,17 @@
   </section>
 </main>
 
+<!-- Full-view modal: any accordion section, enlarged. -->
+<div id="acc-modal" class="acc-modal" hidden>
+  <div class="acc-modal-box">
+    <div class="acc-modal-head">
+      <h3 id="acc-modal-title"></h3>
+      <button type="button" id="acc-modal-close" class="acc-modal-close">✕</button>
+    </div>
+    <div id="acc-modal-body" class="acc-modal-body"></div>
+  </div>
+</div>
+
 <script>
 const API = "/api/v1";
 let selectedAction = null;
@@ -943,9 +1019,14 @@ const SOURCE_LABELS = {
 function renderEvidenceSource(window_) {
   const el = document.getElementById("evidence-source");
   el.innerHTML = "";
-  if (!window_) { el.innerHTML = '<span style="color:#8aa0c6">—</span>'; return; }
+  if (!window_) {
+    el.innerHTML = '<span style="color:#8aa0c6">—</span>';
+    setAccCount("cnt-evidence", "—");
+    return;
+  }
   const src = window_.acquisition_source || "local_segments_used";
   const [icon, label, color] = SOURCE_LABELS[src] || ["•", src, "#8aa0c6"];
+  setAccCount("cnt-evidence", `${icon} ${label}`);
   const head = document.createElement("div");
   head.style.cssText = `font-weight:600;color:${color}`;
   head.textContent = `${icon} ${label}`;
@@ -1479,27 +1560,45 @@ async function openCase(caseId) {
       `<span class="kind">${escapeHtml(e.kind)}</span>${escapeHtml(e.label)}`;
     tl.appendChild(row);
   }
+  setAccCount("cnt-timeline", events.length);
 
-  const tracksUl = document.createElement("ul");
-  tracksUl.className = "kv";
-  for (const t of (perception.tracks || [])) {
-    const li = document.createElement("li");
-    li.style.fontFamily = "ui-monospace, monospace";
-    li.style.fontSize = "12px";
-    li.textContent =
-      `${t.tracker_id || ""} ${t.label} ` +
-      `physical=${t.physical_item_candidate} receipt=${t.receipt_candidate} ` +
-      `zones=[${(t.zones||[]).join(",")}] events=[${(t.events||[]).join(",")}]`;
-    tracksUl.appendChild(li);
+  // Tracks (Falcon perception) — now its own section. OCR (usually
+  // disabled) rides along as a secondary perception output.
+  const tracksBox = document.getElementById("tracks");
+  tracksBox.innerHTML = "";
+  const tracks = perception.tracks || [];
+  const ocr = perception.ocr || [];
+  if (tracks.length === 0 && ocr.length === 0) {
+    tracksBox.innerHTML = '<div class="empty">no tracks</div>';
+  } else {
+    const tracksUl = document.createElement("ul");
+    tracksUl.className = "kv";
+    for (const t of tracks) {
+      const li = document.createElement("li");
+      li.style.fontFamily = "ui-monospace, monospace";
+      li.style.fontSize = "12px";
+      li.textContent =
+        `${t.tracker_id || ""} ${t.label} ` +
+        `physical=${t.physical_item_candidate} receipt=${t.receipt_candidate} ` +
+        `zones=[${(t.zones||[]).join(",")}] events=[${(t.events||[]).join(",")}]`;
+      tracksUl.appendChild(li);
+    }
+    tracksBox.appendChild(tracksUl);
+    if (ocr.length) {
+      const ocrTitle = document.createElement("div");
+      ocrTitle.className = "k"; ocrTitle.textContent = "ocr";
+      tracksBox.appendChild(ocrTitle);
+      const ocrUl = document.createElement("ul");
+      ocrUl.className = "kv";
+      for (const o of ocr) {
+        const li = document.createElement("li");
+        li.textContent = `[${o.engine}] "${o.text}" (${o.confidence})`;
+        ocrUl.appendChild(li);
+      }
+      tracksBox.appendChild(ocrUl);
+    }
   }
-
-  const ocrUl = document.createElement("ul");
-  ocrUl.className = "kv";
-  for (const o of (perception.ocr || [])) {
-    const li = document.createElement("li");
-    li.textContent = `[${o.engine}] "${o.text}" (${o.confidence})`;
-    ocrUl.appendChild(li);
-  }
+  setAccCount("cnt-tracks", tracks.length);
 
   // Processing timings legend. Two backend sources:
   //   * pkg.reasoning[] — immutable package payload, used for the
@@ -1511,6 +1610,8 @@ async function openCase(caseId) {
   //     post-package total_ms, which the on-disk package can't carry).
   // Missing values render as `—`. Nothing is computed in JS.
   renderTimingsLegend(pkg?.reasoning || [], timingsPayload);
+  setAccCount("cnt-timings",
+    document.querySelectorAll("#timings-table tbody tr").length);
 
   const claims = document.getElementById("claims");
   claims.innerHTML = "";
@@ -1525,14 +1626,8 @@ async function openCase(caseId) {
       output: reasoning[0].output,
       error: reasoning[0].error,
     });
-    claims.appendChild(document.createElement("hr"));
-    const tracksTitle = document.createElement("div");
-    tracksTitle.className = "k"; tracksTitle.textContent = "tracks";
-    claims.appendChild(tracksTitle); claims.appendChild(tracksUl);
-    const ocrTitle = document.createElement("div");
-    ocrTitle.className = "k"; ocrTitle.textContent = "ocr";
-    claims.appendChild(ocrTitle); claims.appendChild(ocrUl);
   }
+  setAccCount("cnt-claims", reasoning.length);
 
   const lim = document.getElementById("limitations");
   lim.innerHTML = "";
@@ -1548,15 +1643,19 @@ async function openCase(caseId) {
   if (limitations.length === 0) {
     lim.innerHTML = '<li class="empty">none reported</li>';
   }
+  setAccCount("cnt-limitations", limitations.length);
 
   const audit = document.getElementById("audit");
   audit.innerHTML = "";
-  for (const a of (pkg?.audit_trail || [])) {
+  const auditTrail = pkg?.audit_trail || [];
+  for (const a of auditTrail) {
     const row = document.createElement("div");
     row.innerHTML = `<span class="ts">${a.ts || ""}</span>` +
       `<span class="kind">${a.action}</span>${escapeHtml(JSON.stringify(a.after || {}))}`;
     audit.appendChild(row);
   }
+  setAccCount("cnt-audit", auditTrail.length);
+  _resetAccordions();
 
   selectedAction = null;
   for (const b of document.querySelectorAll("#reviewer-actions button")) {
@@ -3004,6 +3103,48 @@ async function refreshConfig() {
   }
 }
 document.getElementById("config-refresh").onclick = refreshConfig;
+
+// ---- Case-detail accordions: counts, collapse-reset, full-view modal ----
+// Show a count/label on a collapsed section header so a reviewer knows
+// what's inside without expanding. Numbers render as ``(n)``; strings as
+// ``— label`` (used for the evidence source).
+function setAccCount(cntId, val) {
+  const el = document.getElementById(cntId);
+  if (!el) return;
+  el.textContent = (typeof val === "number") ? `(${val})`
+    : (val ? `— ${val}` : "");
+}
+// Every case opens with all detail sections collapsed.
+function _resetAccordions() {
+  for (const d of document.querySelectorAll("details.acc")) d.open = false;
+}
+// Full-view modal: snapshot a section's rendered body into a larger overlay
+// for the long ones (Timeline, Audit Trail, …) without leaving the page.
+(function initAccModal() {
+  const modal = document.getElementById("acc-modal");
+  const body = document.getElementById("acc-modal-body");
+  const title = document.getElementById("acc-modal-title");
+  const closeModal = () => { modal.hidden = true; body.innerHTML = ""; };
+  for (const btn of document.querySelectorAll("[data-acc-expand]")) {
+    btn.addEventListener("click", (e) => {
+      // Don't let the click toggle the <summary> it lives in.
+      e.preventDefault();
+      e.stopPropagation();
+      const sec = document.getElementById(btn.getAttribute("data-acc-expand"));
+      const src = sec && sec.querySelector(".acc-body");
+      if (!src) return;
+      title.textContent = btn.getAttribute("data-acc-title") || "Details";
+      body.innerHTML = "";
+      body.appendChild(src.cloneNode(true));
+      modal.hidden = false;
+    });
+  }
+  document.getElementById("acc-modal-close").onclick = closeModal;
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.hidden) closeModal();
+  });
+})();
 
 // Boot
 refreshMemory();
