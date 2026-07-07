@@ -69,7 +69,6 @@
     .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
     label.field { font-size: 12px; color: var(--muted);
       display: inline-flex; align-items: center; gap: 6px; }
-    .legacy-flow-field { display: none !important; }
     input, select, button, textarea {
       background: #0e131a; color: var(--text); border: 1px solid var(--border);
       padding: 7px 10px; border-radius: 5px; font: inherit;
@@ -280,22 +279,6 @@
             <option value="no">no</option>
           </select>
         </label>
-        <label class="field legacy-flow-field" title="Legacy signal kept for historical cases. SCO cases use the SCO risk-reason filters below.">
-          Handover
-          <select id="filter-handover">
-            <option value="">any</option>
-            <option value="yes">yes</option>
-            <option value="no">no</option>
-          </select>
-        </label>
-        <label class="field">
-          Item visible
-          <select id="filter-item">
-            <option value="">any</option>
-            <option value="yes">yes</option>
-            <option value="no">no</option>
-          </select>
-        </label>
         <label class="field" title="Filter cases by SCO risk reason emitted by the v2 policy.">
           SCO reason
           <select id="filter-sco-reason">
@@ -329,8 +312,6 @@
             <th>Verdict</th>
             <th>SCO reasons</th>
             <th>Customer</th>
-            <th class="legacy-flow-field">Handover</th>
-            <th>Item</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -887,8 +868,6 @@ function _caseMatchesFilters(row) {
   const dFrom = v("filter-date-from"), dTo = v("filter-date-to");
   const staff = v("filter-staff").toLowerCase();
   const cust = v("filter-customer");
-  const handover = v("filter-handover");
-  const item = v("filter-item");
   const search = v("filter-search").toLowerCase();
   const scoReason = v("filter-sco-reason");
   const posDate = (p.pos_event_at || "").slice(0, 10);  // YYYY-MM-DD
@@ -897,10 +876,6 @@ function _caseMatchesFilters(row) {
   if (staff && !String(p.staff_id || "").toLowerCase().includes(staff)) return false;
   if (cust === "yes" && row.customer_present !== true) return false;
   if (cust === "no" && row.customer_present !== false) return false;
-  if (handover === "yes" && row.handover_occurred !== true) return false;
-  if (handover === "no" && row.handover_occurred !== false) return false;
-  if (item === "yes" && row.item_presented !== true) return false;
-  if (item === "no" && row.item_presented !== false) return false;
   if (scoReason) {
     const reasons = Array.isArray(row.risk_reasons) ? row.risk_reasons : [];
     if (!reasons.some(r => String(r).startsWith(scoReason))) return false;
@@ -979,8 +954,6 @@ async function refreshCases() {
       <td>${pill(row.outcome || "—")}</td>
       <td>${scoReasonPills(row.risk_reasons) || '<span style="color:var(--muted)">—</span>'}</td>
       <td>${boolCell(row.customer_present)}</td>
-      <td class="legacy-flow-field">${boolCell(row.handover_occurred)}</td>
-      <td>${boolCell(row.item_presented)}</td>
       <td>${pill(row.status || "—")}</td>`;
     tr.onclick = () => openCase(row.id);
     tbody.appendChild(tr);
@@ -1220,17 +1193,11 @@ function renderCaseSummary(pkg, c, window_) {
   if (run) {
     const out = _vlmOut(run);
     const attempts = out._chain_attempts || [];
-    // Render is SCO-shape-aware. v2 SCO output carries
-    // physical_count_match / semantic_identity_match / matched_items
-    // / extra_visible_items; legacy refund output carries
-    // handover_occurred / item_count. Pick whichever is present so
-    // back-compat with old cases is preserved.
+    // SCO basket-match output: physical_count_match /
+    // semantic_identity_match / matched_items / extra_visible_items.
     const isSco = (out.physical_count_match !== undefined
                    || out.semantic_identity_match !== undefined);
-    const ran = run.status === "SUCCEEDED" &&
-                (out.narrative
-                 || out.handover_occurred !== undefined
-                 || isSco);
+    const ran = run.status === "SUCCEEDED" && (out.narrative || isSco);
     if (!ran && attempts.length && attempts.every(a => /=err|err:/i.test(a))) {
       vlmHtml = '<span class="pill ERROR">Vision did not run</span> all providers errored';
     } else if (isSco) {
@@ -1247,18 +1214,12 @@ function renderCaseSummary(pkg, c, window_) {
         (out.confidence ? ` · conf ${escapeHtml(String(out.confidence))}` : "") +
         (out.uncertainty_reason ? `<div style="margin-top:5px;color:var(--muted)">uncertainty: ${escapeHtml(out.uncertainty_reason)}</div>` : "") +
         (out.narrative ? `<div style="margin-top:5px;color:var(--muted)">“${escapeHtml(out.narrative)}”</div>` : "");
-    } else {
-      // Legacy refund-shaped output (kept for back-compat with
-      // historical cases analysed under prompt_version=return_review_v1).
-      const ho = out.handover_occurred;
-      const items = (out.item_count != null) ? out.item_count
-        : (Array.isArray(out.items_handed_over) ? out.items_handed_over.length : null);
+    } else if (out.narrative) {
+      // Non-SCO-shaped success (e.g. narrative only) — show it plainly.
       vlmHtml =
-        `provider <strong>${escapeHtml(visionLabel(run.provider))}</strong> · ` +
-        `handover: <strong>${ho === true ? "YES" : ho === false ? "NO" : "?"}</strong> · ` +
-        `items: <strong>${items != null ? items : "?"}</strong>` +
+        `provider <strong>${escapeHtml(visionLabel(run.provider))}</strong>` +
         (out.confidence ? ` · conf ${escapeHtml(String(out.confidence))}` : "") +
-        (out.narrative ? `<div style="margin-top:5px;color:var(--muted)">“${escapeHtml(out.narrative)}”</div>` : "");
+        `<div style="margin-top:5px;color:var(--muted)">“${escapeHtml(out.narrative)}”</div>`;
     }
   }
   document.getElementById("summary-vlm").innerHTML = vlmHtml;
@@ -1801,8 +1762,7 @@ document.getElementById("refresh").onclick = () => {
 document.getElementById("filter-outcome").onchange = refreshCases;
 document.getElementById("filter-status").onchange = refreshCases;
 // New Cases-tab filters (client-side). Text inputs filter as you type.
-for (const id of ["filter-date-from", "filter-date-to", "filter-customer",
-                  "filter-handover", "filter-item"]) {
+for (const id of ["filter-date-from", "filter-date-to", "filter-customer"]) {
   document.getElementById(id).onchange = refreshCases;
 }
 for (const id of ["filter-staff", "filter-search"]) {
@@ -1811,7 +1771,7 @@ for (const id of ["filter-staff", "filter-search"]) {
 document.getElementById("filter-clear").onclick = () => {
   for (const id of ["filter-outcome", "filter-status", "filter-date-from",
                     "filter-date-to", "filter-staff", "filter-customer",
-                    "filter-handover", "filter-item", "filter-search"]) {
+                    "filter-search"]) {
     document.getElementById(id).value = "";
   }
   refreshCases();

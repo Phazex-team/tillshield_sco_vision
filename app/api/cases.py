@@ -105,8 +105,8 @@ def _drain_reprocess_pool() -> None:
 
 def _serialise_case(case, pos_event=None, latest_window=None,
                     vlm_output=None) -> dict:
-    # Surface the two headline VLM observations (from the latest run) so the
-    # case grid can show them as columns without a per-row fetch.
+    # Surface the headline VLM observation (from the latest run) so the case
+    # grid can show it as a column without a per-row fetch.
     vlm_output = vlm_output or {}
     return {
         "id": case.id,
@@ -120,8 +120,6 @@ def _serialise_case(case, pos_event=None, latest_window=None,
         "opened_at": case.opened_at.isoformat() if case.opened_at else None,
         "closed_at": case.closed_at.isoformat() if case.closed_at else None,
         "invalid_reason": case.invalid_reason,
-        "handover_occurred": vlm_output.get("handover_occurred"),
-        "item_presented": vlm_output.get("item_presented"),
         "customer_present": vlm_output.get("customer_present"),
         "pos_event": _serialise_pos(pos_event) if pos_event else None,
         "latest_window": _serialise_window(latest_window)
