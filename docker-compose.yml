@@ -97,6 +97,7 @@ services:
           --moe-backend triton \
           --gpu-memory-utilization 0.55 \
           --no-enable-prefix-caching \
+          --mm-processor-cache-gb 0 \
           --enforce-eager \
           --no-enable-flashinfer-autotune \
           --max-model-len 65536
