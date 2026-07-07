@@ -80,6 +80,10 @@ class PosEvent(Base):
     line_id: Mapped[str] = mapped_column(String(64), nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     pos_event_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # Transaction END time (naive UTC), from the POS agent's
+    # ``transactionEndDate``. Nullable: legacy rows / events without an
+    # end. The video window spans [pos_event_at, pos_event_end_at].
+    pos_event_end_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     ingested_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     staff_id: Mapped[Optional[str]] = mapped_column(String(64))
     sku: Mapped[Optional[str]] = mapped_column(String(64))

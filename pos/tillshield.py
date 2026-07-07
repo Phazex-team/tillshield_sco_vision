@@ -162,6 +162,10 @@ def normalise_to_pos_events(
     event_type = (normalize_event_type(txn.transaction_type)
                   or _normalise_event_type(txn.transaction_type))
     event_at = _to_naive_utc(txn.transaction_date, pos_tz)
+    # Transaction end (naive UTC) so the video window can span the whole
+    # transaction. Same Dubai-local -> UTC normalisation as the start.
+    event_end_at = (_to_naive_utc(txn.transaction_end_date, pos_tz)
+                    if txn.transaction_end_date else None)
 
     raw_payload = {
         "source_system": "tillshield_agent",
@@ -187,6 +191,7 @@ def normalise_to_pos_events(
             line_id="transaction",
             event_type=event_type,
             pos_event_at=event_at,
+            pos_event_end_at=event_end_at,
             staff_id=txn.operator_id,
             sku=None,
             item_description=None,
@@ -211,6 +216,7 @@ def normalise_to_pos_events(
                 line_id="transaction",
                 event_type=event_type,
                 pos_event_at=event_at,
+            pos_event_end_at=event_end_at,
                 staff_id=txn.operator_id,
                 amount=float(txn.total_amount)
                     if txn.total_amount is not None else None,
@@ -236,6 +242,7 @@ def normalise_to_pos_events(
             line_id=line_id,
             event_type=event_type,
             pos_event_at=event_at,
+            pos_event_end_at=event_end_at,
             staff_id=txn.operator_id,
             sku=str(item.get("sku") or item.get("plu") or
                     item.get("product_code") or "") or None,

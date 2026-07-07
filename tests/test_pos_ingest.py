@@ -164,6 +164,45 @@ def test_window_plan_full_coverage(tmp_path, monkeypatch):
     assert len(plan.matched_segment_ids) == 1
 
 
+def test_window_spans_full_transaction(tmp_path, monkeypatch):
+    """The window must cover [tx_start, tx_end] (+ pre/post roll), not just
+    a fixed window around the start — so long transactions aren't cut off."""
+    SM = _fresh_session(tmp_path, monkeypatch)
+    from pos.correlation import plan_window
+    start = datetime(2026, 6, 15, 14, 0, 0)  # naive UTC (plan_window normalises)
+    end = start + timedelta(seconds=150)  # a 2.5-min transaction
+    with SM() as s:
+        point = plan_window(s, "cam_01", start)                        # legacy: no end
+        span = plan_window(s, "cam_01", start, pos_event_end_at=end)   # new: full span
+    # Both start at tx_start - PRE_ROLL (90s).
+    assert span.requested_start == start - timedelta(seconds=90)
+    # Point window ends at start + POST (60s) and would cut off the txn.
+    assert point.requested_end == start + timedelta(seconds=60)
+    # Span window ends at tx_END + POST (60s) — covers the whole txn.
+    assert span.requested_end == end + timedelta(seconds=60)
+    assert span.requested_end > point.requested_end
+
+
+def test_window_falls_back_to_point_when_no_end(tmp_path, monkeypatch):
+    SM = _fresh_session(tmp_path, monkeypatch)
+    from pos.correlation import plan_window
+    start = datetime(2026, 6, 15, 14, 0, 0)  # naive UTC (plan_window normalises)
+    with SM() as s:
+        p = plan_window(s, "cam_01", start, pos_event_end_at=None)
+    assert p.requested_end == start + timedelta(seconds=60)
+
+
+def test_window_guards_inverted_span(tmp_path, monkeypatch):
+    SM = _fresh_session(tmp_path, monkeypatch)
+    from pos.correlation import plan_window
+    start = datetime(2026, 6, 15, 14, 0, 0)  # naive UTC (plan_window normalises)
+    bad_end = start - timedelta(seconds=30)  # end before start (bad data)
+    with SM() as s:
+        p = plan_window(s, "cam_01", start, pos_event_end_at=bad_end)
+    # Falls back to the start anchor rather than producing an inverted window.
+    assert p.requested_end == start + timedelta(seconds=60)
+
+
 def test_window_plan_low_coverage_invalid(tmp_path, monkeypatch):
     SM = _fresh_session(tmp_path, monkeypatch)
     from db.models import VideoSegment

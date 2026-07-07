@@ -10,38 +10,11 @@ cameras:
   zones:
     sco_audit_zone:
       label: sco_audit_zone
-      purpose: SCO checkout audit area (scanner + bagging + customer)
-      x: 200
-      y: 100
-      w: 1520
-      h: 880
-      source_width: 1920
-      source_height: 1080
-    staff_zone_vlm:
-      label: staff_zone_vlm
       purpose: ''
-      x: 619
-      y: 115
-      w: 245
-      h: 536
-      source_width: 1920
-      source_height: 1080
-    customer_zonevlm:
-      label: customer_zonevlm
-      purpose: ''
-      x: 1106
-      y: 147
-      w: 249
-      h: 506
-      source_width: 1920
-      source_height: 1080
-    counter_zone_vlm:
-      label: counter_zone_vlm
-      purpose: ''
-      x: 858
-      y: 113
-      w: 260
-      h: 562
+      x: 662
+      y: 504
+      w: 523
+      h: 457
       source_width: 1920
       source_height: 1080
   prompts: {}
@@ -102,8 +75,7 @@ cameras:
       caption: ''
     sam3:
       enabled: true
-      roi_ids:
-      - sco_audit_zone
+      roi_ids: []
       mode: union_crop
       margin_pct: 0.0
       include_full_frame_overview: false
@@ -219,9 +191,9 @@ integrations:
     line_level_cases: false
     ignore_unknown_types: true
     ingest_token: ''
-    poll_enabled: false
+    poll_enabled: true
     pos_timezone: Asia/Dubai
-    base_url: http://localhost:8081
+    base_url: http://10.10.10.11:8081
     info_path: /pos/data/info
     transactions_path: /pos/data/transactions
     poll_every_seconds: 300

@@ -26,6 +26,9 @@ class PosEventIn:
     line_id: str
     event_type: str
     pos_event_at: datetime
+    # Transaction END time (naive UTC). The video window spans
+    # [pos_event_at, pos_event_end_at]. Optional: legacy/point events.
+    pos_event_end_at: Optional[datetime] = None
     staff_id: Optional[str] = None
     sku: Optional[str] = None
     item_description: Optional[str] = None

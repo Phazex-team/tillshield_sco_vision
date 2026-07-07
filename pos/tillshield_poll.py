@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from sqlalchemy import select
@@ -306,10 +306,22 @@ def _get_state(session: Session, source_system: str,
 
 
 def _txn_dt(row: dict) -> Optional[datetime]:
+    """The transaction start time as **naive UTC**.
+
+    The TillShield agent sends Dubai-local (``+04:00``) tz-aware
+    timestamps; the poll cursor, ``now`` and the stored ``pos_event_at``
+    are all naive UTC. Returning naive UTC here keeps cursor comparison /
+    sorting from mixing aware and naive datetimes (which raises
+    ``TypeError``) and matches how the event is persisted."""
     try:
-        return agent_row_to_tillshield(row).transaction_date
+        dt = agent_row_to_tillshield(row).transaction_date
     except Exception:
         return None
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 def poll_once(session: Session,

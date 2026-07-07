@@ -95,7 +95,7 @@ services:
           --host 0.0.0.0 --port 8000 \
           --served-model-name qwen3_vl \
           --moe-backend triton \
-          --gpu-memory-utilization 0.70 \
+          --gpu-memory-utilization 0.55 \
           --no-enable-prefix-caching \
           --enforce-eager \
           --no-enable-flashinfer-autotune \

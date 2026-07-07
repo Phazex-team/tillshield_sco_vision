@@ -397,6 +397,12 @@
           </details>
         </div>
       </div>
+      <details class="acc" id="acc-pos-items" open>
+        <summary>POS Items <span class="acc-count" id="cnt-pos-items"></span>
+          <button type="button" class="acc-expand" data-acc-expand="acc-pos-items" data-acc-title="POS Items">⤢ full</button></summary>
+        <div class="acc-body"><div id="pos-items"></div></div>
+      </details>
+
       <details class="acc" id="acc-timeline">
         <summary>Timeline <span class="acc-count" id="cnt-timeline"></span>
           <button type="button" class="acc-expand" data-acc-expand="acc-timeline" data-acc-title="Timeline">⤢ full</button></summary>
@@ -1171,6 +1177,30 @@ function _vlmOut(run) {
 }
 function renderCaseSummary(pkg, c, window_) {
   const per = (pkg && pkg.perception) || {};
+
+  // POS basket items — the receipt the video is matched against.
+  const posItems = ((c && c.pos_event && c.pos_event.items)
+                    || (pkg && pkg.pos_event && pkg.pos_event.items) || []);
+  const piBox = document.getElementById("pos-items");
+  if (piBox) {
+    if (!posItems.length) {
+      piBox.innerHTML = '<div class="empty">no POS items on this transaction</div>';
+    } else {
+      const rows = posItems.map(it => {
+        const qty = (it.quantity != null) ? it.quantity : "";
+        const amt = (it.amount != null) ? it.amount : "";
+        const sku = it.sku ? ` <span style="color:var(--muted)">[${escapeHtml(String(it.sku))}]</span>` : "";
+        return `<tr><td>${escapeHtml(String(it.description || "—"))}${sku}</td>`
+             + `<td style="text-align:right">${escapeHtml(String(qty))}</td>`
+             + `<td style="text-align:right">${escapeHtml(String(amt))}</td></tr>`;
+      }).join("");
+      piBox.innerHTML =
+        `<table style="font-size:12px;width:100%">`
+        + `<thead><tr><th style="text-align:left">Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Amount</th></tr></thead>`
+        + `<tbody>${rows}</tbody></table>`;
+    }
+    setAccCount("cnt-pos-items", posItems.length);
+  }
 
   // Outcome line.
   const outcome = (c && c.outcome) || (pkg && pkg.case && pkg.case.outcome) || "—";
@@ -3118,9 +3148,12 @@ function setAccCount(cntId, val) {
   el.textContent = (typeof val === "number") ? `(${val})`
     : (val ? `— ${val}` : "");
 }
-// Every case opens with all detail sections collapsed.
+// Every case opens with detail sections collapsed — except POS Items
+// (the basket the video is matched against), which stays open.
 function _resetAccordions() {
-  for (const d of document.querySelectorAll("details.acc")) d.open = false;
+  for (const d of document.querySelectorAll("details.acc")) {
+    d.open = (d.id === "acc-pos-items");
+  }
 }
 // Full-view modal: snapshot a section's rendered body into a larger overlay
 // for the long ones (Timeline, Audit Trail, …) without leaving the page.

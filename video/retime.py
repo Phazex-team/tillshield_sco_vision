@@ -134,6 +134,7 @@ def retime_segments_for_case(case_id: str, *,
         if pos is None:
             return {"error": "case has no POS event", "case_id": case_id}
         plan = plan_window(s, case.camera_id, pos.pos_event_at,
+                           pos_event_end_at=pos.pos_event_end_at,
                            pre_roll_sec=pre_roll_sec,
                            post_roll_sec=post_roll_sec)
         ids = list(plan.matched_segment_ids or [])

@@ -64,6 +64,7 @@ def plan_window(session: Session,
                 camera_id: str,
                 pos_event_at: datetime,
                 *,
+                pos_event_end_at: Optional[datetime] = None,
                 drift_margin_sec: int = DEFAULT_DRIFT_MARGIN_SEC,
                 pre_roll_sec: Optional[float] = None,
                 post_roll_sec: Optional[float] = None) -> WindowPlan:
@@ -80,8 +81,16 @@ def plan_window(session: Session,
     pre = PRE_ROLL_SEC if pre_roll_sec is None else max(0.0, float(pre_roll_sec))
     post = POST_ROLL_SEC if post_roll_sec is None else max(0.0, float(post_roll_sec))
     pos_event_at = _naive_utc(pos_event_at)
+    # The video window spans the WHOLE transaction: [tx_start, tx_end]
+    # (from the POS agent's transaction_date / transaction_end_date),
+    # padded by pre/post-roll for the customer approaching and leaving.
+    # When the end is unknown (legacy/point events) we fall back to a
+    # point window around the start, preserving the old behaviour.
+    end_anchor = _naive_utc(pos_event_end_at) if pos_event_end_at else pos_event_at
+    if end_anchor < pos_event_at:          # guard against inverted spans
+        end_anchor = pos_event_at
     requested_start = pos_event_at - timedelta(seconds=pre)
-    requested_end = pos_event_at + timedelta(seconds=post)
+    requested_end = end_anchor + timedelta(seconds=post)
     margin = timedelta(seconds=drift_margin_sec)
 
     rows = session.execute(

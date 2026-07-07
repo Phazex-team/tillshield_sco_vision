@@ -128,6 +128,7 @@ def analyze_case(session: Session,
     _t = time.perf_counter()
     try:
         plan = plan_window(session, case.camera_id, pos.pos_event_at,
+                           pos_event_end_at=pos.pos_event_end_at,
                            pre_roll_sec=pre_roll_sec,
                            post_roll_sec=post_roll_sec)
     finally:

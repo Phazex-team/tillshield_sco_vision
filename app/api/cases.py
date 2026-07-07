@@ -146,6 +146,35 @@ def _serialise_window(w) -> dict:
     }
 
 
+def _pos_items(ev) -> list[dict]:
+    """The POS basket line items for this transaction, normalised for the
+    UI. They live in ``raw_payload['items']`` (the TillShield agent's
+    per-line list) — surfaced here so the case detail can show the basket
+    the video is being matched against."""
+    rp = ev.raw_payload or {}
+    if isinstance(rp, str):
+        import json
+        try:
+            rp = json.loads(rp)
+        except Exception:
+            rp = {}
+    items = rp.get("items")
+    if not items and isinstance(rp.get("raw_payload"), dict):
+        items = rp["raw_payload"].get("items")
+    out: list[dict] = []
+    for it in (items or []):
+        if not isinstance(it, dict):
+            continue
+        out.append({
+            "description": it.get("description") or it.get("name") or "",
+            "sku": it.get("sku") or it.get("barcode") or it.get("plu"),
+            "quantity": it.get("quantity") or it.get("qty"),
+            "amount": (it.get("totalAmount") if it.get("totalAmount") is not None
+                       else it.get("amount") or it.get("total")),
+        })
+    return out
+
+
 def _serialise_pos(ev) -> dict:
     return {
         "id": ev.id,
@@ -156,11 +185,14 @@ def _serialise_pos(ev) -> dict:
         "event_type": ev.event_type,
         "pos_event_at": ev.pos_event_at.isoformat()
             if ev.pos_event_at else None,
+        "pos_event_end_at": ev.pos_event_end_at.isoformat()
+            if ev.pos_event_end_at else None,
         "staff_id": ev.staff_id,
         "sku": ev.sku,
         "item_description": ev.item_description,
         "amount": ev.amount,
         "currency": ev.currency,
+        "items": _pos_items(ev),
     }
 
 
