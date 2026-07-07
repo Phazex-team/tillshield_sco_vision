@@ -26,6 +26,7 @@ unit-testable.
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 
@@ -95,7 +96,29 @@ def aggregate_chunk_verdicts(chunk_dicts: list[dict],
 
     def _verdict(c: dict) -> dict:
         p = c.get("parsed")
-        return p if isinstance(p, dict) else c
+        v = p if isinstance(p, dict) else c
+        # A chunk sometimes lands the whole SCO verdict as a JSON *string*
+        # in ``narrative`` instead of parsed fields — recover it so the
+        # union sees the real matched/extra items and the narrative reads
+        # as prose, not a JSON blob.
+        nv = v.get("narrative")
+        if isinstance(nv, str) and nv.lstrip()[:1] in ("{", "["):
+            try:
+                recovered = json.loads(nv)
+            except Exception:
+                recovered = None
+            if isinstance(recovered, dict) and (
+                    "matched_items" in recovered
+                    or "physical_count_match" in recovered):
+                merged = dict(v)
+                merged.update(recovered)
+                # Keep an inner narrative sentence if present, else blank
+                # (never the raw JSON string).
+                inner = recovered.get("narrative")
+                merged["narrative"] = inner if isinstance(inner, str) \
+                    and not inner.lstrip()[:1] in ("{", "[") else ""
+                return merged
+        return v
 
     verdicts = [_verdict(c) for c in valid]
 

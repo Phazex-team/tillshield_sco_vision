@@ -112,6 +112,24 @@ def test_enveloped_parsed_shape_is_aggregated_and_rewrapped():
     assert p["_chunked"]["chunks"] == 2
 
 
+def test_recovers_verdict_from_json_string_in_narrative():
+    # A chunk landed the whole verdict as a JSON string in "narrative"
+    # instead of structured fields — aggregation must recover it so
+    # matched items count and the narrative reads as prose, not JSON.
+    raw = ('{"physical_count_match":"uncertain","matched_items":'
+           '[{"pos_item":"Milk"}],"narrative":"Customer scans milk."}')
+    chunks = [
+        {"parsed": {"customer_present": True, "matched_items": [],
+                    "narrative": raw}},
+    ]
+    agg = aggregate_chunk_verdicts(chunks, basket_descriptions=["Milk"])
+    p = agg["parsed"]
+    assert [m["pos_item"] for m in p["matched_items"]] == ["Milk"]
+    assert p["missing_visible_items"] == []          # Milk recovered as seen
+    assert p["narrative"] == "Customer scans milk."  # prose, not the JSON
+    assert not p["narrative"].startswith("{")
+
+
 def test_narrative_joins_distinct():
     chunks = [
         {"customer_present": True, "narrative": "Customer scans milk."},
