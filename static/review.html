@@ -390,8 +390,11 @@
               <button type="button" class="acc-expand" data-acc-expand="acc-evidence" data-acc-title="Evidence source">⤢ full</button></summary>
             <div class="acc-body"><div id="evidence-source" style="font-size:12px"></div></div>
           </details>
-          <h3 style="font-size:13px;margin:16px 0 8px 0">Keyframes</h3>
-          <div class="keyframes" id="keyframes"></div>
+          <details class="acc" id="acc-keyframes">
+            <summary>Keyframes <span class="acc-count" id="cnt-keyframes"></span>
+              <button type="button" class="acc-expand" data-acc-expand="acc-keyframes" data-acc-title="Keyframes">⤢ full</button></summary>
+            <div class="acc-body"><div class="keyframes" id="keyframes"></div></div>
+          </details>
         </div>
       </div>
       <details class="acc" id="acc-timeline">
@@ -1534,6 +1537,7 @@ async function openCase(caseId) {
   if (!perception.keyframes || perception.keyframes.length === 0) {
     kfs.innerHTML = '<div class="empty">no keyframes selected</div>';
   }
+  setAccCount("cnt-keyframes", (perception.keyframes || []).length);
 
   const tl = document.getElementById("timeline");
   tl.innerHTML = "";
