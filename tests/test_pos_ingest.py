@@ -171,14 +171,17 @@ def test_window_spans_full_transaction(tmp_path, monkeypatch):
     from pos.correlation import plan_window
     start = datetime(2026, 6, 15, 14, 0, 0)  # naive UTC (plan_window normalises)
     end = start + timedelta(seconds=150)  # a 2.5-min transaction
+    # Explicit rolls so the test pins the SPAN math, not the module default.
     with SM() as s:
-        point = plan_window(s, "cam_01", start)                        # legacy: no end
-        span = plan_window(s, "cam_01", start, pos_event_end_at=end)   # new: full span
-    # Both start at tx_start - PRE_ROLL (90s).
+        point = plan_window(s, "cam_01", start,
+                            pre_roll_sec=90, post_roll_sec=60)          # legacy: no end
+        span = plan_window(s, "cam_01", start, pos_event_end_at=end,
+                           pre_roll_sec=90, post_roll_sec=60)           # new: full span
+    # Both start at tx_start - pre_roll.
     assert span.requested_start == start - timedelta(seconds=90)
-    # Point window ends at start + POST (60s) and would cut off the txn.
+    # Point window ends at start + post and would cut off the txn.
     assert point.requested_end == start + timedelta(seconds=60)
-    # Span window ends at tx_END + POST (60s) — covers the whole txn.
+    # Span window ends at tx_END + post — covers the whole txn.
     assert span.requested_end == end + timedelta(seconds=60)
     assert span.requested_end > point.requested_end
 
@@ -188,7 +191,8 @@ def test_window_falls_back_to_point_when_no_end(tmp_path, monkeypatch):
     from pos.correlation import plan_window
     start = datetime(2026, 6, 15, 14, 0, 0)  # naive UTC (plan_window normalises)
     with SM() as s:
-        p = plan_window(s, "cam_01", start, pos_event_end_at=None)
+        p = plan_window(s, "cam_01", start, pos_event_end_at=None,
+                        post_roll_sec=60)
     assert p.requested_end == start + timedelta(seconds=60)
 
 
@@ -198,7 +202,8 @@ def test_window_guards_inverted_span(tmp_path, monkeypatch):
     start = datetime(2026, 6, 15, 14, 0, 0)  # naive UTC (plan_window normalises)
     bad_end = start - timedelta(seconds=30)  # end before start (bad data)
     with SM() as s:
-        p = plan_window(s, "cam_01", start, pos_event_end_at=bad_end)
+        p = plan_window(s, "cam_01", start, pos_event_end_at=bad_end,
+                        post_roll_sec=60)
     # Falls back to the start anchor rather than producing an inverted window.
     assert p.requested_end == start + timedelta(seconds=60)
 

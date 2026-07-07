@@ -28,8 +28,8 @@ from sqlalchemy.orm import Session
 from db.models import VideoSegment
 
 
-PRE_ROLL_SEC = 90    # 90s before the POS event (customer presents item)
-POST_ROLL_SEC = 60   # 1 min after (customer leaving)
+PRE_ROLL_SEC = 5     # small lead-in before tx_start (customer approaching)
+POST_ROLL_SEC = 5    # small tail after tx_end (customer leaving)
 DEFAULT_DRIFT_MARGIN_SEC = 60
 EXPANDED_DRIFT_MARGIN_SEC = 600  # 10 minutes
 COVERAGE_RATIO_THRESHOLD = 0.8
