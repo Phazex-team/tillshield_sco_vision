@@ -76,12 +76,12 @@ def _seed_segment(SM, storage_root, *, start_at, duration_sec=300):
     around the POS event (caller picks start_at)."""
     from db.models import VideoSegment
     storage_root.mkdir(parents=True, exist_ok=True)
-    seg_path = storage_root / "cctv" / "cam_01" / "seg_a.mp4"
+    seg_path = storage_root / "cctv" / "cam_return_01" / "seg_a.mp4"
     seg_path.parent.mkdir(parents=True, exist_ok=True)
     seg_path.write_bytes(b"\x00" * 4096)  # bytes are enough — perception stubbed
     with SM() as s:
         seg = VideoSegment(
-            camera_id="cam_01",
+            camera_id="cam_return_01",
             start_at=start_at,
             end_at=start_at + timedelta(seconds=duration_sec),
             path=str(seg_path),

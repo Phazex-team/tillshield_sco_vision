@@ -400,16 +400,16 @@ def test_build_concepts_opt_in_broad_generics_re_enables_product_terms():
 
 
 # ---------------------------------------------------------------------------
-# 8. Active-config integration: cam_01 has a sam3 model view
+# 8. Active-config integration: cam_return_01 has a sam3 model view
 # ---------------------------------------------------------------------------
 
-def test_real_config_cam_01_has_sam3_model_view():
+def test_real_config_cam_return_01_has_sam3_model_view():
     from app.config import load_config
     cfg = load_config()
-    cam = next(c for c in cfg.cameras if c.get("id") == "cam_01")
+    cam = next(c for c in cfg.cameras if c.get("id") == "cam_return_01")
     views = cam.get("model_roi_views") or {}
     sam3_view = views.get("sam3")
-    assert sam3_view is not None, "cam_01 must define a sam3 model view"
+    assert sam3_view is not None, "cam_return_01 must define a sam3 model view"
     assert bool(sam3_view.get("enabled", False)) is True
     assert sam3_view.get("roi_ids") == ["sco_audit_zone"], (
         "sam3 view must target only sco_audit_zone")

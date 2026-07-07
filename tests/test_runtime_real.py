@@ -76,7 +76,7 @@ def _seed_segment(SM, storage_root: Path, *, start_at: datetime,
     from video.segment_recorder import RecorderConfig, SegmentRecorder
 
     cfg = RecorderConfig(
-        camera_id="cam_01",
+        camera_id="cam_return_01",
         storage_root=storage_root,
         fps=25,
         width=160,
@@ -262,7 +262,7 @@ def test_analyze_case_missing_segment_file_marks_invalid_video(
     base = datetime(2026, 6, 15, 14, 0, 0)
     with SM() as s:
         s.add(VideoSegment(
-            camera_id="cam_01",
+            camera_id="cam_return_01",
             start_at=base - timedelta(seconds=200),
             end_at=base + timedelta(seconds=200),
             path=str(tmp_path / "nope.mp4"),

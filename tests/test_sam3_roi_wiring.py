@@ -5,8 +5,8 @@ Verifies the three things the replay turned up:
   1. ``sam3`` is a first-class entry in the ROI registry (``SUPPORTED_MODELS``
      + ``SUPPORTED_MODES``), so ``model_view(cfg, cam, "sam3")`` returns
      a usable view instead of ``None``.
-  2. Both production cameras (``cam_01`` and ``cam_return_01``) resolve
-     their ``sam3`` view to ``sco_audit_zone``.
+  2. The production camera (``cam_return_01``) resolves its ``sam3``
+     view to ``sco_audit_zone``.
   3. With SAM3 enabled and Falcon disabled, ``run_perception_on_window``
      passes a non-null ``roi_crop_xyxy`` to ``Sam3Client.process_window``
      and Falcon is never called.
@@ -32,22 +32,8 @@ def test_sam3_in_supported_models_and_modes():
 
 
 # ---------------------------------------------------------------------------
-# 2. Both cameras resolve the sam3 view to sco_audit_zone
+# 2. The production camera resolves the sam3 view to sco_audit_zone
 # ---------------------------------------------------------------------------
-
-def test_model_view_resolves_sam3_for_cam_01():
-    from app.camera_rois import model_view
-    from app.config import load_config
-
-    cfg = load_config()
-    view = model_view(cfg, "cam_01", "sam3")
-    assert view is not None, "cam_01 sam3 view must not be None"
-    assert view["enabled"] is True
-    assert view["roi_ids"] == ["sco_audit_zone"]
-    resolved = view["resolved_zones"]
-    assert len(resolved) == 1
-    assert resolved[0]["id"] == "sco_audit_zone"
-
 
 def test_model_view_resolves_sam3_for_cam_return_01():
     from app.camera_rois import model_view
@@ -138,7 +124,7 @@ def test_case_runner_derives_sam3_crop_from_model_view():
     from app.config import load_config
 
     cfg = load_config()
-    view = model_view(cfg, "cam_01", "sam3")
+    view = model_view(cfg, "cam_return_01", "sam3")
     assert view is not None
     z = view["resolved_zones"][0]
     crop = (int(z["x"]), int(z["y"]),

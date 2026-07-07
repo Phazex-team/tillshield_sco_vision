@@ -293,6 +293,32 @@ class CameraSettings(BaseModel):
     workstation_id: Optional[str] = None
 
 
+class CameraCreate(BaseModel):
+    """Body for ``POST /admin/cameras`` — onboard a brand-new camera.
+
+    ``camera_id`` and ``rtsp_url`` are required; everything else is
+    seeded to the shipped per-camera shape so the ROI / prompt / preview
+    surfaces work on the new camera immediately.
+    """
+    camera_id: str
+    rtsp_url: str
+    name: Optional[str] = None
+    classifier: Optional[str] = None
+    workstation_id: Optional[str] = None
+
+
+# Seeded defaults for a newly-created camera, mirroring the shipped
+# camera shape in config.yaml so edit/ROI/preview flows work on it with
+# no further hand-editing.
+_NEW_CAMERA_DEFAULTS = {
+    "classifier": "sco_checkout",
+    "token_budget": 1120,
+    "enable_thinking": "",
+    "max_frames": "",
+    "cooldown_sec": 30,
+}
+
+
 def _tillshield_block(raw: dict) -> dict:
     return ((raw.get("integrations") or {}).get("tillshield") or {})
 
@@ -436,6 +462,107 @@ def update_camera_settings(
             "settings": after,
             "note": ("config.yaml updated; restart/reload the segment "
                      "recorder for an rtsp_url change to take effect.")}
+
+
+@router.post("/cameras")
+def create_camera(
+    body: CameraCreate,
+    request: Request,
+    x_phazex_admin_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Create a brand-new camera in ``config.yaml``. Token-gated and
+    audited (``admin.camera_created``).
+
+    ``camera_id`` must be unique (409 on collision); ``rtsp_url`` is
+    required (400 if blank). The camera is seeded with the shipped shape
+    (classifier / token budget / cooldown / empty zones + prompts) so the
+    ROI, prompt and preview surfaces work on it immediately. An optional
+    ``workstation_id`` maps a POS workstation to the new camera, taking it
+    over from any camera it previously pointed at.
+
+    The new camera is not recorded until the app + segment recorder are
+    restarted/reloaded to pick up the RTSP source.
+    """
+    _check_admin_token(x_phazex_admin_token)
+
+    from pathlib import Path
+
+    import yaml as _yaml
+
+    from app import audit
+    from app.config import DEFAULT_CONFIG_PATH
+    from db.session import get_sessionmaker
+
+    camera_id = (body.camera_id or "").strip()
+    if not camera_id:
+        raise HTTPException(status_code=400, detail="camera_id must not be empty")
+    rtsp_url = (body.rtsp_url or "").strip()
+    if not rtsp_url:
+        raise HTTPException(status_code=400, detail="rtsp_url must not be empty")
+
+    raw_path = Path(DEFAULT_CONFIG_PATH)
+    data = _yaml.safe_load(raw_path.read_text()) or {}
+    cameras = data.setdefault("cameras", [])
+    if any(c.get("id") == camera_id for c in cameras):
+        raise HTTPException(status_code=409,
+                            detail=f"camera {camera_id!r} already exists")
+
+    new_cam = {
+        "id": camera_id,
+        "name": (body.name or "").strip() or camera_id,
+        "rtsp_url": rtsp_url,
+        "classifier": (body.classifier or "").strip()
+                      or _NEW_CAMERA_DEFAULTS["classifier"],
+        "token_budget": _NEW_CAMERA_DEFAULTS["token_budget"],
+        "enable_thinking": _NEW_CAMERA_DEFAULTS["enable_thinking"],
+        "max_frames": _NEW_CAMERA_DEFAULTS["max_frames"],
+        "cooldown_sec": _NEW_CAMERA_DEFAULTS["cooldown_sec"],
+        "zones": {},
+        "model_roi_views": {},
+        "prompts": {},
+    }
+    cameras.append(new_cam)
+
+    workstation_reassigned_from = None
+    if body.workstation_id is not None and body.workstation_id.strip():
+        new_ws = body.workstation_id.strip()
+        integrations = data.setdefault("integrations", {})
+        ts = integrations.setdefault("tillshield", {})
+        ws_map = ts.setdefault("workstation_camera_map", {})
+        allowed = ts.setdefault("allowed_workstation_ids", [])
+        prior = ws_map.get(new_ws)
+        if prior and prior != camera_id:
+            workstation_reassigned_from = prior
+        ws_map[new_ws] = camera_id
+        if new_ws not in [str(x) for x in allowed]:
+            allowed.append(new_ws)
+
+    raw_path.write_text(_yaml.safe_dump(data, sort_keys=False))
+
+    after = {
+        "camera_id": camera_id,
+        "name": new_cam["name"],
+        "classifier": new_cam["classifier"],
+        "workstation_id": _workstation_for_camera(data, camera_id),
+    }
+    SM = get_sessionmaker()
+    with SM() as s:
+        audit.record(
+            s, action="admin.camera_created",
+            entity_type="camera", entity_id=camera_id,
+            actor_type="admin_api",
+            before=None, after=after,
+            ip=(request.client.host if request.client else None),
+            user_agent=request.headers.get("user-agent"),
+        )
+        s.commit()
+
+    return {"camera_id": camera_id,
+            "created": after,
+            "workstation_reassigned_from": workstation_reassigned_from,
+            "note": ("config.yaml updated; restart/reload the app and "
+                     "segment recorder to start recording the new "
+                     "camera's RTSP source.")}
 
 
 # ---------------------------------------------------------------------------

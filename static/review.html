@@ -502,6 +502,45 @@
       </div>
       <div class="save-status" id="cam-save-status"></div>
     </section>
+
+    <section class="panel">
+      <h2>Add a new camera</h2>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px 0">
+        Onboard a new camera without hand-editing config. Posts to
+        <code>POST /api/v1/admin/cameras</code>, persists to
+        <code>config.yaml</code>, and is audited. The camera is seeded with
+        the standard shape (classifier, ROI/prompt surfaces) so you can edit
+        it immediately above. <strong>Restart/reload the app + segment
+        recorder for the new camera to start recording.</strong>
+      </p>
+      <div class="row" style="margin-bottom:12px">
+        <label class="field">Admin token
+          <input id="cam-new-admin-token" type="password" placeholder="X-PhazeX-Admin-Token (optional if unset)" style="width:280px"/>
+        </label>
+      </div>
+      <div class="prompt-area">
+        <label>
+          <span style="font-size:12px;color:var(--muted)">Camera ID (unique, e.g. cam_02)</span>
+          <input id="cam-new-id" type="text" style="width:240px" placeholder="cam_02"/>
+        </label>
+        <label>
+          <span style="font-size:12px;color:var(--muted)">Camera name (optional; defaults to ID)</span>
+          <input id="cam-new-name" type="text" style="width:100%"/>
+        </label>
+        <label>
+          <span style="font-size:12px;color:var(--muted)">RTSP URL</span>
+          <input id="cam-new-rtsp" type="text" style="width:100%" placeholder="rtsp://user:pass@host:554/..."/>
+        </label>
+        <label>
+          <span style="font-size:12px;color:var(--muted)">POS workstation ID (optional; maps this workstation to the new camera)</span>
+          <input id="cam-new-workstation" type="text" style="width:240px" placeholder="e.g. 58"/>
+        </label>
+      </div>
+      <div class="row" style="margin-top:12px;justify-content:flex-end">
+        <button id="cam-new-create" class="primary">Add camera</button>
+      </div>
+      <div class="save-status" id="cam-new-status"></div>
+    </section>
   </section>
 
   <!-- ===================== PROMPTS TAB ===================== -->
@@ -1911,6 +1950,47 @@ document.getElementById("cam-save").onclick = async () => {
     }
   } catch (e) {
     ss.className = "save-status"; ss.textContent = `save failed: ${e}`;
+  }
+};
+document.getElementById("cam-new-create").onclick = async () => {
+  const ss = document.getElementById("cam-new-status");
+  const id = document.getElementById("cam-new-id").value.trim();
+  const rtsp = document.getElementById("cam-new-rtsp").value.trim();
+  if (!id) { ss.className = "save-status"; ss.textContent = "camera ID is required"; return; }
+  if (!rtsp) { ss.className = "save-status"; ss.textContent = "RTSP URL is required"; return; }
+  const body = {
+    camera_id: id,
+    rtsp_url: rtsp,
+    name: document.getElementById("cam-new-name").value.trim() || null,
+    workstation_id: document.getElementById("cam-new-workstation").value.trim() || null,
+  };
+  const headers = { "Content-Type": "application/json" };
+  const tok = document.getElementById("cam-new-admin-token").value.trim();
+  if (tok) headers["X-PhazeX-Admin-Token"] = tok;
+  ss.className = "save-status"; ss.textContent = "creating…";
+  try {
+    const r = await fetch(`${API}/admin/cameras`, {
+      method: "POST", headers, body: JSON.stringify(body),
+    });
+    const txt = await r.text();
+    let payload = null;
+    try { payload = JSON.parse(txt); } catch (_) { /* keep raw text */ }
+    if (r.ok) {
+      ss.className = "save-status ok";
+      const reassigned = payload?.workstation_reassigned_from
+        ? ` (workstation taken over from ${payload.workstation_reassigned_from})` : "";
+      ss.textContent = `created ${payload?.camera_id}${reassigned} — ${payload?.note || ""}`;
+      document.getElementById("cam-new-id").value = "";
+      document.getElementById("cam-new-name").value = "";
+      document.getElementById("cam-new-rtsp").value = "";
+      document.getElementById("cam-new-workstation").value = "";
+      refreshCameras();  // new camera shows up in the edit dropdown immediately
+    } else {
+      ss.className = "save-status";
+      ss.textContent = `create failed: ${r.status} ${typeof payload?.detail === "string" ? payload.detail : txt}`;
+    }
+  } catch (e) {
+    ss.className = "save-status"; ss.textContent = `create failed: ${e}`;
   }
 };
 

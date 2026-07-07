@@ -57,11 +57,11 @@ def test_admin_prompts_returns_effective_text_and_no_accusation(client):
 
 
 def test_admin_prompts_camera_id_filter(client):
-    r = client.get("/api/v1/admin/prompts", params={"camera_id": "cam_01"})
+    r = client.get("/api/v1/admin/prompts", params={"camera_id": "cam_return_01"})
     assert r.status_code == 200
     items = r.json()["items"]
     assert len(items) == 1
-    assert items[0]["camera_id"] == "cam_01"
+    assert items[0]["camera_id"] == "cam_return_01"
 
 
 def test_admin_prompts_unknown_camera_404(client):

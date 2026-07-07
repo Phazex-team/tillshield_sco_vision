@@ -58,8 +58,8 @@ def _default_camera_for_store(store_id: str) -> str:
     from app.config import load_config
     cfg = load_config()
     if cfg.cameras:
-        return cfg.cameras[0].get("id") or "cam_01"
-    return "cam_01"
+        return cfg.cameras[0].get("id") or "cam_return_01"
+    return "cam_return_01"
 
 
 def _configured_camera_ids(cfg) -> set[str]:

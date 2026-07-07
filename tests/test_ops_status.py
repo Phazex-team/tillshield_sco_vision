@@ -135,8 +135,8 @@ def test_ops_status_camera_freshness_unknown_when_no_segments(client):
     with a clear ``no segments recorded yet`` detail."""
     r = client.get("/api/v1/ops/status")
     cameras = r.json()["cameras"]
-    # The project ships at least one camera (cam_01) in config.yaml.
-    assert any(c.get("id") == "cam_01" for c in cameras)
+    # The project ships at least one camera (cam_return_01) in config.yaml.
+    assert any(c.get("id") == "cam_return_01" for c in cameras)
     for cam in cameras:
         if not cam.get("id"):
             continue
@@ -154,7 +154,7 @@ def test_ops_status_camera_freshness_ok_when_recent_segment_present(client):
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with SM() as s:
         seg = VideoSegment(
-            camera_id="cam_01",
+            camera_id="cam_return_01",
             start_at=now - timedelta(seconds=30),
             end_at=now,
             path="/tmp/seg.mp4",
@@ -166,7 +166,7 @@ def test_ops_status_camera_freshness_ok_when_recent_segment_present(client):
         s.commit()
 
     r = client.get("/api/v1/ops/status")
-    cam = next(c for c in r.json()["cameras"] if c["id"] == "cam_01")
+    cam = next(c for c in r.json()["cameras"] if c["id"] == "cam_return_01")
     assert cam["pill"] == "OK", cam
     assert cam["latest_segment_age_seconds"] is not None
     assert cam["latest_segment_age_seconds"] < 600
@@ -180,7 +180,7 @@ def test_ops_status_camera_freshness_warning_when_stale(client):
     old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=4)
     with SM() as s:
         seg = VideoSegment(
-            camera_id="cam_01",
+            camera_id="cam_return_01",
             start_at=old,
             end_at=old + timedelta(seconds=30),
             path="/tmp/old.mp4",
@@ -192,7 +192,7 @@ def test_ops_status_camera_freshness_warning_when_stale(client):
         s.commit()
 
     r = client.get("/api/v1/ops/status")
-    cam = next(c for c in r.json()["cameras"] if c["id"] == "cam_01")
+    cam = next(c for c in r.json()["cameras"] if c["id"] == "cam_return_01")
     assert cam["pill"] == "WARNING", cam
     assert cam["latest_segment_age_seconds"] > 600
 
@@ -224,12 +224,12 @@ def _make_two_segments(storage_root: Path):
     linked_path.write_bytes(b"\x00" * 1024)
     old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
     with SM() as s:
-        free = VideoSegment(camera_id="cam_01", start_at=old,
+        free = VideoSegment(camera_id="cam_return_01", start_at=old,
                             end_at=old + timedelta(seconds=30),
                             path=str(free_path), sha256="a"*64,
                             fps=25, width=640, height=360,
                             frame_count=750, duration_sec=30.0)
-        linked = VideoSegment(camera_id="cam_01",
+        linked = VideoSegment(camera_id="cam_return_01",
                               start_at=old + timedelta(seconds=60),
                               end_at=old + timedelta(seconds=90),
                               path=str(linked_path), sha256="b"*64,
@@ -244,11 +244,11 @@ def _make_two_segments(storage_root: Path):
                       pos_event_at=old + timedelta(seconds=70))
         s.add(pe)
         s.flush()
-        case = Case(pos_event_id=pe.id, camera_id="cam_01",
+        case = Case(pos_event_id=pe.id, camera_id="cam_return_01",
                     status="CLOSED", outcome="REVIEW")
         s.add(case)
         s.flush()
-        win = VideoWindow(case_id=case.id, camera_id="cam_01",
+        win = VideoWindow(case_id=case.id, camera_id="cam_return_01",
                           requested_start_at=old + timedelta(seconds=65),
                           requested_end_at=old + timedelta(seconds=95),
                           status="SUCCEEDED",

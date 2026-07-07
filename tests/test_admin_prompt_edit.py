@@ -47,18 +47,18 @@ def client(tmp_path, monkeypatch):
 
 
 def test_patch_updates_prompts_visible_via_get(client):
-    r = client.patch("/api/v1/admin/prompts/cam_01",
+    r = client.patch("/api/v1/admin/prompts/cam_return_01",
                      json={"gemma_user": "Describe what you see only."})
     assert r.status_code == 200, r.text
     body = r.json()
     assert "gemma_user" in body["updated_fields"]
     g = client.get("/api/v1/admin/prompts",
-                   params={"camera_id": "cam_01"}).json()["items"][0]
+                   params={"camera_id": "cam_return_01"}).json()["items"][0]
     assert g["gemma_user"] == "Describe what you see only."
 
 
 def test_patch_rejects_accusation_language(client):
-    r = client.patch("/api/v1/admin/prompts/cam_01",
+    r = client.patch("/api/v1/admin/prompts/cam_return_01",
                      json={"gemma_system": "Determine fraud now."})
     assert r.status_code == 400
     body = r.json()["detail"]
@@ -87,10 +87,10 @@ def test_patch_requires_token_when_configured(monkeypatch, tmp_path):
     from app.main import create_app
     c = TestClient(create_app())
     try:
-        r = c.patch("/api/v1/admin/prompts/cam_01",
+        r = c.patch("/api/v1/admin/prompts/cam_return_01",
                     json={"gemma_user": "ok"})
         assert r.status_code == 401
-        r2 = c.patch("/api/v1/admin/prompts/cam_01",
+        r2 = c.patch("/api/v1/admin/prompts/cam_return_01",
                      json={"gemma_user": "ok"},
                      headers={"X-PhazeX-Admin-Token": "phzx_admin"})
         assert r2.status_code == 200
@@ -99,7 +99,7 @@ def test_patch_requires_token_when_configured(monkeypatch, tmp_path):
 
 
 def test_patch_writes_audit_log(client):
-    client.patch("/api/v1/admin/prompts/cam_01",
+    client.patch("/api/v1/admin/prompts/cam_return_01",
                  json={"gemma_system": "Describe only."})
     from db.models import AuditLog
     import db.session as ds
@@ -109,5 +109,5 @@ def test_patch_writes_audit_log(client):
             AuditLog.action == "admin.prompt_update").all()
     assert rows
     row = rows[0]
-    assert row.entity_id == "cam_01"
+    assert row.entity_id == "cam_return_01"
     assert "prompts" in (row.after_json or {})

@@ -94,7 +94,7 @@ def _isolate_config(monkeypatch, tmp_path: Path) -> Path:
 # Helpers
 # ---------------------------------------------------------------------
 
-def _seed_segment(tmp_path, camera_id="cam_01", *,
+def _seed_segment(tmp_path, camera_id="cam_return_01", *,
                    width=320, height=240, duration_sec=2):
     """Synthesise a real MP4 segment + insert the DB row, returning
     the segment id."""
@@ -154,11 +154,11 @@ def test_snapshot_requires_token_when_configured(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
     from app.main import create_app
     c = TestClient(create_app())
-    r = c.get("/api/v1/admin/camera-rois/cam_01/snapshot")
+    r = c.get("/api/v1/admin/camera-rois/cam_return_01/snapshot")
     assert r.status_code == 401, r.text
     # With the right token but no segment yet, the gate is open
     # but the endpoint returns 404 with the documented detail.
-    r2 = c.get("/api/v1/admin/camera-rois/cam_01/snapshot",
+    r2 = c.get("/api/v1/admin/camera-rois/cam_return_01/snapshot",
                 headers={"X-PhazeX-Admin-Token": "phzx_admin"})
     assert r2.status_code == 404
     # Honest detail: 'live RTSP snapshot is not implemented'.
@@ -167,7 +167,7 @@ def test_snapshot_requires_token_when_configured(monkeypatch, tmp_path):
 
 def test_snapshot_404_when_no_segment_yet(client):
     c, _ = client
-    r = c.get("/api/v1/admin/camera-rois/cam_01/snapshot")
+    r = c.get("/api/v1/admin/camera-rois/cam_return_01/snapshot")
     assert r.status_code == 404
     assert r.headers.get("cache-control") == "no-store"
     detail = r.json()["detail"]
@@ -178,12 +178,12 @@ def test_snapshot_404_when_no_segment_yet(client):
 
 def test_snapshot_returns_image_url_and_metadata_from_latest_segment(client):
     c, tmp = client
-    seg_id = _seed_segment(tmp, camera_id="cam_01",
+    seg_id = _seed_segment(tmp, camera_id="cam_return_01",
                             width=320, height=240, duration_sec=2)
-    r = c.get("/api/v1/admin/camera-rois/cam_01/snapshot")
+    r = c.get("/api/v1/admin/camera-rois/cam_return_01/snapshot")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["camera_id"] == "cam_01"
+    assert body["camera_id"] == "cam_return_01"
     assert body["source"] == "latest_segment"
     assert body["width"] == 320
     assert body["height"] == 240
@@ -197,8 +197,8 @@ def test_snapshot_response_never_leaks_rtsp_url(client):
     raw ``rtsp://`` URL even when the camera has one configured. The
     on-disk segment ``path`` is also intentionally NOT echoed."""
     c, tmp = client
-    _seed_segment(tmp, camera_id="cam_01")
-    r = c.get("/api/v1/admin/camera-rois/cam_01/snapshot")
+    _seed_segment(tmp, camera_id="cam_return_01")
+    r = c.get("/api/v1/admin/camera-rois/cam_return_01/snapshot")
     assert r.status_code == 200
     blob = r.text
     assert "rtsp://" not in blob
@@ -214,15 +214,15 @@ def test_snapshot_response_never_leaks_rtsp_url(client):
 
 def test_snapshot_response_has_cache_control_no_store(client):
     c, tmp = client
-    _seed_segment(tmp, camera_id="cam_01")
-    r = c.get("/api/v1/admin/camera-rois/cam_01/snapshot")
+    _seed_segment(tmp, camera_id="cam_return_01")
+    r = c.get("/api/v1/admin/camera-rois/cam_return_01/snapshot")
     assert r.status_code == 200
     assert r.headers.get("cache-control") == "no-store"
 
 
 def test_snapshot_503_when_segment_file_missing(client):
     c, tmp = client
-    seg_id = _seed_segment(tmp, camera_id="cam_01")
+    seg_id = _seed_segment(tmp, camera_id="cam_return_01")
     # Delete the file but leave the DB row.
     from db.models import VideoSegment
     import db.session as ds
@@ -230,7 +230,7 @@ def test_snapshot_503_when_segment_file_missing(client):
     with SM() as s:
         seg = s.get(VideoSegment, seg_id)
         os.remove(seg.path)
-    r = c.get("/api/v1/admin/camera-rois/cam_01/snapshot")
+    r = c.get("/api/v1/admin/camera-rois/cam_return_01/snapshot")
     assert r.status_code == 404
     assert "no longer on disk" in r.json()["detail"]
 
@@ -250,9 +250,9 @@ def test_patch_persists_source_dimensions(client):
             },
         },
     }
-    r = c.patch("/api/v1/admin/camera-rois/cam_01", json=body)
+    r = c.patch("/api/v1/admin/camera-rois/cam_return_01", json=body)
     assert r.status_code == 200, r.text
-    g = c.get("/api/v1/admin/camera-rois/cam_01").json()
+    g = c.get("/api/v1/admin/camera-rois/cam_return_01").json()
     z = g["zones"]["counter_zone"]
     assert z["source_width"] == 1920
     assert z["source_height"] == 1080
@@ -260,7 +260,7 @@ def test_patch_persists_source_dimensions(client):
 
 def test_patch_rejects_zero_source_dimension(client):
     c, _ = client
-    r = c.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = c.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone": {"x": 0, "y": 0, "w": 10, "h": 10,
                                      "source_width": 0,
                                      "source_height": 720}}})
@@ -269,7 +269,7 @@ def test_patch_rejects_zero_source_dimension(client):
 
 def test_patch_rejects_non_integer_source_dimension(client):
     c, _ = client
-    r = c.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = c.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone": {"x": 0, "y": 0, "w": 10, "h": 10,
                                      "source_width": "wide",
                                      "source_height": 720}}})
@@ -278,7 +278,7 @@ def test_patch_rejects_non_integer_source_dimension(client):
 
 def test_patch_rejects_partial_source_dimensions(client):
     c, _ = client
-    r = c.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = c.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone": {"x": 0, "y": 0, "w": 10, "h": 10,
                                      "source_width": 1280}}})
     assert r.status_code == 400
@@ -289,10 +289,10 @@ def test_legacy_zone_without_source_dims_still_works(client):
     """Configs that pre-date the visual-calibration feature must keep
     working — no source_width/source_height keys required."""
     c, _ = client
-    r = c.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = c.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone": {"x": 1, "y": 2, "w": 3, "h": 4}}})
     assert r.status_code == 200, r.text
-    g = c.get("/api/v1/admin/camera-rois/cam_01").json()
+    g = c.get("/api/v1/admin/camera-rois/cam_return_01").json()
     z = g["zones"]["counter_zone"]
     assert z["x"] == 1 and z["w"] == 3
     assert "source_width" not in z
@@ -456,7 +456,7 @@ def test_build_vlm_roi_extras_scales_crop_xyxy_to_actual_frame(client):
     c, _ = client
     # Calibrate a counter_zone over the centre-left of a 1920x1080
     # source frame, then enable qwen3_vl labeled crops.
-    r = c.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = c.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {
             "counter_zone": {
                 "label": "Counter", "purpose": "Handover",
@@ -483,7 +483,7 @@ def test_build_vlm_roi_extras_scales_crop_xyxy_to_actual_frame(client):
            + _b64.b64encode(buf.getvalue()).decode("ascii"))
     frames = [{"frame_id": "f0", "frame_idx": 0,
                 "ts": "2026-06-18T14:00", "image_url": url}]
-    extras = _build_vlm_roi_extras("cam_01", frames)
+    extras = _build_vlm_roi_extras("cam_return_01", frames)
     assert extras is not None
     crops = [f for f in extras["frames"] if f.get("roi_id") == "counter_zone"]
     assert crops, extras

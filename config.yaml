@@ -1,79 +1,6 @@
 cameras:
-- id: cam_01
-  name: "SCO Audit Camera — cam_01"
-  rtsp_url: rtsp://127.0.0.1:8554/CS_COUNTER_ch15
-  classifier: sco_checkout
-  token_budget: 1120
-  enable_thinking: ''
-  max_frames: ''
-  cooldown_sec: 30
-  zones:
-    # SCO Phase 4/5/6: the single audit zone for SCO basket-match v1.
-    # Episode selector, Falcon, and the VLM all read this zone only.
-    # The placeholder geometry covers the bulk of a 1920x1080 frame so
-    # detection is not accidentally excluded; operators MUST retune
-    # this against real SCO footage before going live.
-    sco_audit_zone:
-      label: sco_audit_zone
-      purpose: "SCO checkout audit area (scanner + bagging + customer)"
-      x: 200
-      y: 100
-      w: 1520
-      h: 880
-      source_width: 1920
-      source_height: 1080
-    # Legacy refund zones kept for the (inactive) refund flow. Removing
-    # them would break refund regression tests that still exercise the
-    # legacy decision_policy via prompt_version="return_review_v1".
-    customer_zone:
-      x: 874
-      y: 29
-      w: 360
-      h: 607
-    staff_zone:
-      x: 570
-      y: 4
-      w: 303
-      h: 645
-  model_roi_views:
-    # All SCO model views target ONLY the SCO audit zone. The legacy
-    # zones above are still defined for the refund-mode regression
-    # tests but no production model view points at them.
-    falcon:
-      enabled: true
-      roi_ids:
-      - sco_audit_zone
-      mode: union_crop
-      margin_pct: 0.0
-      include_full_frame_overview: false
-      caption: ''
-    qwen3_vl:
-      enabled: true
-      roi_ids:
-      - sco_audit_zone
-      mode: labeled_crops
-      margin_pct: 0.0
-      include_full_frame_overview: true
-      caption: ''
-    gemma:
-      enabled: true
-      roi_ids:
-      - sco_audit_zone
-      mode: labeled_crops
-      margin_pct: 0.0
-      include_full_frame_overview: true
-      caption: ''
-    sam3:
-      enabled: true
-      roi_ids:
-      - sco_audit_zone
-      mode: union_crop
-      margin_pct: 0.0
-      include_full_frame_overview: false
-      caption: ''
-  prompts: {}
 - id: cam_return_01
-  name: "SCO Audit Camera — cam_return_01"
+  name: "SCO Audit Camera \u2014 cam_return_01"
   rtsp_url: ${CAM_RETURN_01_RTSP_URL}
   classifier: sco_checkout
   token_budget: 1120
@@ -81,23 +8,15 @@ cameras:
   max_frames: ''
   cooldown_sec: 30
   zones:
-    # SCO Phase 4/5/6 (council fix follow-up): cam_return_01 also gets
-    # the single sco_audit_zone so the TillShield poller's
-    # workstation_camera_map can safely route here without falling back
-    # to refund-shaped zones. Operators must retune the geometry
-    # against real footage from this camera before going live.
     sco_audit_zone:
       label: sco_audit_zone
-      purpose: "SCO checkout audit area (scanner + bagging + customer)"
+      purpose: SCO checkout audit area (scanner + bagging + customer)
       x: 200
       y: 100
       w: 1520
       h: 880
       source_width: 1920
       source_height: 1080
-    # Legacy refund zones — kept so refund regression tests that opt
-    # back into prompt_version=return_review_v1 still have something
-    # to point at. No active SCO model view references them.
     staff_zone_vlm:
       label: staff_zone_vlm
       purpose: ''
@@ -141,9 +60,6 @@ cameras:
     prefer_on_demand_for_pos: true
     export_enabled: true
   model_roi_views:
-    # All SCO model views target the SCO audit zone only. SAM2 and OCR
-    # are config-disabled at the top-level models block; their view
-    # entries are retained for back-compat but inert at runtime.
     falcon:
       enabled: true
       roi_ids:
@@ -251,26 +167,15 @@ models:
     max_new_tokens: 512
     temperature: 0.1
     load_in_4bit: true
-    local_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
+    local_path: /app/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
   sam2:
     name: facebook/sam2-hiera-large
     enabled: false
-  # SCO SAM-3 experiment (independent, concept-prompted video backend).
-  # When sam3.enabled=true the perception pipeline runs Meta SAM-3
-  # directly on the video window with POS-derived text concepts.
-  # When falcon.enabled=false at the same time, Falcon is NOT invoked
-  # at all (SAM-only mode). Switching this back to false restores the
-  # Falcon-only behaviour with zero other config churn.
   sam3:
     name: facebook/sam3
     enabled: false
     dtype: bfloat16
-    # Threshold tuned upward after the v1 hot-food simulation: 0.3 over-fired
-    # on POS-station hardware. 0.5 cuts the noise floor and only loses food
-    # containers we couldn't trust anyway. Drop to 0.4 if recall is too low.
     score_threshold: 0.5
-    # local_path is auto-resolved by app.config.resolve_model_path from
-    # models/hf/facebook/sam3/<snapshot> when run with FRAUD_OFFLINE_MODE=1.
   falcon_ocr:
     name: tiiuae/Falcon-OCR
     enabled: false
@@ -279,24 +184,9 @@ observability:
   phoenix_url: http://localhost:6006
   phoenix_project: sco_vision
 reasoning:
-  # Qwen3-VL is the day-to-day primary VLM for SCO Vision: stronger
-  # temporal/video grounding than the local Gemma BF16 path, and
-  # better at the v2 basket-match prompt. The Qwen vLLM server must
-  # be running on :8000 (see scripts/qwen_vllm_start.sh).
   primary_provider: qwen3_vl
-  # Gemma fallback is OFF by default. When Qwen is unavailable the
-  # chain will surface a clear "Vision did not run / all providers
-  # errored" message to the reviewer UI rather than silently fall
-  # back. To re-enable, set fallback_provider: gemma here AND launch
-  # the Gemma BF16 server (START_GEMMA=1 bash start.sh). The Gemma
-  # provider code is preserved in tree — only the chain-level
-  # fallback default is gated.
   fallback_provider: null
   warm_fallback: false
-  # SCO mode: default to the v2 basket-match prompt for new cases.
-  # v2 separates physical count from semantic identity and routes
-  # closed-container cases to REVIEW + sco_identity_uncertain instead
-  # of false basket mismatches.
   prompt_version: sco_basket_match_v2
   auto_analyze_enabled: false
 gpu:
@@ -312,35 +202,16 @@ storage:
   min_free_disk_gb: 100
   cleanup_dry_run_default: true
 sco_checkout:
-  # SCO mode acceptance gate. Every direct API ingest
-  # (POST /api/v1/pos/returns/event) and every TillShield row is
-  # normalised against this list. The legacy route name is only a
-  # compatibility alias; semantics are SCO checkout. The check is case-insensitive,
-  # whitespace-stripped, and treats "-"/" " as "_".
-  #
-  # Strictly SCO-checkout aliases only. Legacy refund tokens
-  # (RETURN, REFUND, REFUND_RETURN, ...) are NOT accepted — they
-  # are conceptually a different event class and should not silently
-  # canonicalise to SALE. Operators with a POS that emits a
-  # non-listed alias for checkout should add it here (and to
-  # integrations.tillshield.accepted_event_types below).
   accept_event_types:
-    - SALE
-    - SCO_SALE
-    - CHECKOUT
-  # All accepted aliases are stored/used internally as this single
-  # canonical type. ingest.case_opening_types() returns {canonical}.
+  - SALE
+  - SCO_SALE
+  - CHECKOUT
   canonical_event_type: SALE
-  # Single ROI used by Falcon AND by the episode selector. Defining
-  # multi-zone behavior is out of v1 scope.
   roi_name: sco_audit_zone
   sku_overrides_path: config/sku_overrides.yaml
   sku_cache_path: storage/sku_translator/cache.json
 integrations:
   tillshield:
-    # Must stay in lock-step with sco_checkout.accept_event_types above.
-    # Drift between the TillShield filter and the SCO normaliser is
-    # what produces the "passes the poller but opens no case" leak.
     accepted_event_types:
     - SALE
     - SCO_SALE
@@ -358,24 +229,16 @@ integrations:
     poll_lookback_seconds: 900
     require_negative_amount: false
     allowed_workstation_ids:
-    - '52'
+    - '57'
     workstation_camera_map:
-      # Council fix follow-up: route workstation 52 to cam_01 (the
-      # canonical SCO-configured camera). cam_return_01 also has
-      # sco_audit_zone defined now, so re-mapping back to it later is
-      # a safe one-line config change.
-      '52': cam_01
-  # Disabled legacy outbound exporter. One-way export; never affects
-  # our analysis/evidence.
+      '57': cam_return_01
   refund_agent:
-    # In SCO mode this MUST stay disabled. The SCO exporter is a
-    # separate future module.
     enabled: false
     base_url: http://localhost:8081
     create_path: /events/refund
     evidence_path: /events/refund/evidence
-    update_path: ''            # empty => re-POST create (agent upserts by pos_transaction_id)
+    update_path: ''
     timeout_sec: 30
     send_video: true
-    mask_customer_faces: true  # blur top of customer-zone person boxes in the EXPORT clip only
-    face_blur_strength: light  # light | medium
+    mask_customer_faces: true
+    face_blur_strength: light

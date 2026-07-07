@@ -58,7 +58,7 @@ def _fresh_session(tmp_path, monkeypatch):
 
 def _seed_segment(SM, storage_root, *, start_at, duration_sec=10):
     from video.segment_recorder import RecorderConfig, SegmentRecorder
-    cfg = RecorderConfig(camera_id="cam_01",
+    cfg = RecorderConfig(camera_id="cam_return_01",
                          storage_root=storage_root,
                          fps=25, width=160, height=120,
                          segment_duration_sec=duration_sec)

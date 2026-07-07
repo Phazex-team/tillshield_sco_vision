@@ -182,7 +182,7 @@ def _synthetic_frames(n, *, fps=25, start=None, size=(160, 120)):
 
 
 def _seed_segment_and_case(SM, storage_root, *, pos_event_at,
-                            camera_id="cam_01"):
+                            camera_id="cam_return_01"):
     """Record a real synthetic MP4 via ``SegmentRecorder`` (so the file
     AND index row are correct), open a POS event + Case at
     ``pos_event_at``, and return the case id."""

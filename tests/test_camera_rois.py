@@ -74,8 +74,8 @@ def test_get_camera_rois_returns_list(client):
     body = r.json()
     assert "items" in body and isinstance(body["items"], list)
     ids = [c["camera_id"] for c in body["items"]]
-    assert "cam_01" in ids
-    cam = next(c for c in body["items"] if c["camera_id"] == "cam_01")
+    assert "cam_return_01" in ids
+    cam = next(c for c in body["items"] if c["camera_id"] == "cam_return_01")
     assert "zones" in cam and "model_roi_views" in cam
 
 
@@ -91,9 +91,9 @@ def test_get_camera_rois_no_secret_fields(client):
 
 
 def test_get_camera_rois_single(client):
-    r = client.get("/api/v1/admin/camera-rois/cam_01")
+    r = client.get("/api/v1/admin/camera-rois/cam_return_01")
     assert r.status_code == 200
-    assert r.json()["camera_id"] == "cam_01"
+    assert r.json()["camera_id"] == "cam_return_01"
 
 
 def test_get_camera_rois_unknown_camera_404(client):
@@ -129,7 +129,7 @@ def test_patch_persists_zones_and_model_views(client):
                          "caption": "Overview + customer/counter crops."},
         },
     }
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json=body)
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json=body)
     assert r.status_code == 200, r.text
     payload = r.json()
     assert "zones" in payload["updated_keys"]
@@ -137,7 +137,7 @@ def test_patch_persists_zones_and_model_views(client):
     assert payload["model_roi_views"]["qwen3_vl"]["caption"] \
         .startswith("Overview")
     # Round-trip via GET.
-    g = client.get("/api/v1/admin/camera-rois/cam_01").json()
+    g = client.get("/api/v1/admin/camera-rois/cam_return_01").json()
     assert g["zones"]["counter_zone"]["w"] == 250
     assert g["model_roi_views"]["falcon"]["roi_ids"] == [
         "customer_zone", "counter_zone"]
@@ -160,14 +160,14 @@ def test_patch_supports_multiple_roi_ids_per_model(client):
                                        "staff_zone"]},
         },
     }
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json=body)
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json=body)
     assert r.status_code == 200, r.text
     assigned = r.json()["model_roi_views"]["qwen3_vl"]["roi_ids"]
     assert assigned == ["customer_zone", "counter_zone", "staff_zone"]
 
 
 def test_patch_writes_audit_log(client):
-    client.patch("/api/v1/admin/camera-rois/cam_01",
+    client.patch("/api/v1/admin/camera-rois/cam_return_01",
                  json={"zones": {"counter_zone":
                                   {"label": "Counter", "x": 0, "y": 0,
                                    "w": 100, "h": 100}}})
@@ -185,33 +185,33 @@ def test_patch_writes_audit_log(client):
 # ---------------------------------------------------------------------
 
 def test_patch_rejects_unknown_top_level_keys(client):
-    r = client.patch("/api/v1/admin/camera-rois/cam_01",
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01",
                      json={"foo": 1})
     assert r.status_code == 400
     assert "unknown" in r.json()["detail"]["error"].lower()
 
 
 def test_patch_rejects_bad_roi_id(client):
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"!!bad!!": {"x": 0, "y": 0, "w": 10, "h": 10}}})
     assert r.status_code == 400
     assert "must match" in r.json()["detail"]["error"]
 
 
 def test_patch_rejects_negative_dims(client):
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone": {"x": -1, "y": 0, "w": 10, "h": 10}}})
     assert r.status_code == 400
 
 
 def test_patch_rejects_zero_w(client):
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone": {"x": 0, "y": 0, "w": 0, "h": 10}}})
     assert r.status_code == 400
 
 
 def test_patch_rejects_unknown_model(client):
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone":
                   {"x": 0, "y": 0, "w": 10, "h": 10}},
         "model_roi_views": {"made_up_model": {"enabled": True}},
@@ -220,7 +220,7 @@ def test_patch_rejects_unknown_model(client):
 
 
 def test_patch_rejects_assignment_to_missing_roi_id(client):
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone":
                   {"x": 0, "y": 0, "w": 10, "h": 10}},
         "model_roi_views": {"falcon":
@@ -252,9 +252,9 @@ def test_patch_requires_token_when_configured(monkeypatch, tmp_path):
     try:
         body = {"zones": {"counter_zone":
                           {"x": 0, "y": 0, "w": 10, "h": 10}}}
-        r = c.patch("/api/v1/admin/camera-rois/cam_01", json=body)
+        r = c.patch("/api/v1/admin/camera-rois/cam_return_01", json=body)
         assert r.status_code == 401
-        r2 = c.patch("/api/v1/admin/camera-rois/cam_01", json=body,
+        r2 = c.patch("/api/v1/admin/camera-rois/cam_return_01", json=body,
                      headers={"X-PhazeX-Admin-Token": "phzx_admin"})
         assert r2.status_code == 200
     finally:
@@ -385,7 +385,7 @@ def _make_data_url(width: int = 200, height: int = 200) -> str:
 def test_build_vlm_roi_extras_returns_none_when_no_view(client):
     """An unknown camera_id has no model_roi_views configured at all
     → the helper returns None and the manifest keeps its full-frame
-    shape. (cam_01 in the SCO repo now has a sco_audit_zone view, so
+    shape. (cam_return_01 in the SCO repo now has a sco_audit_zone view, so
     we use a camera_id that is intentionally not in the config.)"""
     from app.case_runner import _build_vlm_roi_extras
     frames = [{"frame_id": "f0", "frame_idx": 0, "ts": "2026-06-17T14:00",
@@ -394,11 +394,11 @@ def test_build_vlm_roi_extras_returns_none_when_no_view(client):
 
 
 def test_build_vlm_roi_extras_appends_labeled_crops(client):
-    """Configure a qwen3_vl labeled_crops view on cam_01 and assert the
+    """Configure a qwen3_vl labeled_crops view on cam_return_01 and assert the
     case_runner helper produces extra labeled-crop frames + a composed
     user prompt that contains both ROI guidance AND the canonical
     JSON request."""
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {
             "counter_zone": {"label": "Counter", "purpose": "Handover",
                               "x": 10, "y": 10, "w": 80, "h": 80},
@@ -418,7 +418,7 @@ def test_build_vlm_roi_extras_appends_labeled_crops(client):
     from reasoning.providers.qwen3_vl import DEFAULT_USER_PROMPT
     frames = [{"frame_id": "f0", "frame_idx": 0, "ts": "2026-06-17T14:00",
                "image_url": _make_data_url(200, 200)}]
-    extras = _build_vlm_roi_extras("cam_01", frames)
+    extras = _build_vlm_roi_extras("cam_return_01", frames)
     assert extras is not None, "expected ROI extras when qwen view active"
     assert len(extras["extra_frames"]) == 2, extras["extra_frames"]
     labels = {f["roi_id"] for f in extras["extra_frames"]}
@@ -437,7 +437,7 @@ def test_build_vlm_roi_extras_appends_labeled_crops(client):
 
 
 def test_build_vlm_roi_extras_strips_overview_when_disabled(client):
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone": {"label": "Counter", "x": 0, "y": 0,
                                     "w": 60, "h": 60}},
         "model_roi_views": {
@@ -451,7 +451,7 @@ def test_build_vlm_roi_extras_strips_overview_when_disabled(client):
     from app.case_runner import _build_vlm_roi_extras
     frames = [{"frame_id": "f0", "frame_idx": 0, "ts": "2026-06-17T14:00",
                "image_url": _make_data_url(120, 120)}]
-    extras = _build_vlm_roi_extras("cam_01", frames)
+    extras = _build_vlm_roi_extras("cam_return_01", frames)
     assert extras is not None
     assert extras["include_full_frame_overview"] is False
 
@@ -473,7 +473,7 @@ def test_patch_model_only_succeeds_against_existing_zones(client):
         "counter_zone":  {"label": "Counter",  "x": 100, "y": 0,
                            "w": 100, "h": 100},
     }}
-    r0 = client.patch("/api/v1/admin/camera-rois/cam_01", json=seed)
+    r0 = client.patch("/api/v1/admin/camera-rois/cam_return_01", json=seed)
     assert r0.status_code == 200, r0.text
 
     # Now a model-only PATCH (no zones key) targeting both ROIs.
@@ -482,7 +482,7 @@ def test_patch_model_only_succeeds_against_existing_zones(client):
                       "roi_ids": ["customer_zone", "counter_zone"],
                       "caption": "model-only update"},
     }}
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json=body)
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json=body)
     assert r.status_code == 200, r.text
     payload = r.json()
     assert "model_roi_views" in payload["updated_keys"]
@@ -497,7 +497,7 @@ def test_patch_model_only_rejects_assignment_to_missing_roi_id(client):
     ROI id that does not exist on the camera. This proves the kwarg
     plumbing actually delivers the current ROI registry to the
     validator rather than silently allowing anything."""
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "model_roi_views": {"falcon":
                              {"enabled": True,
                               "mode": "union_crop",
@@ -512,7 +512,7 @@ def test_patch_still_rejects_client_supplied_private_helper_key(client):
     payload key to a function kwarg. Make sure a client who tries to
     inject it into the body is still rejected as an unknown top-level
     key — the strict public surface must not regress."""
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "_current_roi_ids": ["counter_zone"],
         "model_roi_views": {"qwen3_vl": {"enabled": True}},
     })
@@ -524,7 +524,7 @@ def test_patch_rejects_falcon_filter_candidate_crops_mode(client):
     """Blocker 2: Falcon runtime only implements ``union_crop``. The
     UI/API must refuse ``filter_candidate_crops`` for Falcon so the
     saved config never lies about active behavior."""
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone":
                   {"x": 0, "y": 0, "w": 10, "h": 10}},
         "model_roi_views": {"falcon":
@@ -539,7 +539,7 @@ def test_patch_rejects_falcon_filter_candidate_crops_mode(client):
 def test_patch_rejects_sam2_union_crop_mode(client):
     """Blocker 2: SAM 2 runtime only implements
     ``filter_candidate_crops``."""
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone":
                   {"x": 0, "y": 0, "w": 10, "h": 10}},
         "model_roi_views": {"sam2":
@@ -595,7 +595,7 @@ def test_default_overview_true_round_trips_through_patch(client):
     """A saved view that omits ``include_full_frame_overview`` should
     surface as True for VLMs on the next GET — covering the persisted
     contract end-to-end, not just the normaliser."""
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {"counter_zone":
                   {"label": "Counter", "x": 0, "y": 0,
                    "w": 100, "h": 100}},
@@ -607,7 +607,7 @@ def test_default_overview_true_round_trips_through_patch(client):
         },
     })
     assert r.status_code == 200, r.text
-    g = client.get("/api/v1/admin/camera-rois/cam_01").json()
+    g = client.get("/api/v1/admin/camera-rois/cam_return_01").json()
     assert g["model_roi_views"]["qwen3_vl"]["include_full_frame_overview"] \
         is True
     assert g["model_roi_views"]["gemma"]["include_full_frame_overview"] \
@@ -619,7 +619,7 @@ def test_vlm_prompt_lists_exact_image_order_with_roi_metadata(client):
     image's position with frame_id, AND for ROI crops also roi_id,
     roi_label, crop_xyxy, source_frame_id — in the SAME order the
     provider will attach them."""
-    r = client.patch("/api/v1/admin/camera-rois/cam_01", json={
+    r = client.patch("/api/v1/admin/camera-rois/cam_return_01", json={
         "zones": {
             "counter_zone":  {"label": "Counter", "purpose": "Handover",
                                "x": 10, "y": 10, "w": 80, "h": 80},
@@ -642,7 +642,7 @@ def test_vlm_prompt_lists_exact_image_order_with_roi_metadata(client):
         {"frame_id": "f1", "frame_idx": 1, "ts": "2026-06-17T14:00",
          "image_url": _make_data_url(200, 200)},
     ]
-    extras = _build_vlm_roi_extras("cam_01", frames)
+    extras = _build_vlm_roi_extras("cam_return_01", frames)
     assert extras is not None
     final = extras["frames"]
     user_prompt = extras["user_prompt"]

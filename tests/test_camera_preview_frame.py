@@ -55,7 +55,7 @@ def client(tmp_path, monkeypatch):
     return TestClient(create_app()), tmp_path
 
 
-def _seed_segment(tmp_path, *, camera_id="cam_01",
+def _seed_segment(tmp_path, *, camera_id="cam_return_01",
                    width=320, height=240, duration_sec=2,
                    start_at=None) -> str:
     if shutil.which("ffmpeg") is None:
@@ -111,7 +111,7 @@ def test_preview_404_for_unknown_camera_has_no_store(client):
 
 def test_preview_404_when_no_segment_row(client):
     c, _ = client
-    r = c.get("/api/v1/video/cameras/cam_01/preview-frame")
+    r = c.get("/api/v1/video/cameras/cam_return_01/preview-frame")
     assert r.status_code == 404
     assert r.headers.get("cache-control") == "no-store"
     body = r.json()
@@ -120,12 +120,12 @@ def test_preview_404_when_no_segment_row(client):
 
 def test_preview_returns_latest_segment_metadata(client):
     c, tmp = client
-    seg_id = _seed_segment(tmp, camera_id="cam_01",
+    seg_id = _seed_segment(tmp, camera_id="cam_return_01",
                             width=320, height=240, duration_sec=2)
-    r = c.get("/api/v1/video/cameras/cam_01/preview-frame")
+    r = c.get("/api/v1/video/cameras/cam_return_01/preview-frame")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["camera_id"] == "cam_01"
+    assert body["camera_id"] == "cam_return_01"
     assert body["source"] == "latest_segment"
     assert body["width"] == 320 and body["height"] == 240
     assert body["segment_id"] == seg_id
@@ -136,7 +136,7 @@ def test_preview_returns_latest_segment_metadata(client):
 def test_preview_success_has_cache_control_no_store(client):
     c, tmp = client
     _seed_segment(tmp)
-    r = c.get("/api/v1/video/cameras/cam_01/preview-frame")
+    r = c.get("/api/v1/video/cameras/cam_return_01/preview-frame")
     assert r.status_code == 200
     assert r.headers.get("cache-control") == "no-store"
 
@@ -146,11 +146,11 @@ def test_preview_picks_latest_segment_when_multiple_exist(client):
     inserted first."""
     c, tmp = client
     base = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=4)
-    older = _seed_segment(tmp, camera_id="cam_01", width=160, height=120,
+    older = _seed_segment(tmp, camera_id="cam_return_01", width=160, height=120,
                             start_at=base)
-    newer = _seed_segment(tmp, camera_id="cam_01", width=320, height=240,
+    newer = _seed_segment(tmp, camera_id="cam_return_01", width=320, height=240,
                             start_at=base + timedelta(hours=2))
-    r = c.get("/api/v1/video/cameras/cam_01/preview-frame")
+    r = c.get("/api/v1/video/cameras/cam_return_01/preview-frame")
     assert r.status_code == 200
     body = r.json()
     assert body["segment_id"] == newer
@@ -161,15 +161,15 @@ def test_preview_picks_latest_segment_when_multiple_exist(client):
 def test_preview_410_when_segment_file_missing(client):
     c, tmp = client
     import os
-    _seed_segment(tmp, camera_id="cam_01")
+    _seed_segment(tmp, camera_id="cam_return_01")
     # Delete the file on disk; leave the DB row.
     from db.models import VideoSegment
     import db.session as ds
     SM = ds.get_sessionmaker()
     with SM() as s:
-        seg = s.query(VideoSegment).filter_by(camera_id="cam_01").first()
+        seg = s.query(VideoSegment).filter_by(camera_id="cam_return_01").first()
         os.remove(seg.path)
-    r = c.get("/api/v1/video/cameras/cam_01/preview-frame")
+    r = c.get("/api/v1/video/cameras/cam_return_01/preview-frame")
     assert r.status_code == 410
     assert r.headers.get("cache-control") == "no-store"
     assert "no longer on disk" in r.json()["detail"]
@@ -177,8 +177,8 @@ def test_preview_410_when_segment_file_missing(client):
 
 def test_preview_response_does_not_leak_rtsp_url_or_path(client):
     c, tmp = client
-    _seed_segment(tmp, camera_id="cam_01")
-    r = c.get("/api/v1/video/cameras/cam_01/preview-frame")
+    _seed_segment(tmp, camera_id="cam_return_01")
+    r = c.get("/api/v1/video/cameras/cam_return_01/preview-frame")
     assert r.status_code == 200
     blob = r.text
     assert "rtsp://" not in blob

@@ -34,6 +34,26 @@ def _load_real_config():
     return load_config()
 
 
+def _active_sco_camera(cfg):
+    """The production SCO camera — the one the TillShield workstation map
+    points at, falling back to the sole configured camera.
+
+    (Historically this was ``cam_01``; the active production camera is now
+    ``cam_return_01``. Resolving it dynamically keeps these guardrails
+    correct across that kind of rename.)"""
+    ts = ((cfg.raw.get("integrations") or {}).get("tillshield") or {})
+    by_id = {c.get("id"): c for c in (cfg.cameras or [])}
+    for cam_id in (ts.get("workstation_camera_map") or {}).values():
+        if cam_id in by_id:
+            return by_id[cam_id]
+    return (cfg.cameras or [None])[0]
+
+
+def _active_sco_camera_id(cfg):
+    cam = _active_sco_camera(cfg)
+    return cam.get("id") if cam else None
+
+
 def test_active_config_defaults_to_sco_v2_prompt():
     cfg = _load_real_config()
     reasoning = cfg.raw.get("reasoning") or {}
@@ -46,7 +66,7 @@ def test_active_config_defaults_to_sco_v2_prompt():
 
 def test_real_config_cam_01_defines_sco_audit_zone():
     cfg = _load_real_config()
-    cam = next(c for c in cfg.cameras if c.get("id") == "cam_01")
+    cam = _active_sco_camera(cfg)
     zones = cam.get("zones") or {}
     assert "sco_audit_zone" in zones, (
         "cam_01 must define sco_audit_zone under cameras[].zones — the "
@@ -65,7 +85,7 @@ def test_real_config_zone_name_does_not_trip_refund_customer_gate():
     contain that substring, otherwise zones meant for SCO would leak
     into refund-mode gating if both flows ran in the same process."""
     cfg = _load_real_config()
-    cam = next(c for c in cfg.cameras if c.get("id") == "cam_01")
+    cam = _active_sco_camera(cfg)
     zones = cam.get("zones") or {}
     assert "sco_audit_zone" in zones
     assert "customer" not in "sco_audit_zone".lower(), \
@@ -75,7 +95,7 @@ def test_real_config_zone_name_does_not_trip_refund_customer_gate():
 @pytest.mark.parametrize("model_name", ["falcon", "qwen3_vl", "gemma"])
 def test_real_config_sco_model_views_target_only_sco_audit_zone(model_name):
     cfg = _load_real_config()
-    cam = next(c for c in cfg.cameras if c.get("id") == "cam_01")
+    cam = _active_sco_camera(cfg)
     views = cam.get("model_roi_views") or {}
     view = views.get(model_name)
     assert view is not None, f"cam_01.model_roi_views.{model_name} is missing"
@@ -93,9 +113,10 @@ def test_real_config_resolves_sco_audit_zone_via_model_view_helper():
     pipeline a Falcon view containing the sco_audit_zone descriptor."""
     cfg = _load_real_config()
     from app.camera_rois import model_view
-    falcon_view = model_view(cfg, "cam_01", "falcon")
+    active_id = _active_sco_camera_id(cfg)
+    falcon_view = model_view(cfg, active_id, "falcon")
     assert falcon_view is not None, \
-        "model_view returned None for cam_01/falcon — view not resolved"
+        f"model_view returned None for {active_id}/falcon — view not resolved"
     resolved = falcon_view.get("resolved_zones") or []
     zone_names = [z.get("id") for z in resolved]
     assert "sco_audit_zone" in zone_names, \
@@ -268,7 +289,7 @@ def test_sco_prompt_survives_roi_extras_composition():
         "ts": "2026-06-17T14:02:30",
         "image_url": _make_data_url(160, 120),
     }]
-    extras = _build_vlm_roi_extras("cam_01", sampled_frames, cfg=cfg)
+    extras = _build_vlm_roi_extras(_active_sco_camera_id(cfg), sampled_frames, cfg=cfg)
     assert extras is not None, (
         "cam_01 should have SCO ROI views configured. If this fails, "
         "model_roi_views in config.yaml is incomplete."
@@ -328,7 +349,7 @@ def test_case_runner_branch_uses_sco_prompt_with_roi_extras(monkeypatch):
         "ts": "2026-06-17T14:02:30",
         "image_url": _make_data_url(160, 120),
     }]
-    extras = _build_vlm_roi_extras("cam_01", sampled_frames, cfg=cfg)
+    extras = _build_vlm_roi_extras(_active_sco_camera_id(cfg), sampled_frames, cfg=cfg)
     assert extras is not None
 
     _system, sco_user = build_sco_prompts_v2(basket=[],

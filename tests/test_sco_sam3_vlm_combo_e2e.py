@@ -52,11 +52,11 @@ def fresh_db(tmp_path, monkeypatch):
 def _seed_segment(SM, storage_root, *, start_at, duration_sec=300):
     from db.models import VideoSegment
     storage_root.mkdir(parents=True, exist_ok=True)
-    seg = storage_root / "cctv" / "cam_01" / "seg_a.mp4"
+    seg = storage_root / "cctv" / "cam_return_01" / "seg_a.mp4"
     seg.parent.mkdir(parents=True, exist_ok=True)
     seg.write_bytes(b"\x00" * 4096)
     with SM() as s:
-        s.add(VideoSegment(camera_id="cam_01",
+        s.add(VideoSegment(camera_id="cam_return_01",
                            start_at=start_at,
                            end_at=start_at + timedelta(seconds=duration_sec),
                            path=str(seg)))
