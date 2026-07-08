@@ -1,7 +1,7 @@
 cameras:
 - id: cam_return_01
   name: "SCO Audit Camera \u2014 cam_return_01"
-  rtsp_url: ${CAM_RETURN_01_RTSP_URL}
+  rtsp_url: rtsp://LULU:LULU%25123@192.168.1.4:554/cam/realmonitor?channel=11&subtype=0
   classifier: sco_checkout
   token_budget: 1120
   enable_thinking: ''
@@ -202,9 +202,9 @@ integrations:
     poll_lookback_seconds: 900
     require_negative_amount: false
     allowed_workstation_ids:
-    - '57'
+    - '54'
     workstation_camera_map:
-      '57': cam_return_01
+      '54': cam_return_01
   refund_agent:
     enabled: false
     base_url: http://localhost:8081

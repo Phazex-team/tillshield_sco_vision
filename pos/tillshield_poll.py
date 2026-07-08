@@ -84,6 +84,12 @@ class TillShieldPollConfig:
     allowed_workstation_ids: list[str] = field(default_factory=list)
     workstation_camera_map: dict[str, str] = field(default_factory=dict)
     source_system: str = SOURCE_SYSTEM
+    # The agent matches the ?start/?end query window against each tx's LOCAL
+    # (Dubai) wall-clock, not UTC. Our window is computed in naive UTC, so we
+    # shift it by the agent's UTC offset before querying — otherwise every
+    # poll window lands 4h off and silently misses recent transactions.
+    # (Storage still converts tx times to UTC for video matching.)
+    agent_utc_offset: timedelta = timedelta(0)
 
 
 def _ts_section(cfg) -> dict:
@@ -96,6 +102,17 @@ def load_poll_config(cfg) -> TillShieldPollConfig:
     ws_map = {str(k): str(v) for k, v in
               (ts.get("workstation_camera_map") or {}).items() if v}
     allowed = [str(x) for x in (ts.get("allowed_workstation_ids") or [])]
+    # Agent-local UTC offset (e.g. Asia/Dubai = +4h, no DST) so the poll
+    # window is expressed in the agent's wall-clock frame.
+    _off = timedelta(0)
+    _tzname = str(ts.get("pos_timezone") or "").strip()
+    if _tzname:
+        try:
+            from zoneinfo import ZoneInfo
+            _off = ZoneInfo(_tzname).utcoffset(datetime(2026, 1, 1)) \
+                or timedelta(0)
+        except Exception:
+            _off = timedelta(0)
     return TillShieldPollConfig(
         enabled=bool(ts.get("poll_enabled", False)),
         base_url=str(ts.get("base_url") or "").rstrip("/"),
@@ -111,6 +128,7 @@ def load_poll_config(cfg) -> TillShieldPollConfig:
         require_negative_amount=bool(ts.get("require_negative_amount", False)),
         allowed_workstation_ids=allowed,
         workstation_camera_map=ws_map,
+        agent_utc_offset=_off,
     )
 
 
@@ -254,8 +272,11 @@ def fetch_workstation_rows(pc: TillShieldPollConfig,
     """Fetch the raw agent rows for one workstation in [start, end].
     Returns a list of agent row dicts. Tolerates list or wrapped JSON."""
     url = f"{pc.base_url}{pc.transactions_path}"
+    # Shift the naive-UTC window into the agent's local wall-clock frame; the
+    # agent filters transactions by their local time, not UTC.
     params = {"workstationId": workstation_id,
-              "start": _iso(start), "end": _iso(end)}
+              "start": _iso(start + pc.agent_utc_offset),
+              "end": _iso(end + pc.agent_utc_offset)}
     attempts = max(1, pc.poll_retry_attempts)
     last_exc = None
     for i in range(attempts):
