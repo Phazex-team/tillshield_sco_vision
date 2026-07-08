@@ -1295,17 +1295,27 @@ function setupDetectionOverlay(pkg, window_) {
     return;
   }
 
+  // Parse timestamps consistently: detection frame_ts is naive UTC, but the
+  // window's actual_start_at is served Dubai-aware (+04:00) for display. If
+  // we let JS parse the naive one as browser-local, the two land in
+  // different frames and every box is anchored ~4h off (all skipped). Treat
+  // an offset-less ISO string as UTC so both sides share one basis.
+  const _utcMs = (s) => {
+    if (!s) return NaN;
+    if (!/([Zz]|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";
+    return Date.parse(s);
+  };
   // Anchor video t=0 to the window start; fall back to earliest detection.
-  let startMs = window_.actual_start_at ? Date.parse(window_.actual_start_at) : NaN;
+  let startMs = window_.actual_start_at ? _utcMs(window_.actual_start_at) : NaN;
   if (isNaN(startMs)) {
-    const ts = dets.map(d => Date.parse(d.frame_ts)).filter(x => !isNaN(x));
+    const ts = dets.map(d => _utcMs(d.frame_ts)).filter(x => !isNaN(x));
     startMs = ts.length ? Math.min(...ts) : 0;
   }
   // Group detections by frame timestamp -> seconds from window start.
   const byT = new Map();
   for (const d of dets) {
     if (!Array.isArray(d.bbox_xyxy)) continue;
-    const ms = Date.parse(d.frame_ts);
+    const ms = _utcMs(d.frame_ts);
     if (isNaN(ms)) continue;
     const t = (ms - startMs) / 1000;
     // Skip detections from before the window video starts. Perception can
