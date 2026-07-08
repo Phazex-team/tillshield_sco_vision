@@ -1795,7 +1795,7 @@ document.getElementById("refresh").onclick = () => {
 document.getElementById("filter-outcome").onchange = refreshCases;
 document.getElementById("filter-status").onchange = refreshCases;
 // New Cases-tab filters (client-side). Text inputs filter as you type.
-for (const id of ["filter-date-from", "filter-date-to", "filter-customer"]) {
+for (const id of ["filter-date-from", "filter-date-to", "filter-mismatch"]) {
   document.getElementById(id).onchange = refreshCases;
 }
 for (const id of ["filter-staff", "filter-search"]) {
@@ -1803,7 +1803,7 @@ for (const id of ["filter-staff", "filter-search"]) {
 }
 document.getElementById("filter-clear").onclick = () => {
   for (const id of ["filter-outcome", "filter-status", "filter-date-from",
-                    "filter-date-to", "filter-staff", "filter-customer",
+                    "filter-date-to", "filter-staff", "filter-mismatch",
                     "filter-search"]) {
     document.getElementById(id).value = "";
   }

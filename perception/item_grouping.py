@@ -165,6 +165,15 @@ def count_audit_zone_items(groups: list[dict],
     matched = [g for g in gs if not g.get("is_extra_candidate")]
     extras = [g for g in gs if g.get("is_extra_candidate")]
 
+    # Matched groups collapse to DISTINCT POS lines, not distinct fragments:
+    # Falcon splits one POS item into many ``sco_item_NNN`` tracks, each of
+    # which seeds its own matched group. Count the POS line once.
+    matched_pos = set()
+    for g in matched:
+        idx = g.get("matched_pos_index")
+        matched_pos.add(idx if idx is not None else id(g))
+    matched_count = len(matched_pos)
+
     def _area(g) -> float:
         bb = g.get("representative_bbox")
         if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
