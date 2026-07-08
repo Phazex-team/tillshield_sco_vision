@@ -412,6 +412,10 @@ def analyze_case(session: Session,
     manifest_user_prompt = None
     manifest_system_prompt = None
     manifest_meta: dict = {"prompt_version": prompt_version}
+    # Independent, deterministic Falcon audit-zone item count (computed from
+    # the canonical groups below; NOT fed to the VLM). Surfaced to the
+    # reviewer UI as a parallel signal alongside the POS + VLM counts.
+    fl_audit_count: Optional[dict] = None
     # SCO Phase 4: hand the episode meta to the VLM (Phase 5 prompt
     # uses ambiguity/coverage to qualify its narrative) and to the
     # policy (Phase 6 demands episode coverage for VERIFIED).
@@ -448,6 +452,14 @@ def analyze_case(session: Session,
                               "raw detections")
                 canonical_groups = []
             manifest_meta["sco_canonical_groups"] = canonical_groups
+            # Deterministic FL count (fragment-collapsed) — parallel to the
+            # VLM, never injected into its prompt.
+            try:
+                from perception.item_grouping import count_audit_zone_items
+                fl_audit_count = count_audit_zone_items(canonical_groups)
+                manifest_meta["fl_audit_zone_count"] = fl_audit_count
+            except Exception:
+                log.exception("FL audit-zone count failed (non-fatal)")
 
             if prompt_version == "sco_basket_match_v2":
                 from reasoning.prompts.sco_basket_match_v2 import (
@@ -639,6 +651,9 @@ def analyze_case(session: Session,
         "window_id": window.id,
         "frame_count": len(sampled_frames),
         "perception": _summarise_perception(perception_result),
+        # Independent Falcon audit-zone item count (see above) — persisted so
+        # the reviewer UI can show FL vs VLM vs POS side by side.
+        "fl_audit_zone_count": fl_audit_count,
     }
     if isinstance(vlm_result_dict.get("provider_metadata"), dict):
         input_manifest["provider_metadata"] = vlm_result_dict["provider_metadata"]

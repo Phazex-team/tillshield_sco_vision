@@ -1237,11 +1237,20 @@ function renderCaseSummary(pkg, c, window_) {
   const trackTotal = Object.keys(seen).length || (per.tracks || []).length;
   const breakdown = Object.entries(byLabel).sort((a, b) => b[1] - a[1])
     .map(([k, v]) => `${v} ${escapeHtml(k)}`).join(" · ");
+  // Independent Falcon audit-zone item count (deterministic, NOT the VLM's).
+  const azc = per.audit_zone_item_count;
+  const azcHtml = azc ? (
+    `<div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--border)">` +
+    `<strong style="color:var(--accent)">FL audit-zone items: ${azc.count}</strong> ` +
+    `<span style="color:var(--muted)">(${azc.matched_count} matched + ${azc.extra_count} extra` +
+    `${(azc.extra_raw > azc.extra_count) ? `, from ${azc.extra_raw} raw` : ""})</span></div>`
+  ) : "";
   document.getElementById("summary-falcon").innerHTML =
     `<strong>${dets.length}</strong> detections · <strong>${trackTotal}</strong> tracks` +
     (breakdown ? `<div style="margin-top:5px;color:var(--muted)">${breakdown}</div>` : "") +
     `<div style="margin-top:3px;color:var(--muted)">${(per.keyframes || []).length} keyframes` +
-    `${(per.ocr || []).length ? " · " + per.ocr.length + " OCR" : ""}</div>`;
+    `${(per.ocr || []).length ? " · " + per.ocr.length + " OCR" : ""}</div>` +
+    azcHtml;
 
   // Evidence: source + frames sent to the VLM + window span.
   let frames = null;

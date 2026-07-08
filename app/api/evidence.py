@@ -38,6 +38,18 @@ def evidence_package(case_id: str) -> dict:
         if art is not None:
             pkg["literal_file_sha256"] = art.sha256
             pkg["uri"] = art.uri
+        # Surface the INDEPENDENT Falcon audit-zone item count (computed at
+        # analysis time, stored on the latest vlm_run manifest; never a VLM
+        # output) so the reviewer UI can show FL vs VLM vs POS side by side.
+        from db.models import VlmRun
+        vr = s.execute(
+            select(VlmRun).where(VlmRun.case_id == case_id)
+            .order_by(VlmRun.started_at.desc())
+        ).scalars().first()
+        if vr is not None and isinstance(vr.input_manifest, dict):
+            flc = vr.input_manifest.get("fl_audit_zone_count")
+            if flc is not None and isinstance(pkg.get("perception"), dict):
+                pkg["perception"]["audit_zone_item_count"] = flc
         return pkg
 
 

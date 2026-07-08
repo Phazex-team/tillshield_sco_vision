@@ -135,6 +135,70 @@ def extra_groups(groups: list[dict]) -> list[dict]:
     return [g for g in groups if g.get("is_extra_candidate")]
 
 
+# IoU above which two extra groups are treated as fragments of the SAME
+# physical object for COUNTING (looser than the POS-merge threshold — the
+# goal here is deliberate over-merging so the count isn't inflated by
+# Falcon's duplicate boxes).
+COUNT_MERGE_IOU: float = 0.35
+
+
+def count_audit_zone_items(groups: list[dict],
+                           *, merge_iou: float = COUNT_MERGE_IOU,
+                           time_gap_sec: float = DEFAULT_TIME_GAP_SEC) -> dict:
+    """Deterministic distinct-item count for the SCO audit zone — an
+    INDEPENDENT Falcon signal, computed WITHOUT the VLM and WITHOUT mutating
+    ``groups`` (which still feed the VLM prompt unchanged).
+
+    Each POS-matched group counts once. Extra (non-POS) groups are collapsed
+    among themselves when they overlap in space AND time, because Falcon
+    over-detects and fragments one physical object into several tracks —
+    those must not each add to the count. Returns::
+
+        {"count": int,           # matched + de-fragmented extras
+         "matched_count": int,   # distinct POS-matched items
+         "extra_count": int,     # distinct extra items (after collapse)
+         "extra_raw": int}       # extra groups BEFORE collapse (transparency)
+
+    Pure; never raises on malformed input.
+    """
+    gs = list(groups or [])
+    matched = [g for g in gs if not g.get("is_extra_candidate")]
+    extras = [g for g in gs if g.get("is_extra_candidate")]
+
+    def _area(g) -> float:
+        bb = g.get("representative_bbox")
+        if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
+            return 0.0
+        return max(0.0, float(bb[2]) - float(bb[0])) \
+            * max(0.0, float(bb[3]) - float(bb[1]))
+
+    kept: list[dict] = []
+    for g in sorted(extras, key=_area, reverse=True):
+        bb = g.get("representative_bbox")
+        if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
+            continue
+        gf, gl = _coerce_dt(g.get("first_seen_ts")), _coerce_dt(
+            g.get("last_seen_ts"))
+        is_fragment = False
+        for k in kept:
+            if _iou(bb, k["representative_bbox"]) >= merge_iou and \
+                    _time_overlaps(gf, gl,
+                                   _coerce_dt(k.get("first_seen_ts")),
+                                   _coerce_dt(k.get("last_seen_ts")),
+                                   gap_sec=time_gap_sec):
+                is_fragment = True
+                break
+        if not is_fragment:
+            kept.append(g)
+
+    return {
+        "count": len(matched) + len(kept),
+        "matched_count": len(matched),
+        "extra_count": len(kept),
+        "extra_raw": len(extras),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
