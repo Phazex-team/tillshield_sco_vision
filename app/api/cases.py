@@ -124,8 +124,33 @@ def _local_iso(dt):
     return dt.astimezone(_DUBAI_TZ).isoformat()
 
 
+def _vlm_mismatch(vlm_output: dict):
+    """VLM's basket-match headline as a yes/no/uncertain mismatch flag.
+    'yes' = the VLM flagged a count OR identity mismatch."""
+    pcm = vlm_output.get("physical_count_match")
+    sim = vlm_output.get("semantic_identity_match")
+    if pcm == "no" or sim == "no":
+        return "yes"
+    if pcm == "yes" and sim in ("yes", None):
+        return "no"
+    if pcm is None and sim is None:
+        return None
+    return "uncertain"
+
+
+def _fl_mismatch(vlm_manifest: dict, pos_event):
+    """Independent Falcon count vs POS basket size -> yes/no mismatch.
+    None when the FL count wasn't produced (e.g. no video)."""
+    flc = (vlm_manifest or {}).get("fl_audit_zone_count") or {}
+    fl_count = flc.get("count") if isinstance(flc, dict) else None
+    if fl_count is None:
+        return None
+    pos_count = len(_pos_items(pos_event)) if pos_event else 0
+    return "yes" if int(fl_count) != int(pos_count) else "no"
+
+
 def _serialise_case(case, pos_event=None, latest_window=None,
-                    vlm_output=None) -> dict:
+                    vlm_output=None, vlm_manifest=None) -> dict:
     # Surface the headline VLM observation (from the latest run) so the case
     # grid can show it as a column without a per-row fetch.
     vlm_output = vlm_output or {}
@@ -142,6 +167,10 @@ def _serialise_case(case, pos_event=None, latest_window=None,
         "closed_at": _local_iso(case.closed_at),
         "invalid_reason": case.invalid_reason,
         "customer_present": vlm_output.get("customer_present"),
+        # Two independent mismatch signals for the queue grid: the VLM's
+        # basket-match headline, and Falcon's count vs the POS basket.
+        "vlm_mismatch": _vlm_mismatch(vlm_output),
+        "fl_mismatch": _fl_mismatch(vlm_manifest, pos_event),
         "pos_event": _serialise_pos(pos_event) if pos_event else None,
         "latest_window": _serialise_window(latest_window)
             if latest_window else None,
@@ -246,13 +275,16 @@ def list_cases(
                 .where(VlmRun.case_id.in_(case_ids))
                 .order_by(VlmRun.started_at.desc())
             ).scalars().all()
+            vlm_manifests = {}
             for run in runs:
                 if run.case_id not in vlm_outputs:
                     vlm_outputs[run.case_id] = run.output_json or {}
+                    vlm_manifests[run.case_id] = run.input_manifest or {}
         return {
             "items": [
                 _serialise_case(c, pos_events.get(c.pos_event_id),
-                                vlm_output=vlm_outputs.get(c.id))
+                                vlm_output=vlm_outputs.get(c.id),
+                                vlm_manifest=vlm_manifests.get(c.id))
                 for c in cases
             ],
             "count": len(cases),
