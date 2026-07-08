@@ -311,6 +311,7 @@
             <th>POS time</th>
             <th>Verdict</th>
             <th>SCO reasons</th>
+            <th title="Did each analyser run for this case?">Signals</th>
             <th title="VLM basket-match: count/identity mismatch?">Mismatch (VLM)</th>
             <th title="Falcon audit-zone item count vs POS basket size">Mismatch (FL)</th>
             <th>Status</th>
@@ -331,7 +332,8 @@
            detailed evidence dumps below. -->
       <section id="case-summary" style="background:#0e1620;border:1px solid var(--border);border-radius:6px;padding:14px 16px;margin-bottom:16px">
         <div style="font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Summary</div>
-        <div id="summary-outcome" style="font-size:15px;font-weight:600;margin-bottom:10px">—</div>
+        <div id="summary-outcome" style="font-size:15px;font-weight:600;margin-bottom:6px">—</div>
+        <div id="summary-signals" style="margin-bottom:10px" title="Did each analyser run for this case?">—</div>
         <div class="summary-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
           <div>
             <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Vision verdict</div>
@@ -955,6 +957,7 @@ async function refreshCases() {
       <td>${p.pos_event_at || "—"}</td>
       <td>${pill(row.outcome || "—")}</td>
       <td>${scoReasonPills(row.risk_reasons) || '<span style="color:var(--muted)">—</span>'}</td>
+      <td>${signalBadges(row.signals)}</td>
       <td>${mismatchCell(row.vlm_mismatch)}</td>
       <td>${mismatchCell(row.fl_mismatch)}</td>
       <td>${pill(row.status || "—")}</td>`;
@@ -979,6 +982,24 @@ function mismatchCell(v) {
   if (v === "no")  return '<span style="color:var(--ok,#3ddc84)">✓ no</span>';
   if (v === "uncertain") return '<span style="color:var(--muted)">? unsure</span>';
   return '<span style="color:var(--muted)">—</span>';
+}
+// Per-analyser health badge (FL / VLM): ran, failed, unavailable, disabled…
+function sigBadge(name, status) {
+  const map = {
+    ok:          ["var(--ok,#3ddc84)", "ran"],
+    failed:      ["var(--high,#e0843b)", "failed"],
+    unavailable: ["var(--muted)", "n/a"],
+    disabled:    ["#c9a227", "off"],
+    pending:     ["var(--muted)", "…"],
+  };
+  const [color, label] = map[status] || ["var(--muted)", "?"];
+  return `<span title="${name}: ${status}" style="display:inline-block;padding:1px 6px;`
+       + `border-radius:4px;border:1px solid ${color};color:${color};`
+       + `font-size:10px;margin:1px 3px 1px 0;white-space:nowrap">${name} ${label}</span>`;
+}
+function signalBadges(sig) {
+  if (!sig) return '<span style="color:var(--muted)">—</span>';
+  return sigBadge("FL", sig.fl) + sigBadge("VLM", sig.vlm);
 }
 // Client-facing display name for a provider/model value. The backend still
 // stores the real names (gemma / qwen3_vl / HF paths) — this only changes what
@@ -1195,6 +1216,9 @@ function renderCaseSummary(pkg, c, window_) {
     `<span class="pill ${escapeHtml(outcome)}">${escapeHtml(outcome)}</span> ` +
     (risk != null ? `risk ${Number(risk).toFixed(2)} ` : "") +
     (reasons ? `<span style="font-weight:400;color:var(--muted)">— ${escapeHtml(reasons)}</span>` : "");
+  // Analyser health badges (FL / VLM ran? failed? unavailable? disabled?).
+  const _sigEl = document.getElementById("summary-signals");
+  if (_sigEl) _sigEl.innerHTML = signalBadges(c && c.signals);
 
   // VLM verdict.
   const runs = (pkg && pkg.reasoning) || [];

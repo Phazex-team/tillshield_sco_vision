@@ -149,8 +149,52 @@ def _fl_mismatch(vlm_manifest: dict, pos_event):
     return "yes" if int(fl_count) != int(pos_count) else "no"
 
 
+def _signals(vlm_output, vlm_manifest, run_status, case,
+             falcon_enabled: bool) -> dict:
+    """Per-case health of the two independent analysers, for a UI badge:
+      'ok'          — ran and produced output
+      'failed'      — ran but errored / produced no usable result
+      'unavailable' — no video / couldn't run (e.g. INVALID_VIDEO)
+      'disabled'    — turned off in config (FL only)
+      'pending'     — not analysed yet
+    """
+    inv = getattr(case, "invalid_reason", None)
+    vlm_output = vlm_output or {}
+    # VLM
+    if run_status is None:
+        vlm = "unavailable" if inv else "pending"
+    elif run_status == "FAILED":
+        vlm = "failed"
+    elif (vlm_output.get("physical_count_match") is not None
+          or vlm_output.get("matched_items") is not None):
+        vlm = "ok"
+    else:
+        vlm = "failed"
+    # FL
+    if not falcon_enabled:
+        fl = "disabled"
+    elif ((vlm_manifest or {}).get("fl_audit_zone_count") or {}).get(
+            "count") is not None:
+        fl = "ok"
+    elif vlm_manifest is None:
+        fl = "unavailable" if inv else "pending"
+    else:
+        fl = "unavailable"
+    return {"vlm": vlm, "fl": fl}
+
+
+def _falcon_enabled() -> bool:
+    try:
+        from app.config import load_config
+        return bool((load_config().raw.get("models") or {})
+                    .get("falcon", {}).get("enabled", True))
+    except Exception:
+        return True
+
+
 def _serialise_case(case, pos_event=None, latest_window=None,
-                    vlm_output=None, vlm_manifest=None) -> dict:
+                    vlm_output=None, vlm_manifest=None,
+                    vlm_run_status=None, falcon_enabled=True) -> dict:
     # Surface the headline VLM observation (from the latest run) so the case
     # grid can show it as a column without a per-row fetch.
     vlm_output = vlm_output or {}
@@ -171,6 +215,10 @@ def _serialise_case(case, pos_event=None, latest_window=None,
         # basket-match headline, and Falcon's count vs the POS basket.
         "vlm_mismatch": _vlm_mismatch(vlm_output),
         "fl_mismatch": _fl_mismatch(vlm_manifest, pos_event),
+        # Per-case health of the two analysers (ran / failed / unavailable /
+        # disabled / pending) for the UI badges.
+        "signals": _signals(vlm_output, vlm_manifest, vlm_run_status, case,
+                            falcon_enabled),
         "pos_event": _serialise_pos(pos_event) if pos_event else None,
         "latest_window": _serialise_window(latest_window)
             if latest_window else None,
@@ -276,15 +324,20 @@ def list_cases(
                 .order_by(VlmRun.started_at.desc())
             ).scalars().all()
             vlm_manifests = {}
+            vlm_statuses = {}
             for run in runs:
                 if run.case_id not in vlm_outputs:
                     vlm_outputs[run.case_id] = run.output_json or {}
                     vlm_manifests[run.case_id] = run.input_manifest or {}
+                    vlm_statuses[run.case_id] = run.status
+        fal_on = _falcon_enabled()
         return {
             "items": [
                 _serialise_case(c, pos_events.get(c.pos_event_id),
                                 vlm_output=vlm_outputs.get(c.id),
-                                vlm_manifest=vlm_manifests.get(c.id))
+                                vlm_manifest=vlm_manifests.get(c.id),
+                                vlm_run_status=vlm_statuses.get(c.id),
+                                falcon_enabled=fal_on)
                 for c in cases
             ],
             "count": len(cases),
@@ -324,7 +377,12 @@ def get_case(case_id: str) -> dict:
                               VideoWindow.status == "SUCCEEDED").first()
                       or s.query(VideoWindow)
                       .filter(VideoWindow.case_id == case.id).first())
-        return _serialise_case(case, pos, latest)
+        return _serialise_case(
+            case, pos, latest,
+            vlm_output=(run.output_json if run else None),
+            vlm_manifest=(run.input_manifest if run else None),
+            vlm_run_status=(run.status if run else None),
+            falcon_enabled=_falcon_enabled())
 
 
 def _claim_for_reprocess(case_id: str) -> dict:
