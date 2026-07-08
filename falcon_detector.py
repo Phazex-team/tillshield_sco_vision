@@ -72,7 +72,8 @@ class FalconDetector:
                  min_dim: int = 256,
                  max_dim: int = 1024,
                  device: str | None = None,
-                 compile: bool = False):
+                 compile: bool = False,
+                 coord_dedup_threshold: float = 0.04):
         setup_torch_config()
 
         model_id = _MODEL_ALIASES.get(model_name, model_name)
@@ -104,6 +105,11 @@ class FalconDetector:
         self.max_new_tokens = max_new_tokens
         self.min_dim = min_dim
         self.max_dim = max_dim
+        # Suppress near-duplicate boxes at generation time. The upstream
+        # default (0.01) barely merges anything, so the model re-emits the
+        # same item many times -> thousands of detections per case. 0.04
+        # collapses genuine duplicates without dropping distinct items.
+        self.coord_dedup_threshold = float(coord_dedup_threshold)
         self._stop_token_ids = [tokenizer.eos_token_id]
         eoq = getattr(tokenizer, "end_of_query_token_id", None)
         if eoq is not None:
@@ -136,17 +142,22 @@ class FalconDetector:
             max_new_tokens=self.max_new_tokens,
             temperature=0.0,
             stop_token_ids=self._stop_token_ids,
+            coord_dedup_threshold=self.coord_dedup_threshold,
             task=self.task,
         )
-        aux = aux_outputs[0]
-        decoded = self.tokenizer.decode(
-            output_tokens[0].detach().cpu().tolist(), skip_special_tokens=False
-        )
-        labels = _extract_labels(decoded)
+        dets = self._decode_one(output_tokens[0], aux_outputs[0], image.size)
+        annotated = _annotate(image, dets)
+        return annotated, dets
 
+    def _decode_one(self, out_tokens, aux, size) -> list["Detection"]:
+        """Turn one batch element's (tokens, aux) into full-image-pixel
+        Detections, using THIS image's own ``size`` for de-normalisation."""
+        decoded = self.tokenizer.decode(
+            out_tokens.detach().cpu().tolist(), skip_special_tokens=False)
+        labels = _extract_labels(decoded)
         bboxes_norm = _pair_bbox_entries(aux.bboxes_raw)
+        W, H = size
         dets: list[Detection] = []
-        W, H = image.size
         for i, b in enumerate(bboxes_norm):
             cx, cy, w, h = b["x"], b["y"], b["w"], b["h"]
             x1 = max(0.0, (cx - w / 2) * W)
@@ -156,8 +167,52 @@ class FalconDetector:
             label = labels[i] if i < len(labels) else "object"
             dets.append(Detection(label=label, bbox_norm=(cx, cy, w, h),
                                   bbox_px=(x1, y1, x2, y2)))
-        annotated = _annotate(image, dets)
-        return annotated, dets
+        return dets
+
+    @torch.inference_mode()
+    def detect_batch(self, items: list[tuple[Image.Image, str]]
+                     ) -> list[list["Detection"]]:
+        """Detect on a BATCH of ``(image, query)`` pairs in one GPU call.
+
+        Returns one ``list[Detection]`` per input item (same order). This
+        is the throughput path: the underlying engine is natively batched
+        (KV-cache sized to B, per-element independent decode/stop/dedup),
+        so results are identical to calling ``detect`` per item — just far
+        fewer GPU round-trips. Images may differ in size (padded to a
+        common canvas via pixel_mask); each is de-normalised with its own
+        dimensions.
+        """
+        if not items:
+            return []
+        pairs = []
+        sizes = []
+        for image, query in items:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            eff_q = (query or "").strip() or self.query
+            pairs.append((image, build_prompt_for_task(eff_q, self.task)))
+            sizes.append(image.size)
+        batch = process_batch_and_generate(
+            self.tokenizer, pairs,
+            max_length=self.model_args.max_seq_len,
+            min_dimension=self.min_dim, max_dimension=self.max_dim,
+        )
+        batch = {k: (v.to(self.device) if torch.is_tensor(v) else v)
+                 for k, v in batch.items()}
+        output_tokens, aux_outputs = self.engine.generate(
+            tokens=batch["tokens"],
+            pos_t=batch["pos_t"],
+            pos_hw=batch["pos_hw"],
+            pixel_values=batch["pixel_values"],
+            pixel_mask=batch["pixel_mask"],
+            max_new_tokens=self.max_new_tokens,
+            temperature=0.0,
+            stop_token_ids=self._stop_token_ids,
+            coord_dedup_threshold=self.coord_dedup_threshold,
+            task=self.task,
+        )
+        return [self._decode_one(output_tokens[b], aux_outputs[b], sizes[b])
+                for b in range(len(items))]
 
 
 def _pair_bbox_entries(raw) -> list[dict]:

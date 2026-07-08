@@ -496,15 +496,24 @@ def _sample_frames(window_path: Optional[str], fps: int,
         fps=actual_fps, frame_count=frame_count,
         base_start_ts=base_ts, policy=sampling,
     )
+    from PIL import Image
+    # Sequential decode — NOT random-seek. ``cap.set(CAP_PROP_POS_FRAMES)``
+    # per index forces a keyframe seek + GOP re-decode each time, which is
+    # pathologically slow on long windows and on the recorder's gappy
+    # segments (broken timestamps can make each seek crawl or hang). Walk
+    # the stream forward once and grab the planned indices as they pass.
+    ts_by_idx = {idx: ts for idx, ts in plan}
+    max_idx = max(ts_by_idx) if ts_by_idx else -1
     out: list[tuple[int, datetime, object]] = []
-    for idx, ts in plan:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    cur = 0
+    while cur <= max_idx:
         ok, frame_bgr = cap.read()
         if not ok or frame_bgr is None:
-            continue
-        from PIL import Image
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        out.append((idx, ts, Image.fromarray(rgb)))
+            break
+        if cur in ts_by_idx:
+            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            out.append((cur, ts_by_idx[cur], Image.fromarray(rgb)))
+        cur += 1
     cap.release()
     return out
 

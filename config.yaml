@@ -128,15 +128,15 @@ models:
     served_model_name: qwen3_vl
     checkpoint_label: Qwen3-VL-30B-A3B-Instruct-FP8
     precision: fp8
-    timeout_sec: 120
+    timeout_sec: 300
     health_timeout_sec: 3
     request_retries: 1
     allow_localhost_alias: false
     allow_port_override: false
     max_frame_long_edge: 1280
     max_frame_pixels: 1048576
-    max_tokens: 1536
-    max_new_tokens: 1536
+    max_tokens: 3072
+    max_new_tokens: 3072
     temperature: 0.1
     load_in_4bit: true
     local_path: /app/models/hf/Qwen/Qwen3-VL-30B-A3B-Instruct/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c

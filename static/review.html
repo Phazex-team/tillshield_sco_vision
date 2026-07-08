@@ -1471,7 +1471,11 @@ async function openCase(caseId) {
   detail.hidden = false;
   detail.scrollIntoView({ behavior: "smooth", block: "start" });
 
-  kvSet(document.getElementById("pos-kv"), c.pos_event || {});
+  // The POS basket is rendered as a table in the POS Items accordion, so
+  // drop the raw `items` array here — otherwise it dumps as a JSON blob.
+  const _posKv = Object.assign({}, c.pos_event || {});
+  delete _posKv.items;
+  kvSet(document.getElementById("pos-kv"), _posKv);
   kvSet(document.getElementById("decision-kv"), {
     outcome: c.outcome, status: c.status,
     risk_score: c.risk_score,

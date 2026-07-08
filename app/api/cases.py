@@ -4,6 +4,7 @@ from __future__ import annotations
 import atexit
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -103,6 +104,26 @@ def _drain_reprocess_pool() -> None:
     _REPROCESS_POOL.submit(lambda: None).result()
 
 
+# Asia/Dubai is a fixed UTC+4 offset (no DST) — use a fixed tz so we don't
+# depend on the tzdata package being present in the image.
+_DUBAI_TZ = timezone(timedelta(hours=4))
+
+
+def _local_iso(dt):
+    """Render a naive-UTC timestamp in Dubai local time for DISPLAY.
+
+    The POS receipt and the camera's burned-in clock are both Dubai local,
+    but we store times as naive UTC (correct for matching the UTC video
+    index). Without this, the UI shows POS/window times 4h behind what the
+    video actually displays. Storage is unchanged; this is display-only.
+    """
+    if dt is None:
+        return None
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_DUBAI_TZ).isoformat()
+
+
 def _serialise_case(case, pos_event=None, latest_window=None,
                     vlm_output=None) -> dict:
     # Surface the headline VLM observation (from the latest run) so the case
@@ -117,8 +138,8 @@ def _serialise_case(case, pos_event=None, latest_window=None,
         "risk_score": case.risk_score,
         "risk_reasons": case.risk_reasons,
         "decision_policy_version": case.decision_policy_version,
-        "opened_at": case.opened_at.isoformat() if case.opened_at else None,
-        "closed_at": case.closed_at.isoformat() if case.closed_at else None,
+        "opened_at": _local_iso(case.opened_at),
+        "closed_at": _local_iso(case.closed_at),
         "invalid_reason": case.invalid_reason,
         "customer_present": vlm_output.get("customer_present"),
         "pos_event": _serialise_pos(pos_event) if pos_event else None,
@@ -132,10 +153,8 @@ def _serialise_window(w) -> dict:
         "id": w.id,
         "status": w.status,
         "path": w.path,
-        "actual_start_at": w.actual_start_at.isoformat()
-            if w.actual_start_at else None,
-        "actual_end_at": w.actual_end_at.isoformat()
-            if w.actual_end_at else None,
+        "actual_start_at": _local_iso(w.actual_start_at),
+        "actual_end_at": _local_iso(w.actual_end_at),
         "failure_reason": w.failure_reason,
         # Which path produced the window (local vs NVR on-demand) + the
         # NVR query observability so operators see what was attempted.
@@ -181,10 +200,8 @@ def _serialise_pos(ev) -> dict:
         "transaction_id": ev.transaction_id,
         "line_id": ev.line_id,
         "event_type": ev.event_type,
-        "pos_event_at": ev.pos_event_at.isoformat()
-            if ev.pos_event_at else None,
-        "pos_event_end_at": ev.pos_event_end_at.isoformat()
-            if ev.pos_event_end_at else None,
+        "pos_event_at": _local_iso(ev.pos_event_at),
+        "pos_event_end_at": _local_iso(ev.pos_event_end_at),
         "staff_id": ev.staff_id,
         "sku": ev.sku,
         "item_description": ev.item_description,

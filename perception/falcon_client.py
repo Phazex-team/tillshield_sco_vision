@@ -22,6 +22,44 @@ from .schemas import Detection
 
 log = logging.getLogger(__name__)
 
+# Frames-x-categories are sent to the detector in batches of this many per
+# GPU call. The ROI crops are small, so a modest batch fits comfortably in
+# unified memory alongside Qwen while cutting round-trips ~8x.
+_FALCON_BATCH = 8
+
+
+def _iou_px(a, b) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _nms(dets, iou_thresh: float = 0.5):
+    """Greedy NMS over one (frame, label)'s boxes — collapse the many
+    near-duplicate boxes Falcon emits for a single physical item into one,
+    keeping the larger box as representative. Distinct, well-separated items
+    (low IoU) are all kept, so this never merges different objects."""
+    if len(dets) <= 1:
+        return dets
+    ordered = sorted(
+        dets,
+        key=lambda d: (d.bbox_px[2] - d.bbox_px[0]) * (d.bbox_px[3] - d.bbox_px[1]),
+        reverse=True)
+    kept = []
+    for d in ordered:
+        if all(_iou_px(d.bbox_px, k.bbox_px) < iou_thresh for k in kept):
+            kept.append(d)
+    return kept
+
 
 class FalconClient:
     """Wrap FalconDetector with manifest-friendly outputs."""
@@ -105,6 +143,13 @@ class FalconClient:
         ox, oy = 0, 0
         if roi_crop is not None:
             ox, oy = int(roi_crop[0]), int(roi_crop[1])
+        # NOTE: we deliberately run detection per (frame, category) rather
+        # than batching. The ROI crops are small (~500px); batching pads
+        # every image to a common max_dimension canvas + left-pads the
+        # heterogeneous category prompts, and that padding overhead exceeds
+        # the round-trip savings (measured SLOWER on GB10). Per-image keeps
+        # each crop at its native size. Speed comes instead from the NMS +
+        # coord-dedup below (fewer boxes) and the sequential frame decode.
         results: list[Detection] = []
         for frame_idx, ts, img in frames:
             target_img = img
@@ -130,7 +175,10 @@ class FalconClient:
                     log.exception("falcon detect failed on frame %d (%s)",
                                   frame_idx, label)
                     continue
-                for d in dets:
+                # Collapse the many near-duplicate boxes Falcon emits for the
+                # SAME item in the SAME frame (per frame+label NMS). Removes
+                # redundant boxes on one object; drops no frames.
+                for d in _nms(dets):
                     bx = [float(x) for x in d.bbox_px]
                     if ox or oy:
                         bx = [bx[0] + ox, bx[1] + oy,

@@ -360,15 +360,17 @@ def analyze_case(session: Session,
 
     # ----- 4. Build the evidence manifest with REAL frames -----------
     window_start_naive = build.actual_start_at or plan.requested_start
-    # VLM frame budget: ~0.5 fps across the built window. The window is
-    # tightly centered on the transaction, so 0.5 fps still captures the
-    # handover clearly, while keeping gemma's activation footprint small
-    # enough to stay under the GPU hard limit (1 fps / ~150 frames pushed
-    # peak past 100G and got the VLM deferred, with no accuracy gain).
-    # Bounded to [24, 64]. An explicit ``manifest_max_frames`` (e.g. from
+    # VLM frame budget: 1 fps across the built window — every recorded
+    # second gets a frame (this is a fast-paced self-checkout counter, so
+    # we do NOT sub-sample). 99% of transactions are < 3 min, so this
+    # stays modest; the cap only bites the rare long tail, which is then
+    # chunked (chunking keeps ALL these frames across in-budget calls, it
+    # doesn't drop them). An explicit ``manifest_max_frames`` (e.g. from
     # tests) overrides this auto behaviour.
     _chunked_analysis = bool(
         (cfg.raw.get("reasoning") or {}).get("chunked_analysis"))
+    _VLM_FPS = 1.0
+    _VLM_FRAME_CAP = 180  # ~3 min at 1 fps; bounds cv2 random-seek cost
     if manifest_max_frames is None:
         if build.actual_start_at and build.actual_end_at:
             _win_secs = (build.actual_end_at
@@ -376,15 +378,8 @@ def analyze_case(session: Session,
         else:
             _win_secs = (plan.requested_end
                          - plan.requested_start).total_seconds()
-        if _chunked_analysis:
-            # Chunked mode samples denser than single-pass (each chunk is a
-            # separate small in-budget VLM call), but capped so cv2 frame
-            # extraction (random-seek per frame) stays fast. ~0.7 fps, max 96.
-            manifest_max_frames = max(24,
-                                      min(96, int(round((_win_secs or 0) * 0.7))))
-        else:
-            manifest_max_frames = max(24, min(64,
-                                              int(round((_win_secs or 0) / 2))))
+        manifest_max_frames = max(
+            24, min(_VLM_FRAME_CAP, int(round((_win_secs or 0) * _VLM_FPS))))
     _t = time.perf_counter()
     try:
         sampled_frames = _extract_keyframe_data_urls(
@@ -569,20 +564,28 @@ def analyze_case(session: Session,
                     return vlm_runner(session, case, window) or {}
 
             try:
-                _CHUNK_FRAMES = 32
+                # Single-pass is the DEFAULT: a whole short window (~99% of
+                # transactions are < 3 min) fits one in-budget VLM call, so
+                # we send it as one call — no 3x chunk tax. We only fall back
+                # to chunking when the window is long enough that one call
+                # would blow the model's context (~65k tokens ≈ >56 frames at
+                # our resolution). Chunking then keeps every frame across
+                # several in-budget calls.
+                _SINGLE_PASS_MAX = 56   # frames that fit one call w/ margin
+                _CHUNK_FRAMES = 48      # per-chunk size when we must chunk
                 _frames = list(manifest.frames or [])
                 _is_sco = prompt_version in ("sco_basket_match_v1",
                                              "sco_basket_match_v2")
                 if (_chunked_analysis and _is_sco
-                        and len(_frames) > _CHUNK_FRAMES):
-                    # Watch the window in short overlapping chunks (each a
-                    # small in-budget call), then aggregate + guard.
+                        and len(_frames) > _SINGLE_PASS_MAX):
+                    # Window too long for one call — watch it in overlapping
+                    # in-budget chunks, then aggregate + guard.
                     import dataclasses
 
                     from reasoning.chunk_aggregate import (
                         aggregate_chunk_verdicts, partition_frames)
                     frame_chunks = partition_frames(
-                        _frames, chunk_frames=_CHUNK_FRAMES, overlap=4)
+                        _frames, chunk_frames=_CHUNK_FRAMES, overlap=6)
                     chunk_results = []
                     for _cf in frame_chunks:
                         _cm = dataclasses.replace(manifest, frames=_cf)
@@ -931,22 +934,32 @@ def _extract_keyframe_data_urls(*, window_path: str,
 
     out: list[dict] = []
     from PIL import Image
-    for i, idx in enumerate(indices):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    # Sequential decode — NOT random-seek. ``cap.set(CAP_PROP_POS_FRAMES)``
+    # per frame forces a keyframe seek + GOP re-decode on every pick, which
+    # is pathologically slow on long windows and on the recorder's gappy
+    # segments (broken timestamps make it crawl or hang). Decoding forward
+    # once and grabbing the target indices as they pass is far faster and
+    # robust. ``indices`` is sorted, so we walk to the last one only.
+    target = set(indices)
+    max_idx = max(indices) if indices else -1
+    cur = 0
+    while cur <= max_idx:
         ok, frame_bgr = cap.read()
         if not ok or frame_bgr is None:
-            continue
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(rgb)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        out.append({
-            "frame_id": f"frame_{idx:06d}",
-            "frame_idx": int(idx),
-            "ts": _ts_for_index(idx, fps, base_ts).isoformat(),
-            "image_url": f"data:image/jpeg;base64,{b64}",
-        })
+            break
+        if cur in target:
+            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(rgb)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            out.append({
+                "frame_id": f"frame_{cur:06d}",
+                "frame_idx": int(cur),
+                "ts": _ts_for_index(cur, fps, base_ts).isoformat(),
+                "image_url": f"data:image/jpeg;base64,{b64}",
+            })
+        cur += 1
     cap.release()
     return out
 
