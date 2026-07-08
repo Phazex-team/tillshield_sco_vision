@@ -66,5 +66,16 @@ def test_matched_plus_collapsed_extras():
                  "extra_raw": 2}
 
 
+def test_matched_fragments_collapse_by_pos_index():
+    # Falcon splits POS items into many tracks -> many matched groups, but
+    # they map to few POS lines. Count DISTINCT POS lines, not fragments.
+    groups = [{"is_extra_candidate": False, "matched_pos_index": i % 3,
+               "representative_bbox": [i, i, i + 5, i + 5]}
+              for i in range(30)]   # 30 fragment groups, 3 POS lines
+    r = count_audit_zone_items(groups)
+    assert r["matched_count"] == 3
+    assert r["count"] == 3
+
+
 def test_empty():
     assert count_audit_zone_items([])["count"] == 0

@@ -201,8 +201,8 @@ def count_audit_zone_items(groups: list[dict],
             kept.append(g)
 
     return {
-        "count": len(matched) + len(kept),
-        "matched_count": len(matched),
+        "count": matched_count + len(kept),
+        "matched_count": matched_count,
         "extra_count": len(kept),
         "extra_raw": len(extras),
     }
