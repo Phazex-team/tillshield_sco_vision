@@ -291,6 +291,10 @@ class CameraSettings(BaseModel):
     # ``workstation_camera_map``). Pass "" to clear this camera's
     # mapping; omit to leave it unchanged.
     workstation_id: Optional[str] = None
+    # Seconds the camera clock runs BEHIND the POS clock; the video lookup for
+    # a POS event is shifted back by this many seconds. Omit to leave
+    # unchanged; may be negative (camera ahead of POS).
+    camera_time_offset_seconds: Optional[float] = None
 
 
 class CameraCreate(BaseModel):
@@ -486,6 +490,8 @@ def list_camera_settings() -> dict:
             "rtsp_url": cam.get("rtsp_url") or "",
             "rtsp_url_is_env_ref": "${" in raw_url,
             "workstation_id": _workstation_for_camera(cfg.raw, cam_id),
+            "camera_time_offset_seconds": float(
+                cam.get("camera_time_offset_seconds", 0) or 0),
         })
     return {"items": items}
 
@@ -527,6 +533,7 @@ def update_camera_settings(
         "name": target.get("name"),
         "rtsp_url": target.get("rtsp_url"),
         "workstation_id": _workstation_for_camera(data, camera_id),
+        "camera_time_offset_seconds": target.get("camera_time_offset_seconds"),
     }
     updated_fields: list[str] = []
 
@@ -558,6 +565,20 @@ def update_camera_settings(
                 allowed.append(new_ws)
         updated_fields.append("workstation_id")
 
+    if settings.camera_time_offset_seconds is not None:
+        try:
+            offset_val = float(settings.camera_time_offset_seconds)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="camera_time_offset_seconds must be a number")
+        if abs(offset_val) > 3600:
+            raise HTTPException(
+                status_code=400,
+                detail="camera_time_offset_seconds must be within +/- 3600")
+        target["camera_time_offset_seconds"] = offset_val
+        updated_fields.append("camera_time_offset_seconds")
+
     if not updated_fields:
         raise HTTPException(status_code=400, detail="no fields to update")
 
@@ -567,6 +588,7 @@ def update_camera_settings(
         "name": target.get("name"),
         "rtsp_url": target.get("rtsp_url"),
         "workstation_id": _workstation_for_camera(data, camera_id),
+        "camera_time_offset_seconds": target.get("camera_time_offset_seconds"),
     }
     SM = get_sessionmaker()
     with SM() as s:

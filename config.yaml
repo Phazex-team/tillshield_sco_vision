@@ -7,6 +7,10 @@ cameras:
   enable_thinking: ''
   max_frames: ''
   cooldown_sec: 30
+  # Seconds the camera clock runs BEHIND the POS clock. Video lookup for a POS
+  # event is shifted back by this many seconds (camera_time = pos_time - offset)
+  # to compensate for clock drift. Editable in the UI (Cameras tab).
+  camera_time_offset_seconds: 27
   zones:
     sco_audit_zone:
       label: sco_audit_zone
@@ -170,6 +174,11 @@ gpu:
   poll_interval_sec: 5
   on_hard_limit: unload_models
   on_emergency_limit: stop_inference_workers
+  # Keep Falcon-Perception's ~2.4 GB weights resident across cases instead of
+  # loading/unloading them per case. Only the weights persist; the ~30 GB
+  # transient inference activation is still freed after each case. Set to false
+  # to restore per-case load/unload if memory headroom above Qwen gets tight.
+  keep_falcon_resident: true
 storage:
   raw_segment_retention_hours: 48
   min_free_disk_gb: 100

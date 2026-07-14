@@ -24,7 +24,7 @@ import logging
 import os
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -123,12 +123,35 @@ def analyze_case(session: Session,
                     prompt_version)
         prompt_version = "sco_basket_match_v2"
 
+    # Camera-clock offset: the CCTV clock can drift from the POS clock.
+    # ``camera_time_offset_seconds`` (per-camera, config.yaml) is how many
+    # seconds the camera runs BEHIND POS, so the footage for a POS event at
+    # ``pos_event_at`` lives at ``pos_event_at - offset`` in camera time. We
+    # shift ONCE here so BOTH window derivations below — the local segment
+    # index (plan_window) and the NVR playback path (_try_nvr_window) — query
+    # the correct camera-time range. The stored PosEvent timestamps stay
+    # authoritative (POS wall-clock); only the video lookup is shifted.
+    _cam_cfg = _camera_cfg(case.camera_id, cfg=cfg)
+    try:
+        _cam_offset = timedelta(
+            seconds=float(_cam_cfg.get("camera_time_offset_seconds", 0) or 0))
+    except (TypeError, ValueError):
+        _cam_offset = timedelta(0)
+    pos_event_at_cam = pos.pos_event_at - _cam_offset
+    pos_event_end_at_cam = (
+        pos.pos_event_end_at - _cam_offset if pos.pos_event_end_at else None)
+    if _cam_offset:
+        log.info("camera time offset applied: case=%s camera=%s offset=%.1fs "
+                 "(pos_event_at %s -> camera %s)", case.id, case.camera_id,
+                 _cam_offset.total_seconds(), pos.pos_event_at,
+                 pos_event_at_cam)
+
     # ----- 1. Resolve window from segment index ----------------------
     storage_root = _storage_root(cfg)
     _t = time.perf_counter()
     try:
-        plan = plan_window(session, case.camera_id, pos.pos_event_at,
-                           pos_event_end_at=pos.pos_event_end_at,
+        plan = plan_window(session, case.camera_id, pos_event_at_cam,
+                           pos_event_end_at=pos_event_end_at_cam,
                            pre_roll_sec=pre_roll_sec,
                            post_roll_sec=post_roll_sec)
     finally:
@@ -193,7 +216,7 @@ def analyze_case(session: Session,
     if build is None:
         _t = time.perf_counter()
         try:
-            nvr_clip = _try_nvr_window(case, pos.pos_event_at, window,
+            nvr_clip = _try_nvr_window(case, pos_event_at_cam, window,
                                         storage_root, cfg=cfg)
         finally:
             timings["nvr_acquisition_ms"] = _ms_since(_t)

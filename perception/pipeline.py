@@ -141,7 +141,15 @@ def run_perception(session, case, window, *, cfg=None,
     # ``*_enabled`` flags below tell ``run_perception_on_window`` to
     # short-circuit and emit ``<stage>_disabled_by_config`` limitations
     # only when there would otherwise have been work to do.
-    falcon_client = FalconClient(model_path=falcon_path) \
+    # Keep Falcon's ~2.4 GB weights resident across cases (default on) so each
+    # case reuses the loaded detector instead of reloading from disk. Only the
+    # weights persist; the transient inference activation is still freed by the
+    # empty_cache() in this function's finally block. Set gpu.keep_falcon_resident
+    # to false to restore the per-case load/unload behavior.
+    keep_falcon_resident = bool(
+        cfg.raw.get("gpu", {}).get("keep_falcon_resident", True))
+    falcon_client = FalconClient(model_path=falcon_path,
+                                 keep_resident=keep_falcon_resident) \
         if falcon_enabled else None
     sam2_client = Sam2Client(model_path=sam2_path) if sam2_enabled else None
     ocr_engine = OcrEngine(model_path=ocr_path) if ocr_enabled else None

@@ -12,6 +12,7 @@ In production, falcon weights load from
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -21,6 +22,41 @@ from .schemas import Detection
 
 
 log = logging.getLogger(__name__)
+
+# Process-wide cache of loaded FalconDetector instances, keyed by the resolved
+# model target (local path or hub id). Falcon-Perception weights are ~2.4 GB and
+# cost ~15-25 s to load from disk. The perception pipeline builds a fresh
+# FalconClient per case, so without this cache every case reloaded the weights.
+# Keeping the detector resident across cases removes that per-case reload. The
+# transient inference activation (which can spike ~30 GB on a large ROI crop) is
+# still freed after each case by the pipeline's torch.cuda.empty_cache(); only
+# the small weight tensors persist here (~2.4 GB, well within the memory guard's
+# headroom above Qwen's ~70 GB reservation).
+_RESIDENT_LOCK = threading.Lock()
+_RESIDENT_DETECTORS: dict[str, object] = {}
+
+
+def release_resident_falcon() -> None:
+    """Evict all cached resident FalconDetector weights and free GPU memory.
+
+    Call from an emergency memory path (or an ops endpoint) when the resident
+    Falcon weights must be reclaimed. Safe to call anytime — the next detect()
+    reloads on demand. No-op when nothing is cached."""
+    with _RESIDENT_LOCK:
+        had = bool(_RESIDENT_DETECTORS)
+        _RESIDENT_DETECTORS.clear()
+    if not had:
+        return
+    try:
+        import gc
+
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        log.debug("cuda empty_cache after falcon release skipped",
+                  exc_info=True)
 
 # Frames-x-categories are sent to the detector in batches of this many per
 # GPU call. The ROI crops are small, so a modest batch fits comfortably in
@@ -65,9 +101,14 @@ class FalconClient:
     """Wrap FalconDetector with manifest-friendly outputs."""
 
     def __init__(self, *, model_path: Optional[str] = None,
-                 model_name: str = "tiiuae/Falcon-Perception"):
+                 model_name: str = "tiiuae/Falcon-Perception",
+                 keep_resident: bool = True):
         self.model_path = model_path
         self.model_name = model_name
+        # When True (default), the loaded detector is cached process-wide so
+        # each new per-case FalconClient reuses the already-loaded weights
+        # instead of reloading ~2.4 GB from disk. See _RESIDENT_DETECTORS.
+        self.keep_resident = keep_resident
         self._detector = None
 
     def _ensure_loaded(self):
@@ -75,7 +116,17 @@ class FalconClient:
             return
         from falcon_detector import FalconDetector
         target = self.model_path or self.model_name
-        self._detector = FalconDetector(target)
+        if not self.keep_resident:
+            self._detector = FalconDetector(target)
+            return
+        # Reuse (or populate) the process-wide resident cache. Guarded so a
+        # first-touch load can't race, though case processing is sequential.
+        with _RESIDENT_LOCK:
+            det = _RESIDENT_DETECTORS.get(target)
+            if det is None:
+                det = FalconDetector(target)
+                _RESIDENT_DETECTORS[target] = det
+            self._detector = det
 
     # Falcon-Perception is a referring detector: it returns boxes that
     # match a query phrase but emits NO per-box class label. To get
@@ -195,4 +246,11 @@ class FalconClient:
         return results
 
     def unload(self) -> None:
+        # Detach this client's handle only. When keep_resident is set the
+        # shared detector stays in the process-wide cache so the next case
+        # reuses the already-loaded weights (no disk reload); the pipeline's
+        # torch.cuda.empty_cache() still frees the transient inference
+        # activation. When not resident this drops the sole reference, so the
+        # weights are freed on the next gc/empty_cache. To actually reclaim
+        # resident weights under memory pressure, call release_resident_falcon().
         self._detector = None

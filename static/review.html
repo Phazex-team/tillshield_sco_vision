@@ -554,6 +554,10 @@
           <span style="font-size:12px;color:var(--muted)">POS workstation ID (maps this workstation to this camera; blank clears)</span>
           <input id="cam-workstation" type="text" style="width:240px" placeholder="e.g. 52"/>
         </label>
+        <label>
+          <span style="font-size:12px;color:var(--muted)">Camera time offset (seconds) — how many seconds the camera clock is BEHIND POS. Video lookup is shifted back by this amount. Negative = camera ahead of POS.</span>
+          <input id="cam-time-offset" type="number" step="1" style="width:160px" placeholder="e.g. 27"/>
+        </label>
       </div>
       <div class="row" style="margin-top:12px;justify-content:space-between">
         <button id="cam-remove" style="color:#b91c1c">Remove camera…</button>
@@ -2074,6 +2078,8 @@ function loadSelectedCamera() {
   document.getElementById("cam-name").value = row.name || "";
   document.getElementById("cam-rtsp").value = row.rtsp_url || "";
   document.getElementById("cam-workstation").value = row.workstation_id || "";
+  document.getElementById("cam-time-offset").value =
+    (row.camera_time_offset_seconds ?? 0);
   const note = document.getElementById("cam-rtsp-note");
   note.textContent = row.rtsp_url_is_env_ref
     ? "current URL comes from a ${ENV} reference in config.yaml — saving replaces it with this literal value."
@@ -2086,11 +2092,14 @@ document.getElementById("cam-select").onchange = loadSelectedCamera;
 document.getElementById("cam-save").onclick = async () => {
   const id = document.getElementById("cam-select").value;
   if (!id) return;
+  const offsetRaw = document.getElementById("cam-time-offset").value.trim();
   const body = {
     name: document.getElementById("cam-name").value || null,
     rtsp_url: document.getElementById("cam-rtsp").value || null,
     // Always send workstation_id (incl. "") so clearing it works.
     workstation_id: document.getElementById("cam-workstation").value.trim(),
+    // Send the offset as a number when present; null leaves it unchanged.
+    camera_time_offset_seconds: offsetRaw === "" ? null : Number(offsetRaw),
   };
   const headers = { "Content-Type": "application/json" };
   const tok = document.getElementById("cam-admin-token").value.trim();
