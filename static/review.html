@@ -379,6 +379,11 @@
               <button type="button" class="acc-expand" data-acc-expand="acc-keyframes" data-acc-title="Keyframes">⤢ full</button></summary>
             <div class="acc-body"><div class="keyframes" id="keyframes"></div></div>
           </details>
+          <details class="acc" id="acc-snapshots" open>
+            <summary>Falcon detections <span class="acc-count" id="cnt-snapshots"></span>
+              <button type="button" class="acc-expand" data-acc-expand="acc-snapshots" data-acc-title="Falcon detections">⤢ full</button></summary>
+            <div class="acc-body"><div class="keyframes" id="snapshots"></div></div>
+          </details>
         </div>
       </div>
       <details class="acc" id="acc-pos-items" open>
@@ -1590,6 +1595,34 @@ async function openCase(caseId) {
     kfs.innerHTML = '<div class="empty">no keyframes selected</div>';
   }
   setAccCount("cnt-keyframes", (perception.keyframes || []).length);
+
+  // Saved Falcon detection snapshots — still frames with the detection
+  // boxes burned in (server-rendered PNGs; independent of the live overlay).
+  const snapEl = document.getElementById("snapshots");
+  snapEl.innerHTML = "";
+  const snaps = perception.detection_snapshots || [];
+  for (const s of snaps) {
+    if (!s.url) continue;
+    const div = document.createElement("div");
+    div.style.padding = "8px";
+    div.style.background = "rgba(61,220,132,0.08)";
+    div.style.borderRadius = "4px";
+    div.style.fontFamily = "ui-monospace, monospace";
+    div.style.fontSize = "11px";
+    const boxes = (s.box_count != null) ? `${s.box_count} box(es)` : "";
+    div.innerHTML =
+      `<div style="color:#3ddc84">frame ${s.frame_idx != null ? s.frame_idx : "?"} · ${escapeHtml(boxes)}</div>`;
+    const img = document.createElement("img");
+    img.src = s.url; img.loading = "lazy"; img.style.width = "100%";
+    img.style.marginTop = "4px"; img.style.borderRadius = "3px";
+    img.alt = `Falcon detections, frame ${s.frame_idx}`;
+    div.appendChild(img);
+    snapEl.appendChild(div);
+  }
+  if (snaps.length === 0) {
+    snapEl.innerHTML = '<div class="empty">no detection snapshots</div>';
+  }
+  setAccCount("cnt-snapshots", snaps.length);
 
   const tl = document.getElementById("timeline");
   tl.innerHTML = "";

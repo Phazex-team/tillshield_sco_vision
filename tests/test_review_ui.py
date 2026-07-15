@@ -97,6 +97,16 @@ def test_review_ui_renders_real_perception_payload():
     assert "frame_id" in src
 
 
+def test_review_ui_renders_falcon_detection_snapshots():
+    src = (ROOT / "static" / "review.html").read_text()
+    # Accordion + container for the saved detection stills.
+    assert 'id="acc-snapshots"' in src
+    assert 'id="snapshots"' in src
+    # It must read the package's detection_snapshots list and render <img>.
+    assert "detection_snapshots" in src
+    assert "cnt-snapshots" in src
+
+
 # ---------------------------------------------------------------------------
 # Operations console — Pipeline / Prompts / Storage / Config tabs
 # ---------------------------------------------------------------------------

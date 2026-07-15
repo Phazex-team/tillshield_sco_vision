@@ -128,6 +128,13 @@ def build_package(session: Session, case_id: str) -> dict:
                                     for o in track_obs],
             "keyframes": [_serialise_keyframe(k) for k in keyframes],
             "ocr": [_serialise_ocr(o) for o in ocr_rows],
+            # Saved Falcon detection stills. Unlike raw artifacts (whose
+            # ``uri`` is an on-disk path), each entry carries a browser-
+            # fetchable ``url`` served by app.api.video.detection_snapshot.
+            "detection_snapshots": [
+                _serialise_detection_snapshot(a, case.id) for a in artifacts
+                if a.artifact_type == "DETECTION_SNAPSHOT"
+            ],
         },
         "reasoning": [
             {
@@ -354,4 +361,26 @@ def _serialise_artifact(a: Artifact) -> dict:
         "frame_ts": _jsonable(a.frame_ts),
         "frame_idx": a.frame_idx,
         "metadata": a.artifact_metadata,
+    }
+
+
+def _serialise_detection_snapshot(a: Artifact, case_id: str) -> dict:
+    """Serialise a DETECTION_SNAPSHOT artifact for the reviewer UI.
+
+    ``uri`` is an on-disk path the browser cannot fetch, so we resolve the
+    filename (from metadata, falling back to the uri basename) into the
+    ``/video/cases/{case_id}/detection-snapshots/{filename}`` route that
+    serves the PNG.
+    """
+    meta = a.artifact_metadata or {}
+    filename = meta.get("filename") or (
+        a.uri.rsplit("/", 1)[-1] if a.uri else "")
+    return {
+        "id": a.id,
+        "url": (f"/api/v1/video/cases/{case_id}"
+                f"/detection-snapshots/{filename}") if filename else None,
+        "filename": filename,
+        "frame_idx": a.frame_idx,
+        "frame_ts": _jsonable(a.frame_ts) or meta.get("frame_ts"),
+        "box_count": meta.get("box_count"),
     }

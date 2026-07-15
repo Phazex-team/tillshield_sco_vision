@@ -44,6 +44,33 @@ def stream_window(window_id: str):
                             filename=path.name)
 
 
+@router.get("/cases/{case_id}/detection-snapshots/{filename}")
+def detection_snapshot(case_id: str, filename: str):
+    """Serve a saved Falcon detection-snapshot PNG for a case.
+
+    Files live under ``<storage>/cases/case_id=<id>/snapshots/`` (written
+    by the case runner). ``filename`` is confined to that directory — any
+    path separator / traversal escaping the snapshots dir is rejected —
+    so this can never serve an arbitrary host file.
+    """
+    from app.config import load_config
+
+    # Reject anything that isn't a bare filename before touching the fs.
+    if filename != Path(filename).name or filename in ("", ".", ".."):
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    snap_dir = (load_config().storage_root / "cases"
+                / f"case_id={case_id}" / "snapshots").resolve()
+    path = (snap_dir / filename).resolve()
+    # Defence in depth: the resolved path must stay inside snap_dir.
+    if path.parent != snap_dir:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="snapshot not found")
+    return FileResponse(str(path), media_type="image/png",
+                        filename=path.name)
+
+
 def _no_store_error(status_code: int, detail: str) -> JSONResponse:
     """Return a safe JSON error with ``Cache-Control: no-store``.
 

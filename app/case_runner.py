@@ -357,6 +357,41 @@ def analyze_case(session: Session,
                                perception=perception_result)
         except Exception:
             log.exception("perception persist failed (continuing)")
+
+    # Saved still snapshots of what Falcon detected: burn the detection
+    # boxes onto a few representative frames and store PNGs under the case
+    # dir, registered as DETECTION_SNAPSHOT artifacts. This gives the
+    # reviewer durable "what Falcon saw" stills (surfaced in the evidence
+    # package + case-detail UI) that don't need the window MP4 replayed and
+    # survive video retention pruning. Best-effort — never fails the case.
+    if perception_result and getattr(build, "out_path", None):
+        try:
+            from evidence.artifacts import register_artifact
+            from evidence.detection_snapshot import render_detection_snapshots
+            snap_dir = (storage_root / "cases" / f"case_id={case.id}"
+                        / "snapshots")
+            snaps = render_detection_snapshots(
+                window_path=build.out_path,
+                detections=(perception_result or {}).get("detections") or [],
+                out_dir=snap_dir,
+            )
+            for s in snaps:
+                register_artifact(
+                    session, case_id=case.id,
+                    artifact_type="DETECTION_SNAPSHOT",
+                    uri=s["path"], mime_type="image/png",
+                    frame_idx=s.get("frame_idx"),
+                    metadata={"filename": s["filename"],
+                              "box_count": s.get("box_count"),
+                              "frame_ts": s.get("frame_ts")},
+                )
+            if snaps:
+                log.info("wrote %d falcon detection snapshot(s) for case %s",
+                         len(snaps), case.id)
+        except Exception:
+            log.exception("falcon detection snapshot generation failed "
+                          "(continuing)")
+
     # Release the lock before keyframe extraction (ffmpeg) and the VLM
     # inference, which are the longest phases of the run.
     session.commit()
