@@ -123,9 +123,9 @@ models:
     request_timeout_sec: 300
     request_retries: 3
     request_retry_backoff_sec: 5
-    enabled: true
+    enabled: false
   qwen3_vl:
-    enabled: true
+    enabled: false
     name: Qwen/Qwen3-VL-30B-A3B-Instruct
     provider: vllm_openai
     base_url: http://127.0.0.1:8000/v1
