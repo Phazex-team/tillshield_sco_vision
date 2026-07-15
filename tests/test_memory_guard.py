@@ -61,6 +61,9 @@ def test_soft_limit_blocks_new_inference(policy):
 
 
 def test_hard_limit_triggers_unload_callbacks(policy):
+    # Legacy behaviour, now opt-in: on_hard_limit="unload_models" still
+    # drops non-active weights when explicitly configured.
+    policy.cfg.on_hard_limit = "unload_models"
     unloaded: list[str] = []
     policy.register_unload_callback("qwen3_vl",
                                     lambda: unloaded.append("qwen3_vl"))
@@ -75,6 +78,59 @@ def test_hard_limit_triggers_unload_callbacks(policy):
     assert "qwen3_vl" in unloaded
     # Loaded set is cleared once unload fires.
     assert "qwen3_vl" not in policy.loaded_providers()
+
+
+def test_hard_limit_default_defers_jobs_without_unloading(policy):
+    """Default on_hard_limit='defer_jobs': at the hard limit we pause
+    admission (queued jobs wait) but never fire unload callbacks — so
+    loaded weights stay put and accuracy is preserved."""
+    assert policy.cfg.on_hard_limit == "defer_jobs"
+    unloaded: list[str] = []
+    policy.register_unload_callback("qwen3_vl",
+                                    lambda: unloaded.append("qwen3_vl"))
+    policy.mark_loaded("qwen3_vl")
+
+    policy._probe = _fake_probe(120.0, 101.0)
+    s = policy.poll()
+    assert s.state == STATE_HARD
+    assert s.admission_paused is True
+    # No weights dropped -> accuracy untouched.
+    assert unloaded == []
+    assert "qwen3_vl" in policy.loaded_providers()
+
+
+def test_admission_gate_hysteresis(policy):
+    """Once paused at the hard limit, admission stays closed until used
+    RAM falls back below resume_gb (default = soft), not merely below the
+    hard limit — so the gate doesn't flap at the 100 GB boundary."""
+    # Under the hard limit -> open.
+    policy._probe = _fake_probe(120.0, 95.0)
+    assert policy.poll().admission_paused is False
+
+    # Cross the hard limit -> paused.
+    policy._probe = _fake_probe(120.0, 101.0)
+    assert policy.poll().admission_paused is True
+
+    # Drop into the hysteresis band (below hard, above resume) -> still paused.
+    policy._probe = _fake_probe(120.0, 95.0)
+    assert policy.poll().admission_paused is True
+
+    # Drop below resume -> admits again.
+    policy._probe = _fake_probe(120.0, 89.0)
+    assert policy.poll().admission_paused is False
+
+
+def test_wait_for_headroom_returns_immediately_when_open(policy):
+    policy._probe = _fake_probe(120.0, 30.0)
+    assert policy.wait_for_headroom() is True
+
+
+def test_wait_for_headroom_aborts_without_deadlock(policy):
+    """When memory stays pinned above the hard limit, wait_for_headroom
+    honours should_abort and returns False rather than blocking forever."""
+    policy.cfg.poll_interval_sec = 0.01
+    policy._probe = _fake_probe(120.0, 105.0)
+    assert policy.wait_for_headroom(should_abort=lambda: True) is False
 
 
 def test_emergency_limit_stops_inference_workers(policy):

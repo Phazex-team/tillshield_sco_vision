@@ -169,10 +169,23 @@ reasoning:
 gpu:
   max_loaded_big_vlms: 1
   soft_memory_limit_gb: 90
+  # Hard cap for the app. At/above this, NEW inference jobs wait in the
+  # queue instead of starting — the in-flight job finishes untouched and
+  # no weights are unloaded, so accuracy is unaffected. This is what keeps
+  # the box from being pushed into swap/OOM (the device freeze).
   hard_memory_limit_gb: 100
+  # Once paused at the hard limit, keep holding jobs until used RAM falls
+  # back below this (hysteresis, so the gate doesn't flap at 100 GB).
+  resume_memory_limit_gb: 90
+  # Best-effort ceiling on how long one job waits for headroom before it
+  # is admitted anyway, so a stuck-high box can't deadlock the pipeline
+  # forever. 0 = wait indefinitely.
+  admission_max_wait_sec: 300
   emergency_memory_limit_gb: 110
   poll_interval_sec: 5
-  on_hard_limit: unload_models
+  # "defer_jobs": hold new jobs at the hard limit (accuracy preserved).
+  # "unload_models": legacy — drops non-active weights (degrades to REVIEW).
+  on_hard_limit: defer_jobs
   on_emergency_limit: stop_inference_workers
   # Keep Falcon-Perception's ~2.4 GB weights resident across cases instead of
   # loading/unloading them per case. Only the weights persist; the ~30 GB

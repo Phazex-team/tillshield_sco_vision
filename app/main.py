@@ -45,6 +45,17 @@ async def _lifespan(app: FastAPI):
     """
     worker = None
     analyzer = None
+
+    # Memory guard: continuously track system RAM so the inference
+    # admission gate (case_runner / InferenceWorker) has a fresh reading
+    # to hold new jobs on when the box nears its hard limit. Isolated —
+    # failure here never blocks boot.
+    try:
+        from app.memory_guard import get_policy
+        get_policy().start_polling()
+    except Exception:
+        log.exception("memory guard poller failed to start; API still serving")
+
     try:
         from app.config import load_config
         from pos.tillshield_poll import PollWorker, load_poll_config
@@ -79,6 +90,9 @@ async def _lifespan(app: FastAPI):
             if svc is not None:
                 with contextlib.suppress(Exception):
                     svc.stop()
+        with contextlib.suppress(Exception):
+            from app.memory_guard import get_policy
+            get_policy().stop_polling()
 
 
 def create_app() -> FastAPI:

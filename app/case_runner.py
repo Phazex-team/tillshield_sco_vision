@@ -82,6 +82,17 @@ def analyze_case(session: Session,
     case = session.get(Case, case_id)
     if case is None:
         raise KeyError(f"case {case_id} not found")
+
+    # Memory admission gate: window-build + perception for this case can
+    # allocate ~30 GB transiently. If the box is already at/above the hard
+    # RAM limit, wait for headroom before starting so we don't tip it into
+    # swap/OOM. In-flight work and loaded weights are left alone (no
+    # accuracy cost); only the start of this queued job is delayed.
+    try:
+        from app.memory_guard import get_policy
+        get_policy().wait_for_headroom()
+    except Exception:
+        log.exception("memory gate check failed (proceeding)")
     pos = session.get(PosEvent, case.pos_event_id) if case.pos_event_id else None
     if pos is None:
         raise ValueError("case has no POS event linked")

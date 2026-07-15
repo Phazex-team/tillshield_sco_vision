@@ -392,6 +392,18 @@ class InferenceWorker(threading.Thread):
                 clip = self.queue.get(timeout=0.5)
             except Empty:
                 continue
+            # Memory admission gate: if system RAM is at/above the hard
+            # limit, hold this job (and everything behind it stays queued)
+            # until there is headroom. The in-flight job that pushed us
+            # over the line finishes untouched; nothing is unloaded, so
+            # accuracy is unaffected. Only throughput is throttled.
+            try:
+                from app.memory_guard import get_policy
+                get_policy().wait_for_headroom(
+                    should_abort=self.stop_evt.is_set)
+            except Exception:
+                log.exception("[inference] memory gate check failed "
+                              "(proceeding)")
             t0 = time.time()
             try:
                 self.analyze_fn(clip)
