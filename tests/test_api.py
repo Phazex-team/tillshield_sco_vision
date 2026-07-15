@@ -57,7 +57,9 @@ def client(tmp_path, monkeypatch):
 
     real_analyze = case_runner.analyze_case
     def patched_analyze(s, case_id, perception_runner=None, vlm_runner=None,
-                        prompt_version="return_review_v1"):
+                        prompt_version="return_review_v1", **kwargs):
+        # Accept (and ignore) the window-widening kwargs the reprocess path
+        # now threads through (pre_roll_sec / post_roll_sec).
         return real_analyze(s, case_id,
                             perception_runner=perception_runner
                                 or _stub_perception,

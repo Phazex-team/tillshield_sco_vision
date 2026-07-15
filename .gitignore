@@ -54,3 +54,4 @@ wheelhouse/*
 !wheelhouse/manifest.json
 !models/README.md
 !models/manifest.json
+compile_cache/

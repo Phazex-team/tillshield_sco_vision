@@ -166,6 +166,19 @@ reasoning:
   prompt_version: sco_basket_match_v2
   auto_analyze_enabled: true
   chunked_analysis: true
+  # --- Reprocess-queue reliability (single-worker analysis pool) ---
+  # A case whose analysis runs longer than this is treated as wedged (the
+  # perception GPU stage has no timeout and can't be cancelled mid-run).
+  reprocess_hang_timeout_sec: 900
+  # On a wedge: "restart" quarantines the poison case (-> CLOSED/REVIEW) then
+  # exits so the container restarts with a warm compile cache + a clear queue
+  # (the only way to free the stuck worker). "alert" quarantines + logs only,
+  # leaving recovery to an operator.
+  on_reprocess_hang: restart
+  # Reopen REPROCESSING rows orphaned by a crash once they've been orphaned
+  # this long — a periodic reaper (not just at startup) so orphans self-heal
+  # without a restart.
+  stale_reprocess_reaper_grace_sec: 180
 gpu:
   max_loaded_big_vlms: 1
   soft_memory_limit_gb: 90

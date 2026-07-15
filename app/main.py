@@ -56,6 +56,19 @@ async def _lifespan(app: FastAPI):
     except Exception:
         log.exception("memory guard poller failed to start; API still serving")
 
+    # Falcon warmup: drive the one-time cold JIT compile in a daemon thread
+    # at boot so the first real analysis case doesn't wedge the single
+    # reprocess worker behind a multi-minute flex_attention compile. Fully
+    # isolated — failure/slowness here never blocks the API.
+    try:
+        import threading
+
+        from perception.falcon_client import warmup_falcon
+        threading.Thread(target=warmup_falcon, name="falcon-warmup",
+                         daemon=True).start()
+    except Exception:
+        log.exception("falcon warmup thread failed to start; continuing")
+
     try:
         from app.config import load_config
         from pos.tillshield_poll import PollWorker, load_poll_config
@@ -72,11 +85,20 @@ async def _lifespan(app: FastAPI):
     # cases get a video window + perception + VLM verdict without a manual
     # reprocess. Isolated — failure here never blocks boot.
     try:
-        from app.auto_analyzer import AutoAnalyzer, load_auto_analyze_config
+        from app.auto_analyzer import (
+            AutoAnalyzer,
+            load_auto_analyze_config,
+            load_reprocess_guard_config,
+        )
         from app.config import load_config
-        enabled, interval, batch = load_auto_analyze_config(load_config())
+        _cfg = load_config()
+        enabled, interval, batch = load_auto_analyze_config(_cfg)
+        hang_timeout, on_hang, reaper_grace = load_reprocess_guard_config(_cfg)
         if enabled:
-            analyzer = AutoAnalyzer(interval=interval, batch=batch)
+            analyzer = AutoAnalyzer(interval=interval, batch=batch,
+                                    hang_timeout_sec=hang_timeout,
+                                    on_hang=on_hang,
+                                    reaper_grace_sec=reaper_grace)
             analyzer.start()
         else:
             log.info("auto-analyzer disabled (auto_analyze_enabled=false)")

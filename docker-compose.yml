@@ -53,6 +53,15 @@ x-common-env: &common-env
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # Persist the torch.compile / Inductor / Triton JIT caches on a mounted
+  # host dir (see x-common-volumes) instead of the container-ephemeral
+  # /tmp + ~/.triton. Falcon-Perception JIT-compiles flex_attention on the
+  # first inference (minutes, cold, on this sm_121 box); without a
+  # persistent cache EVERY container restart pays that full cold compile,
+  # wedging the single-worker analysis queue behind it. Keyed by
+  # arch+version, so it is safe to share across services on this one box.
+  TORCHINDUCTOR_CACHE_DIR: /app/compile_cache/inductor
+  TRITON_CACHE_DIR: /app/compile_cache/triton
 
 # Mounts shared by every service. ./venv carries the exact tested
 # torch/vLLM stack (see Dockerfile — it is mounted, not reinstalled).
@@ -62,6 +71,9 @@ x-common-volumes: &common-volumes
   # persists camera/zone edits by rewriting this file in place.
   - ./config.yaml:/app/config.yaml
   - ./models:/app/models
+  # Persistent torch/Triton JIT compile cache (see TORCHINDUCTOR_CACHE_DIR /
+  # TRITON_CACHE_DIR). Survives container recreation so restarts are warm.
+  - ./compile_cache:/app/compile_cache
   - ./logs:/app/logs
   - ./run:/app/run
   - ./videos:/app/videos

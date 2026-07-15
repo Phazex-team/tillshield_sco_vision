@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -34,6 +35,56 @@ log = logging.getLogger(__name__)
 # headroom above Qwen's ~70 GB reservation).
 _RESIDENT_LOCK = threading.Lock()
 _RESIDENT_DETECTORS: dict[str, object] = {}
+
+
+def warmup_falcon(cfg=None) -> bool:
+    """Load the Falcon detector and drive one dummy detection at startup so
+    the expensive first-run JIT (Falcon-Perception cold-compiles
+    ``flex_attention`` + Triton kernels on the first inference — minutes on
+    an sm_121 box) happens HERE, off the critical path, instead of inside
+    the first real case while it holds ``falcon_lock`` / the single reprocess
+    worker.
+
+    Populates the process-wide resident cache, so the first real case then
+    reuses the already-loaded, already-compiled detector. Idempotent and
+    fully best-effort: any failure is logged and swallowed — warmup must
+    never block or crash startup. Returns True iff a detect completed.
+
+    Pairs with the persistent ``TORCHINDUCTOR_CACHE_DIR`` / ``TRITON_CACHE_DIR``
+    (docker-compose): the first ever run still cold-compiles into that cache;
+    every subsequent restart is warm and this returns in ~seconds.
+    """
+    try:
+        from app.config import load_config, resolve_model_path
+        cfg = cfg or load_config()
+        fcfg = cfg.models.get("falcon")
+        if fcfg is not None and not fcfg.enabled:
+            log.info("falcon warmup skipped (falcon disabled in config)")
+            return False
+        path = None
+        try:
+            if fcfg is not None:
+                path = resolve_model_path(fcfg)
+        except Exception:
+            path = None
+        keep_resident = bool(
+            cfg.raw.get("gpu", {}).get("keep_falcon_resident", True))
+        client = FalconClient(model_path=path, keep_resident=keep_resident)
+        t0 = time.time()
+        log.info("falcon warmup: loading + JIT-compiling detector (first "
+                 "cold run compiles flex_attention; can take several "
+                 "minutes on a fresh compile cache)")
+        client._ensure_loaded()
+        # A tiny dummy detect drives the full prefill + decode compile path.
+        dummy = Image.new("RGB", (256, 256), (127, 127, 127))
+        client._detector.detect(dummy, query="item")
+        log.info("falcon warmup complete in %.1fs (real cases now skip the "
+                 "JIT)", time.time() - t0)
+        return True
+    except Exception:
+        log.exception("falcon warmup failed (non-fatal; the first real case "
+                      "will pay the compile instead)")
+        return False
 
 
 def release_resident_falcon() -> None:

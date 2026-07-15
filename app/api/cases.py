@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import atexit
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -32,6 +34,102 @@ _EXPORT_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="export")
 atexit.register(lambda: _EXPORT_POOL.shutdown(wait=False))
 
 
+# ---------------------------------------------------------------------------
+# Reprocess job registry + hang watchdog.
+#
+# The pool is single-worker with no per-job cancellation, and analyze_case's
+# perception (GPU) stage has no timeout — so a true hang (as opposed to an
+# error, which drains cleanly) wedges the ONE worker forever and head-of-line
+# blocks the whole queue. This registry lets a supervisor (auto_analyzer) tell
+# apart three states for every REPROCESSING case: queued-in-pool, actively
+# running, or a genuine orphan — and detect when the active job has hung.
+# ---------------------------------------------------------------------------
+_JOBS_LOCK = threading.Lock()
+_QUEUED_IDS: set[str] = set()          # submitted to the pool, not yet started
+_ACTIVE: Optional[dict] = None         # {"case_id": str, "started": monotonic}
+_QUARANTINED: set[str] = set()         # finalized by the watchdog; worker must
+                                       # not resurrect these to OPEN
+
+
+def register_queued(case_id: str) -> None:
+    with _JOBS_LOCK:
+        _QUEUED_IDS.add(case_id)
+
+
+def _register_started(case_id: str) -> None:
+    global _ACTIVE
+    with _JOBS_LOCK:
+        _QUEUED_IDS.discard(case_id)
+        _ACTIVE = {"case_id": case_id, "started": time.monotonic()}
+
+
+def _register_done(case_id: str) -> None:
+    global _ACTIVE
+    with _JOBS_LOCK:
+        if _ACTIVE and _ACTIVE.get("case_id") == case_id:
+            _ACTIVE = None
+        _QUARANTINED.discard(case_id)
+
+
+def in_flight_ids() -> set[str]:
+    """Case ids this process is currently responsible for — queued in the
+    pool or actively running. A REPROCESSING case NOT in this set is a true
+    orphan (its worker died with the process) and is safe to reap."""
+    with _JOBS_LOCK:
+        ids = set(_QUEUED_IDS)
+        if _ACTIVE:
+            ids.add(_ACTIVE["case_id"])
+        return ids
+
+
+def active_job() -> Optional[dict]:
+    with _JOBS_LOCK:
+        return dict(_ACTIVE) if _ACTIVE else None
+
+
+def check_reprocess_hang(timeout_sec: float) -> Optional[dict]:
+    """Return {case_id, elapsed_sec} when the active job has been running
+    longer than ``timeout_sec``, else None."""
+    job = active_job()
+    if not job:
+        return None
+    elapsed = time.monotonic() - job["started"]
+    if elapsed < timeout_sec:
+        return None
+    return {"case_id": job["case_id"], "elapsed_sec": elapsed}
+
+
+def quarantine_case(case_id: str, elapsed_sec: float) -> None:
+    """Finalize a wedged case to CLOSED/REVIEW so it leaves the queue and is
+    never re-claimed into another hang. Marks it quarantined so the (still
+    stuck) worker thread can't resurrect it if it ever returns."""
+    from app import audit
+    from db.models import Case
+    from db.session import get_sessionmaker
+    with _JOBS_LOCK:
+        _QUARANTINED.add(case_id)
+    try:
+        SM = get_sessionmaker()
+        with SM() as s:
+            case = s.get(Case, case_id)
+            if case is not None:
+                before = {"status": case.status, "outcome": case.outcome}
+                case.status = "CLOSED"
+                case.outcome = case.outcome or "REVIEW"
+                case.invalid_reason = (
+                    f"reprocess_timeout: worker wedged {elapsed_sec:.0f}s")[:480]
+                case.closed_at = datetime.now(timezone.utc)
+                audit.record(s, action="case.reprocess_timeout",
+                             entity_type="case", entity_id=case_id,
+                             actor_type="watchdog", before=before,
+                             after={"status": "CLOSED",
+                                    "outcome": case.outcome,
+                                    "elapsed_sec": round(elapsed_sec, 1)})
+                s.commit()
+    except Exception:
+        log.exception("failed to quarantine wedged case %s", case_id)
+
+
 def _run_reprocess(case_id: str, prior: dict,
                    pre_roll_sec=None, post_roll_sec=None) -> None:
     """Background worker: run the full analysis in its own session. On an
@@ -45,6 +143,7 @@ def _run_reprocess(case_id: str, prior: dict,
     from db.session import get_sessionmaker
 
     SM = get_sessionmaker()
+    _register_started(case_id)
     try:
         with SM() as s:
             analyze_case(s, case_id,
@@ -52,23 +151,31 @@ def _run_reprocess(case_id: str, prior: dict,
                          post_roll_sec=post_roll_sec)
     except Exception as exc:  # noqa: BLE001 — must not crash the worker
         log.exception("background reprocess failed for case %s", case_id)
-        try:
-            with SM() as s:
-                case = s.get(Case, case_id)
-                if case is not None and case.status == "REPROCESSING":
-                    case.status = prior.get("status") or "CLOSED"
-                    case.outcome = prior.get("outcome")
-                    case.invalid_reason = f"reprocess_failed: {exc}"[:480]
-                    audit.record(s, action="case.reprocess_failed",
-                                 entity_type="case", entity_id=case_id,
-                                 actor_type="api",
-                                 before={"status": "REPROCESSING"},
-                                 after={"status": case.status,
-                                        "error": str(exc)})
-                    s.commit()
-        except Exception:
-            log.exception("failed to record reprocess failure for %s",
-                          case_id)
+        # If the watchdog already quarantined this case (declared it wedged),
+        # do NOT restore it to OPEN — that would re-queue a poison case.
+        with _JOBS_LOCK:
+            quarantined = case_id in _QUARANTINED
+        if quarantined:
+            log.warning("reprocess of %s failed after watchdog quarantine; "
+                        "leaving it CLOSED/REVIEW", case_id)
+        else:
+            try:
+                with SM() as s:
+                    case = s.get(Case, case_id)
+                    if case is not None and case.status == "REPROCESSING":
+                        case.status = prior.get("status") or "CLOSED"
+                        case.outcome = prior.get("outcome")
+                        case.invalid_reason = f"reprocess_failed: {exc}"[:480]
+                        audit.record(s, action="case.reprocess_failed",
+                                     entity_type="case", entity_id=case_id,
+                                     actor_type="api",
+                                     before={"status": "REPROCESSING"},
+                                     after={"status": case.status,
+                                            "error": str(exc)})
+                        s.commit()
+            except Exception:
+                log.exception("failed to record reprocess failure for %s",
+                              case_id)
     else:
         # SCO Phase 7a: the refund-agent export is the legacy refund flow.
         # In SCO mode it stays disabled by default; an SCO-shaped exporter
@@ -95,6 +202,8 @@ def _run_reprocess(case_id: str, prior: dict,
             log.debug(
                 "sco mode: refund-agent export disabled (case=%s); "
                 "SCO exporter deferred to v1.1", case_id)
+    finally:
+        _register_done(case_id)
 
 
 def _drain_reprocess_pool() -> None:
@@ -448,6 +557,7 @@ def reprocess(case_id: str) -> dict:
     pool; poll ``GET /cases/{id}`` for the final status/outcome. Audited.
     """
     before = _claim_for_reprocess(case_id)
+    register_queued(case_id)
     _REPROCESS_POOL.submit(_run_reprocess, case_id, before)
     return {"case_id": case_id, "status": "REPROCESSING",
             "detail": "reprocess started; poll GET /cases/{id} "
@@ -490,6 +600,7 @@ def retime_and_reprocess(
                     f"{_MAX_WINDOW_SEC}s (got "
                     f"{pre_roll_sec + post_roll_sec:.0f}s)"))
     before = _claim_for_reprocess(case_id)
+    register_queued(case_id)
     _REPROCESS_POOL.submit(_run_retime_then_reprocess, case_id, before,
                            pre_roll_sec, post_roll_sec)
     win = []
