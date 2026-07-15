@@ -271,3 +271,132 @@ def test_matched_and_extra_split_helpers():
     assert len(matched_groups(groups)) == 1
     assert len(extra_groups(groups)) == 1
     assert matched_groups(groups)[0]["matched_pos_item"] == "Biriyani"
+
+
+# ---------------------------------------------------------------------------
+# 9. De-fragmentation: many tracks of ONE physical item collapse to one group
+# ---------------------------------------------------------------------------
+# Falcon + the tracker splinter a single physical object into multiple
+# tracks. Left uncollapsed those inflate the "distinct item" count, so
+# every case reports a false POS mismatch and drops to REVIEW. The grouper
+# folds (a) all tracks sharing a POS line into ONE matched group, and (b)
+# extra-candidate fragments that overlap in space AND time into one group.
+
+# A second far-right box that heavily overlaps BX_FAR_RIGHT (same object,
+# re-detected a few px over).
+BX_FAR_RIGHT_NUDGED = [910, 305, 1030, 425]
+
+
+def test_fragmented_pos_line_collapses_to_single_group():
+    """Two ``sco_item_000`` tracks == the SAME billed line. They must
+    fold into ONE matched group regardless of bbox/time, so the line is
+    counted once — not twice."""
+    detections = [
+        _det(0, "sco_item_000", BX_BIRIYANI,        score=0.90, ts_off=2),
+        _det(1, "sco_item_000", BX_BIRIYANI_NUDGED, score=0.70, ts_off=6),
+    ]
+    tracks = [
+        _track("t_a", "sco_item_000", [0], t0=2, t1=6),
+        _track("t_b", "sco_item_000", [1], t0=5, t1=9),
+    ]
+    basket = _basket("Biriyani Hot Food")
+    groups = _call(detections, tracks, basket=basket)
+
+    assert len(groups) == 1, f"expected one group per POS line, got {groups}"
+    g = groups[0]
+    assert g["matched_pos_index"] == 0
+    assert g["matched_pos_item"] == "Biriyani Hot Food"
+    assert g["is_extra_candidate"] is False
+    # Both fragment tracks recorded for audit, time span widened to cover both.
+    assert set(g["track_ids"]) == {"t_a", "t_b"}
+    assert g["first_seen_ts"].endswith("14:02:32")   # t0=2
+    assert g["last_seen_ts"].endswith("14:02:39")    # t1=9
+
+
+def test_fragmented_extra_candidates_collapse_to_one():
+    """One un-billed physical object over-detected into two overlapping
+    generic tracks (space + time overlap) collapses to a single extra
+    candidate, alongside the distinct POS item."""
+    detections = [
+        _det(0, "sco_item_000",         BX_BIRIYANI,         score=0.90,
+             ts_off=2),
+        _det(1, "sco_generic_products", BX_FAR_RIGHT,        score=0.70,
+             ts_off=2),
+        _det(2, "sco_generic_products", BX_FAR_RIGHT_NUDGED, score=0.65,
+             ts_off=4),
+    ]
+    tracks = [
+        _track("t_pos", "sco_item_000",         [0], t0=2, t1=8),
+        _track("t_x",   "sco_generic_products", [1], t0=2, t1=8),
+        _track("t_y",   "sco_generic_products", [2], t0=3, t1=9),
+    ]
+    basket = _basket("Biriyani Hot Food")
+    groups = _call(detections, tracks, basket=basket)
+
+    matched = [g for g in groups if not g["is_extra_candidate"]]
+    extras = [g for g in groups if g["is_extra_candidate"]]
+    assert len(matched) == 1
+    assert len(extras) == 1, f"fragments should collapse, got {extras}"
+    # Both generic fragment tracks folded into the surviving extra group.
+    assert set(extras[0]["track_ids"]) == {"t_x", "t_y"}
+
+
+def test_spatially_distinct_extras_are_not_merged():
+    """Two generic objects sitting apart on the shelf are distinct
+    extras — de-fragmentation must NOT collapse them."""
+    detections = [
+        _det(0, "sco_generic_products", [0, 0, 100, 100], score=0.70,
+             ts_off=2),
+        _det(1, "sco_generic_products", BX_FAR_RIGHT,      score=0.70,
+             ts_off=2),
+    ]
+    tracks = [
+        _track("t_x", "sco_generic_products", [0], t0=2, t1=8),
+        _track("t_y", "sco_generic_products", [1], t0=2, t1=8),
+    ]
+    groups = _call(detections, tracks, _basket("Biriyani"))
+    extras = [g for g in groups if g["is_extra_candidate"]]
+    assert len(extras) == 2
+
+
+def test_time_separated_extras_are_not_merged():
+    """Same physical spot, but two generic tracks far apart in time are
+    two different objects passing through — not one fragmented object."""
+    detections = [
+        _det(0, "sco_generic_products", BX_FAR_RIGHT, score=0.70, ts_off=2),
+        _det(1, "sco_generic_products", BX_FAR_RIGHT, score=0.70, ts_off=40),
+    ]
+    tracks = [
+        _track("t_x", "sco_generic_products", [0], t0=2,  t1=8),
+        _track("t_y", "sco_generic_products", [1], t0=35, t1=42),
+    ]
+    groups = _call(detections, tracks, _basket("Biriyani"))
+    extras = [g for g in groups if g["is_extra_candidate"]]
+    assert len(extras) == 2
+
+
+def test_defragmented_groups_yield_a_correct_audit_count():
+    """End-to-end: one POS line splintered into 2 tracks + one extra
+    object splintered into 2 tracks must count as 2 distinct items."""
+    from perception.item_grouping import count_audit_zone_items
+    detections = [
+        _det(0, "sco_item_000",         BX_BIRIYANI,         score=0.90,
+             ts_off=2),
+        _det(1, "sco_item_000",         BX_BIRIYANI_NUDGED,  score=0.70,
+             ts_off=5),
+        _det(2, "sco_generic_products", BX_FAR_RIGHT,        score=0.70,
+             ts_off=2),
+        _det(3, "sco_generic_products", BX_FAR_RIGHT_NUDGED, score=0.65,
+             ts_off=4),
+    ]
+    tracks = [
+        _track("t_a", "sco_item_000",         [0], t0=2, t1=6),
+        _track("t_b", "sco_item_000",         [1], t0=5, t1=9),
+        _track("t_x", "sco_generic_products", [2], t0=2, t1=8),
+        _track("t_y", "sco_generic_products", [3], t0=3, t1=9),
+    ]
+    groups = _call(detections, tracks, _basket("Biriyani Hot Food"))
+    count = count_audit_zone_items(groups)
+    assert count["matched_count"] == 1
+    assert count["extra_count"] == 1
+    assert count["count"] == 2

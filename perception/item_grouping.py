@@ -92,13 +92,28 @@ def group_sco_items(detections: list[dict],
         if s is not None
     ]
 
-    # Phase 1: every POS-specific track becomes a seed group.
+    # Phase 1: one group PER DISTINCT POS LINE (not per track). Falcon +
+    # the tracker fragment a single physical item into many
+    # ``sco_item_NNN`` tracks that all carry the SAME ``pos_index``;
+    # seeding a group per track inflates the "distinct item" count that
+    # the VLM prompt is told to treat as authoritative (it then reports a
+    # false count mismatch and every case becomes REVIEW). Fold all tracks
+    # sharing a ``pos_index`` into ONE group — consistent with
+    # ``count_audit_zone_items`` which already collapses matched groups to
+    # distinct POS lines.
     pos_groups: list[dict] = []
+    pos_by_index: dict[int, dict] = {}
     for s in track_summaries:
         idx = _pos_index(s["label"])
         if idx is None:
             continue
-        pos_groups.append(_seed_group(s, pos_index=idx, basket=basket))
+        existing = pos_by_index.get(idx)
+        if existing is None:
+            g = _seed_group(s, pos_index=idx, basket=basket)
+            pos_by_index[idx] = g
+            pos_groups.append(g)
+        else:
+            _merge_into(existing, s)
 
     # Phase 2: fold generic / default-item tracks into the closest
     # overlapping POS group (greedy by IoU). If none, the track
@@ -115,6 +130,15 @@ def group_sco_items(detections: list[dict],
         else:
             extra_groups.append(_seed_group(s, pos_index=None,
                                              basket=basket))
+
+    # Phase 2.5: de-fragment the EXTRA groups among themselves. Falcon
+    # over-detects and splits one physical extra object into several
+    # tracks, each of which seeded its own group; collapse fragments that
+    # overlap in space (IoU) AND time so the count the VLM sees reflects
+    # distinct physical objects, not detector noise. Same criterion
+    # (COUNT_MERGE_IOU + time overlap) used by ``count_audit_zone_items``.
+    extra_groups = _defragment_extra_groups(extra_groups,
+                                            time_gap_sec=time_gap_sec)
 
     # Phase 3: stable id + confidence + extra-candidate flag.
     all_groups = pos_groups + extra_groups
@@ -304,6 +328,76 @@ def _seed_group(s: dict, *, pos_index: Optional[int],
         "representative_frame_id": s["frame_id"],
         "_repr_score": s["score"],
     }
+
+
+def _merge_group_into(dst: dict, src: dict) -> None:
+    """Fold group ``src`` into group ``dst`` (group-to-group merge).
+
+    Unions source labels + track ids, widens the [first,last] span, and
+    keeps the higher-scored representative bbox/frame. Used to collapse
+    extra-group fragments of one physical object.
+    """
+    for lbl in (src.get("source_labels") or []):
+        if lbl not in dst["source_labels"]:
+            dst["source_labels"].append(lbl)
+    for tid in (src.get("track_ids") or []):
+        if tid and tid not in dst["track_ids"]:
+            dst["track_ids"].append(tid)
+    cur_first = _coerce_dt(dst.get("first_seen_ts"))
+    cur_last = _coerce_dt(dst.get("last_seen_ts"))
+    s_first = _coerce_dt(src.get("first_seen_ts"))
+    s_last = _coerce_dt(src.get("last_seen_ts"))
+    if cur_first is None or (s_first is not None and s_first < cur_first):
+        dst["first_seen_ts"] = src.get("first_seen_ts")
+    if cur_last is None or (s_last is not None and s_last > cur_last):
+        dst["last_seen_ts"] = src.get("last_seen_ts")
+    if float(src.get("_repr_score") or 0.0) > float(dst.get("_repr_score") or 0.0):
+        dst["representative_bbox"] = list(src.get("representative_bbox") or
+                                          dst.get("representative_bbox") or [])
+        dst["representative_frame_id"] = src.get("representative_frame_id")
+        dst["_repr_score"] = src.get("_repr_score")
+
+
+def _defragment_extra_groups(extras: list[dict], *,
+                             merge_iou: float = COUNT_MERGE_IOU,
+                             time_gap_sec: float = DEFAULT_TIME_GAP_SEC
+                             ) -> list[dict]:
+    """Collapse extra-group fragments of the SAME physical object.
+
+    Largest-first greedy: an extra group is a fragment of a kept group
+    when their representative bboxes overlap (IoU >= ``merge_iou``) AND
+    their time spans overlap within ``time_gap_sec``. Mirrors the count
+    logic in ``count_audit_zone_items`` but actually merges the group
+    records so the surviving list = distinct physical extras.
+    """
+    def _area(g) -> float:
+        bb = g.get("representative_bbox")
+        if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
+            return 0.0
+        return max(0.0, float(bb[2]) - float(bb[0])) \
+            * max(0.0, float(bb[3]) - float(bb[1]))
+
+    kept: list[dict] = []
+    for g in sorted(extras, key=_area, reverse=True):
+        bb = g.get("representative_bbox")
+        if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
+            kept.append(g)
+            continue
+        gf, gl = _coerce_dt(g.get("first_seen_ts")), _coerce_dt(
+            g.get("last_seen_ts"))
+        merged = False
+        for k in kept:
+            if _iou(bb, k.get("representative_bbox")) >= merge_iou and \
+                    _time_overlaps(gf, gl,
+                                   _coerce_dt(k.get("first_seen_ts")),
+                                   _coerce_dt(k.get("last_seen_ts")),
+                                   gap_sec=time_gap_sec):
+                _merge_group_into(k, g)
+                merged = True
+                break
+        if not merged:
+            kept.append(g)
+    return kept
 
 
 def _merge_into(group: dict, s: dict) -> None:
