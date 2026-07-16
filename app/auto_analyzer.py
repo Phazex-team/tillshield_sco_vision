@@ -172,8 +172,38 @@ class AutoAnalyzer:
                          "restarts with a warm compile cache and a clear "
                          "queue (the wedged worker thread cannot be killed "
                          "in-process).")
-            import os
-            os._exit(1)
+            self._exit_for_restart()
+
+    @staticmethod
+    def _exit_for_restart() -> None:
+        """Exit so the container restarts (``restart: unless-stopped``).
+
+        ``os._exit`` only kills THIS process. That is enough in prod, where
+        the app IS pid 1 (``scripts/run_app.py``). Under the dev override the
+        app runs as a CHILD of the ``uvicorn --reload`` supervisor, which is
+        pid 1 — killing the child left the container "Up" with a dead app,
+        no restart, and every queued case stranded in REPROCESSING until
+        someone noticed. Observed 2026-07-16: a 13-line/344s case wedged, the
+        worker exited, and the API stayed down until manually recreated.
+
+        So when we are not pid 1, signal pid 1 first and let it take the
+        container down. Guarded on /.dockerenv: outside a container pid 1 is
+        the host init, which must NEVER be signalled (``start.sh`` runs the
+        app straight on the host).
+        """
+        import os
+        import signal
+
+        if os.getpid() != 1 and os.path.exists("/.dockerenv"):
+            log.critical("not pid 1 (uvicorn --reload child): signalling pid 1 "
+                         "so the container actually exits and restarts.")
+            try:
+                os.kill(1, signal.SIGTERM)
+                return          # let pid 1 tear us down cleanly
+            except Exception:
+                log.exception("could not signal pid 1; exiting this process "
+                              "only (container may stay up with a dead app)")
+        os._exit(1)
 
     def _reap_orphans(self) -> None:
         """Reset REPROCESSING cases that are NOT in-flight in this process
