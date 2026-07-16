@@ -135,6 +135,13 @@ def build_package(session: Session, case_id: str) -> dict:
                 _serialise_detection_snapshot(a, case.id) for a in artifacts
                 if a.artifact_type == "DETECTION_SNAPSHOT"
             ],
+            # One crop per distinct detected item (canonical group) — the
+            # item alone rather than a full frame. Same URL route as the
+            # stills; both PNG sets live in the case's snapshots dir.
+            "item_crops": [
+                _serialise_item_crop(a, case.id) for a in artifacts
+                if a.artifact_type == "ITEM_CROP"
+            ],
         },
         "reasoning": [
             {
@@ -361,6 +368,27 @@ def _serialise_artifact(a: Artifact) -> dict:
         "frame_ts": _jsonable(a.frame_ts),
         "frame_idx": a.frame_idx,
         "metadata": a.artifact_metadata,
+    }
+
+
+def _serialise_item_crop(a: Artifact, case_id: str) -> dict:
+    """Serialise an ITEM_CROP artifact (one distinct detected item) for the
+    reviewer UI. Shares the detection-snapshot PNG route — both sets are
+    written to the case's ``snapshots`` dir."""
+    meta = a.artifact_metadata or {}
+    filename = meta.get("filename") or (
+        a.uri.rsplit("/", 1)[-1] if a.uri else "")
+    return {
+        "id": a.id,
+        "url": (f"/api/v1/video/cases/{case_id}"
+                f"/detection-snapshots/{filename}") if filename else None,
+        "filename": filename,
+        "group_id": meta.get("group_id"),
+        "frame_idx": a.frame_idx,
+        "frame_ts": _jsonable(a.frame_ts) or meta.get("frame_ts"),
+        "matched_pos_item": meta.get("matched_pos_item"),
+        "is_extra": meta.get("is_extra"),
+        "confidence": meta.get("confidence"),
     }
 
 

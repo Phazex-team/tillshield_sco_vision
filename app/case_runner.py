@@ -530,6 +530,49 @@ def analyze_case(session: Session,
             except Exception:
                 log.exception("FL audit-zone count failed (non-fatal)")
 
+            # Per-item crops: one PNG per canonical group — the detected
+            # item alone, cropped to its box, rather than a full frame with
+            # boxes burned in. Rendered here (not next to the full-frame
+            # stills) because it needs the canonical groups, which collapse
+            # Falcon's fragmented re-detections into distinct items. Cheap
+            # and best-effort: cv2 crops only, no model, never fails a case.
+            if canonical_groups and getattr(build, "out_path", None):
+                try:
+                    # Imported here (not reused from the full-frame block
+                    # above) so this stays correct even when that block is
+                    # skipped — its import is bound inside its own guard.
+                    from evidence.artifacts import register_artifact
+                    from evidence.detection_snapshot import render_item_crops
+                    crops = render_item_crops(
+                        window_path=build.out_path,
+                        groups=canonical_groups,
+                        detections=((perception_result or {})
+                                    .get("detections") or []),
+                        out_dir=(storage_root / "cases"
+                                 / f"case_id={case.id}" / "snapshots"),
+                    )
+                    for c in crops:
+                        register_artifact(
+                            session, case_id=case.id,
+                            artifact_type="ITEM_CROP",
+                            uri=c["path"], mime_type="image/png",
+                            frame_idx=c.get("frame_idx"),
+                            metadata={
+                                "filename": c["filename"],
+                                "group_id": c.get("group_id"),
+                                "matched_pos_item": c.get("matched_pos_item"),
+                                "is_extra": c.get("is_extra"),
+                                "confidence": c.get("confidence"),
+                                "frame_ts": c.get("frame_ts"),
+                            },
+                        )
+                    if crops:
+                        log.info("wrote %d falcon item crop(s) for case %s",
+                                 len(crops), case.id)
+                except Exception:
+                    log.exception("falcon item crop generation failed "
+                                  "(continuing)")
+
             if prompt_version == "sco_basket_match_v2":
                 from reasoning.prompts.sco_basket_match_v2 import (
                     build_sco_prompts_v2,
