@@ -1,0 +1,306 @@
+cameras:
+- id: cam_01
+  name: "SCO Audit Camera \u2014 cam_01"
+  rtsp_url: rtsp://LULU:LULU%25123@192.168.1.4:554/cam/realmonitor?channel=11&subtype=0
+  classifier: sco_checkout
+  token_budget: 1120
+  enable_thinking: ''
+  max_frames: ''
+  cooldown_sec: 30
+  zones:
+    sco_audit_zone:
+      label: sco_audit_zone
+      purpose: SCO checkout audit area (scanner + bagging + customer)
+      x: 200
+      y: 100
+      w: 1520
+      h: 880
+      source_width: 1920
+      source_height: 1080
+    customer_zone:
+      x: 874
+      y: 29
+      w: 360
+      h: 607
+    staff_zone:
+      x: 570
+      y: 4
+      w: 303
+      h: 645
+  model_roi_views:
+    falcon:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: union_crop
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+    qwen3_vl:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: labeled_crops
+      margin_pct: 0.0
+      include_full_frame_overview: true
+      caption: ''
+    gemma:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: labeled_crops
+      margin_pct: 0.0
+      include_full_frame_overview: true
+      caption: ''
+    sam3:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: union_crop
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+  prompts: {}
+- id: cam_return_01
+  name: "SCO Audit Camera \u2014 cam_return_01"
+  rtsp_url: ${CAM_RETURN_01_RTSP_URL}
+  classifier: sco_checkout
+  token_budget: 1120
+  enable_thinking: ''
+  max_frames: ''
+  cooldown_sec: 30
+  zones:
+    sco_audit_zone:
+      label: sco_audit_zone
+      purpose: SCO checkout audit area (scanner + bagging + customer)
+      x: 200
+      y: 100
+      w: 1520
+      h: 880
+      source_width: 1920
+      source_height: 1080
+    staff_zone_vlm:
+      label: staff_zone_vlm
+      purpose: ''
+      x: 619
+      y: 115
+      w: 245
+      h: 536
+      source_width: 1920
+      source_height: 1080
+    customer_zonevlm:
+      label: customer_zonevlm
+      purpose: ''
+      x: 1106
+      y: 147
+      w: 249
+      h: 506
+      source_width: 1920
+      source_height: 1080
+    counter_zone_vlm:
+      label: counter_zone_vlm
+      purpose: ''
+      x: 858
+      y: 113
+      w: 260
+      h: 562
+      source_width: 1920
+      source_height: 1080
+  prompts: {}
+  nvr:
+    enabled: true
+    base_url: http://192.168.1.13
+    username: ${NVR_USERNAME}
+    password: ${NVR_PASSWORD}
+    live_channel: 15
+    playback_channel: 15
+    subtype: 0
+    timezone: Asia/Dubai
+    pre_roll_sec: 90
+    post_roll_sec: 60
+    max_window_sec: 900
+    prefer_on_demand_for_pos: true
+    export_enabled: true
+  model_roi_views:
+    falcon:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: union_crop
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+    sam2:
+      enabled: false
+      roi_ids:
+      - sco_audit_zone
+      mode: filter_candidate_crops
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+    ocr:
+      enabled: false
+      roi_ids:
+      - sco_audit_zone
+      mode: filter_candidate_crops
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+    qwen3_vl:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: labeled_crops
+      margin_pct: 0.0
+      include_full_frame_overview: true
+      caption: ''
+    gemma:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: labeled_crops
+      margin_pct: 0.0
+      include_full_frame_overview: true
+      caption: ''
+    sam3:
+      enabled: true
+      roi_ids:
+      - sco_audit_zone
+      mode: union_crop
+      margin_pct: 0.0
+      include_full_frame_overview: false
+      caption: ''
+settings:
+  rtsp_reconnect_sec: 10
+  motion_threshold: 25
+  motion_area_ratio: 0.02
+  pre_roll_sec: 5
+  session_end_empty_sec: 30
+  session_max_sec: 60
+  min_session_sec: 2
+  session_merge_window_sec: 45
+  session_merge_similarity_threshold: 0.6
+  roi_crop_enabled: true
+  roi_crop_margin_pct: 0.1
+  gemma_video_fps: 1
+  gemma_video_max_seconds: 20
+  gemma_video_fps_source: 5
+  mp4_evidence_width: 640
+  mp4_evidence_height: 360
+  mp4_evidence_fps: 5
+  mp4_evidence_crf: 28
+  log_dir: ./logs
+  video_dir: ./videos
+  snapshot_dir: ./logs/snapshots
+  retention_days: 7
+  retention_check_interval_hours: 6
+  http_host: 0.0.0.0
+  http_port: 3902
+  inference_queue_max: 10
+models:
+  falcon:
+    name: tiiuae/Falcon-Perception
+    enabled: true
+  gemma:
+    name: google/gemma-4-26B-A4B-it
+    vllm_url: http://localhost:8001
+    max_tokens: 512
+    temperature: 0.1
+    request_timeout_sec: 300
+    request_retries: 3
+    request_retry_backoff_sec: 5
+    enabled: true
+  qwen3_vl:
+    enabled: true
+    name: Qwen/Qwen3-VL-30B-A3B-Instruct
+    provider: vllm_openai
+    base_url: http://127.0.0.1:8000/v1
+    served_model_name: qwen3_vl
+    checkpoint_label: Qwen3-VL-30B-A3B-Instruct-FP8
+    precision: fp8
+    timeout_sec: 120
+    health_timeout_sec: 3
+    request_retries: 1
+    allow_localhost_alias: false
+    allow_port_override: false
+    max_frame_long_edge: 1280
+    max_frame_pixels: 1048576
+    max_tokens: 512
+    max_new_tokens: 512
+    temperature: 0.1
+    load_in_4bit: true
+    local_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct/snapshots/9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
+  sam2:
+    name: facebook/sam2-hiera-large
+    enabled: false
+  sam3:
+    name: facebook/sam3
+    enabled: false
+    dtype: bfloat16
+    score_threshold: 0.5
+  falcon_ocr:
+    name: tiiuae/Falcon-OCR
+    enabled: false
+observability:
+  phoenix_enabled: true
+  phoenix_url: http://localhost:6006
+  phoenix_project: sco_vision
+reasoning:
+  primary_provider: qwen3_vl
+  fallback_provider: null
+  warm_fallback: false
+  prompt_version: sco_basket_match_v2
+  auto_analyze_enabled: false
+gpu:
+  max_loaded_big_vlms: 1
+  soft_memory_limit_gb: 90
+  hard_memory_limit_gb: 100
+  emergency_memory_limit_gb: 110
+  poll_interval_sec: 5
+  on_hard_limit: unload_models
+  on_emergency_limit: stop_inference_workers
+storage:
+  raw_segment_retention_hours: 48
+  min_free_disk_gb: 100
+  cleanup_dry_run_default: true
+sco_checkout:
+  accept_event_types:
+  - SALE
+  - SCO_SALE
+  - CHECKOUT
+  canonical_event_type: SALE
+  roi_name: sco_audit_zone
+  sku_overrides_path: config/sku_overrides.yaml
+  sku_cache_path: storage/sku_translator/cache.json
+integrations:
+  tillshield:
+    accepted_event_types:
+    - SALE
+    - SCO_SALE
+    - CHECKOUT
+    line_level_cases: false
+    ignore_unknown_types: true
+    ingest_token: ''
+    poll_enabled: false
+    pos_timezone: Asia/Dubai
+    base_url: http://localhost:8081
+    info_path: /pos/data/info
+    transactions_path: /pos/data/transactions
+    poll_every_seconds: 300
+    request_timeout_sec: 30
+    poll_lookback_seconds: 900
+    require_negative_amount: false
+    allowed_workstation_ids:
+    - '57'
+    workstation_camera_map:
+      '57': cam_01
+  refund_agent:
+    enabled: false
+    base_url: http://localhost:8081
+    create_path: /events/refund
+    evidence_path: /events/refund/evidence
+    update_path: ''
+    timeout_sec: 30
+    send_video: true
+    mask_customer_faces: true
+    face_blur_strength: light
