@@ -3,8 +3,8 @@
   "prepared_at": "2026-06-16T04:39:07Z",
   "duration_sec": 1.3,
   "mode": "copy_from_cache_only",
-  "requirements_path": "/home/fazil/workspace/projects/sco_vision/requirements.lock",
-  "wheelhouse_path": "/home/fazil/workspace/projects/sco_vision/wheelhouse",
+  "requirements_path": "/app/requirements.lock",
+  "wheelhouse_path": "/app/wheelhouse",
   "files": [
     {
       "filename": "cuda_bindings-13.3.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl",

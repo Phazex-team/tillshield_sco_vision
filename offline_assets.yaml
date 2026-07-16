@@ -35,7 +35,7 @@ required:
     role: reasoner_primary
     purpose: "Primary visual evidence verifier. Reads structured evidence + frames and emits review-safe JSON."
     repo: Qwen/Qwen3-VL-30B-A3B-Instruct
-    cache_path: /home/fazil/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct
+    cache_path: /root/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct
     runtime_blocking: true
     notes: |
       Architecture: Qwen3VLMoeForConditionalGeneration (transformers >= 5.6).
@@ -46,7 +46,7 @@ required:
     role: reasoner_fallback
     purpose: "Fallback reasoner used when Qwen3-VL is unavailable or returns an error."
     repo: google/gemma-4-26B-A4B-it
-    cache_path: /home/fazil/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it
+    cache_path: /root/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it
     runtime_blocking: true
     notes: |
       Served via transformers_server.py (BF16). NVFP4 unsupported on
@@ -63,7 +63,7 @@ required:
       segmentation, AND OCR via natural-language queries (per the
       upstream README), so one checkpoint covers both perception tasks.
     repo: tiiuae/Falcon-Perception
-    cache_path: /home/fazil/.cache/huggingface/hub/models--tiiuae--Falcon-Perception
+    cache_path: /root/.cache/huggingface/hub/models--tiiuae--Falcon-Perception
     runtime_blocking: true
     notes: |
       Detection queries: e.g. "receipt, document, bag, item".

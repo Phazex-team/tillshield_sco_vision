@@ -12,12 +12,10 @@
 #   torch + vLLM. We mount it at runtime (see docker-compose.yml) instead
 #   of reinstalling.
 #
-# THE SYMLINK TRICK:
-#   The venv's console scripts (vllm, uvicorn) and its Falcon-Perception
-#   editable finder carry the ABSOLUTE path the venv was created under:
-#   /home/fazil/workspace/projects/sco_vision. We recreate that path as a
-#   symlink to /app, so every baked-in absolute reference resolves and the
-#   venv works verbatim — no relocation, no reinstall.
+#   The venv's baked-in absolute paths (console-script shebangs, pyvenv.cfg,
+#   the Falcon-Perception editable finder) were rewritten in place to /app
+#   — the container's project root — so it works verbatim when mounted, with
+#   no symlink and no reference to the machine it was originally built on.
 FROM nvidia/cuda:13.0.1-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -39,11 +37,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Make the C compiler explicit for Triton's runtime build step.
 ENV CC=gcc CXX=g++
-
-# Make the venv's baked-in absolute path resolve to /app so its console
-# scripts + editable installs work unchanged when ./venv is mounted.
-RUN mkdir -p /home/fazil/workspace/projects \
-    && ln -s /app /home/fazil/workspace/projects/sco_vision
 
 WORKDIR /app
 
