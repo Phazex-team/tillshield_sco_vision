@@ -26,6 +26,7 @@ if [[ -f .env ]]; then
 fi
 
 APP_PORT="${APP_PORT:-3902}"
+APP_HOST="${APP_HOST:-0.0.0.0}"
 APP_LOG="${APP_LOG:-./logs/app.log}"
 APP_PID_FILE="${APP_PID_FILE:-./run/app.pid}"
 
@@ -98,7 +99,7 @@ echo "[start] launching app on :$APP_PORT (logs -> $APP_LOG)"
 # static/review.html operator console. The legacy monolith app.py is
 # kept only for reference and must NOT be used to serve: it has none of
 # the v1 routers (cases, admin/cameras, ops, etc.).
-nohup python scripts/run_app.py --host 127.0.0.1 --port "$APP_PORT" >>"$APP_LOG" 2>&1 &
+nohup python scripts/run_app.py --host "$APP_HOST" --port "$APP_PORT" >>"$APP_LOG" 2>&1 &
 APP_PID=$!
 echo "$APP_PID" > "$APP_PID_FILE"
 echo "[start] app PID=$APP_PID"
