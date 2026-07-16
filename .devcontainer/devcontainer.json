@@ -1,0 +1,64 @@
+{
+  // SCO Vision dev container for the GB10 / sm_121 appliance.
+  //
+  // Reuses the runtime image (../Dockerfile): CUDA 13 runtime + python
+  // 3.12 + gcc (Triton JIT) + ffmpeg + the mounted venv (paths rebaked to /app)
+  // that makes the mounted venv's console scripts and Falcon editable
+  // install resolve. We do NOT pip-install: torch 2.11 / vllm dev205 have
+  // rotated off the nightly indexes, so the reproducible env is the host
+  // ./venv, which comes in through the workspace bind mount below.
+  "name": "SCO Vision (GB10)",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+
+  // Bind the whole repo to /app so ./venv, ./models, ./config.yaml and
+  // ./storage are all live and editable. Overlays the code COPY'd into
+  // the image with the working tree.
+  "workspaceFolder": "/app",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind,consistency=cached",
+
+  // --gpus all: GB10 passthrough (needs nvidia-container-toolkit, already
+  //   present since the compose stack uses the GPU).
+  // --network host: reach qwen on localhost:8000 and LAN RTSP cameras;
+  //   matches the compose services.
+  // --env-file: resolve config.yaml's ${CAM_*_RTSP_URL} / NVR secrets.
+  "runArgs": [
+    "--gpus", "all",
+    "--network", "host",
+    "--env-file", "${localWorkspaceFolder}/.env"
+  ],
+
+  "containerEnv": {
+    "FRAUD_CONFIG": "/app/config.yaml",
+    "FRAUD_OFFLINE_MODE": "1",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "DATABASE_URL": "sqlite:////app/storage/sco_vision.sqlite",
+    "PYTHONUNBUFFERED": "1"
+  },
+
+  // The image CMD launches the app; for dev we want an idle container so
+  // you can run/debug commands yourself. overrideCommand => sleep infinity.
+  "overrideCommand": true,
+
+  // Sanity-check the mounted venv on create (GPU + exact pinned versions).
+  "postCreateCommand": "python -c \"import torch,vllm;print('torch',torch.__version__,'cuda',torch.cuda.is_available(),'vllm',vllm.__version__)\"",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        // Point the IDE at the mounted venv; don't let it re-activate
+        // (the venv is used directly via PATH=/app/venv/bin).
+        "python.defaultInterpreterPath": "/app/venv/bin/python",
+        "python.terminal.activateEnvironment": false
+      }
+    }
+  }
+}

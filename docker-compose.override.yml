@@ -1,0 +1,41 @@
+# docker-compose.override.yml — LOCAL DEV. Auto-merged by `docker compose`.
+#
+# THE PROBLEM THIS SOLVES:
+#   The base image bakes code in via `COPY . .`, so a code edit only lands
+#   after a full `docker build` (minutes). Here we bind-mount the working
+#   tree over /app so edits are LIVE, and run uvicorn with --reload so the
+#   app hot-restarts on save (~1s). No rebuild, no container recreate.
+#
+# USAGE:
+#   docker compose up -d                      # dev mode (this file auto-applies)
+#   docker compose restart app                # pick up a change reload didn't catch
+#   docker compose -f docker-compose.yml up -d  # clean/prod run (ignores this file)
+#
+# You only ever rebuild the image again if the Dockerfile or system deps
+# change — never for a Python edit.
+services:
+  app:
+    # Live source tree. venv/models/config/storage ride along because they
+    # live in the repo root; the base per-path mounts become harmless dupes.
+    volumes:
+      - .:/app
+    # Hot-reload scoped to the Python code dirs so watchfiles never scans
+    # ./venv (12G) or ./models (117G) — that would blow the inotify budget.
+    # Editing root-level *.py (classifiers.py, etc.): `docker compose restart app`.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=4001
+      - --reload
+      - --reload-dir=/app/app
+      - --reload-dir=/app/db
+      - --reload-dir=/app/reasoning
+      - --reload-dir=/app/pos
+      - --reload-dir=/app/video
+
+  # Recorder code goes live too; it has no reloader, so after editing
+  # video/*.py or scripts/run_segment_recorder.py: `docker compose restart recorder`.
+  recorder:
+    volumes:
+      - .:/app
